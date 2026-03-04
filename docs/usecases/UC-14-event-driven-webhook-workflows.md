@@ -66,6 +66,15 @@
   - `docs/TOOL_CONTRACTS.md`: add webhook tool signatures, examples, and gating notes.
   - `README.md`: add a webhook lifecycle example plus signature-verification/retry operational notes.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Missing webhook wrappers in the tool registry and contracts. | Webhook lifecycle operations stay hard to discover and harder to automate safely with stable tool contracts. | Implement P1 by adding and registering `webhooks.list|info|create|update|delete` wrappers and exposing them in contracts. | Run `node ./bin/outline-agent.js tools contract all --result-mode inline` and confirm all `webhooks.*` entries are present. |
+| G2: Missing webhook argument schemas. | Invalid webhook payloads can pass through to runtime calls, increasing failed requests and inconsistent behavior. | Implement P3 by adding strict schemas for list/info/create/update/delete, including required IDs and non-empty `events`. | Add and run live tests that assert schema failures for missing required fields and invalid update payloads. |
+| G3: `api.call` delete-safe flow is document-specific and over-matches any `*.delete` method. | Legitimate non-document deletes such as `webhooks.delete` can be incorrectly blocked by document read-token requirements. | Implement P2 by scoping read-token enforcement to `documents.delete` and `documents.permanent_delete` only. | Add regression coverage proving `webhooks.delete` works with `performAction=true` and does not require document read tokens. |
+| G4: No live integration coverage for webhook lifecycle and gating behavior. | Regressions in create/list/info/update/delete and action gating may ship undetected. | Implement P4 with end-to-end live webhook lifecycle subtests plus gating assertions. | Run `npm test` and confirm webhook lifecycle and gating subtests pass in live environment. |
+| G5: No documented webhook automation runbook in this repo. | Teams cannot reliably adopt event-driven patterns and may implement insecure or non-idempotent webhook handling. | Implement P5 by documenting webhook contracts, lifecycle examples, signature verification, retry, and operational notes. | Review `README.md` and `docs/TOOL_CONTRACTS.md` for webhook sections that match implemented tool signatures and gating behavior. |
+
 ## Process checklist
 1. Confirm target events and receiving endpoint contract (payload schema, idempotency key, retry handling).
 2. Validate Outline webhook endpoint contracts against docs before implementation.

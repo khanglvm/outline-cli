@@ -83,8 +83,19 @@
   - Cleanup test document.
 - P5: Update docs.
   - `docs/TOOL_CONTRACTS.md`: add full contracts/examples/best practices for `comments.list/info/create/update/delete/review_queue`.
-  - `README.md`: add “Editorial review workflow” section (`draft -> comments -> threaded review -> revision check -> publish`).
+  - `README.md`: add "Editorial review workflow" section (`draft -> comments -> threaded review -> revision check -> publish`).
   - Keep this UC-17 file as implementation anchor.
+
+## Issue resolution matrix
+
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class `comments.*` wrappers. | Operators must depend on generic `api.call`, which increases inconsistent payloads and workflow fragility. | Implement `comments.list/info` in `src/tools.navigation.js` and `comments.create/update/delete` in `src/tools.mutation.js`, then register them in the tool registry. | Run `node ./bin/outline-agent.js tools contract all --result-mode inline` and confirm the new `comments.*` tools are present with stable envelopes. |
+| G2: No comment-specific arg schemas. | Missing validation can allow malformed `documentId`, `parentCommentId`, and `includeAnchorText` inputs to reach API calls. | Add schemas and constraints in `src/tool-arg-schemas.js` for all comment wrappers, including enum and bounds checks. | Execute live calls with valid and invalid arguments and confirm schema errors are deterministic for invalid input. |
+| G3: No deterministic review-queue output model. | Multi-team triage cannot reliably automate prioritization without a normalized thread summary shape. | Add `comments.review_queue` with a normalized output envelope (`threadId`, `documentId`, `lastUpdated`, `reviewerMentions`, `state`). | Run `comments.review_queue` on test scope and verify output keys and ordering are stable across repeated runs. |
+| G4: Review lifecycle state is not explicit. | Thread state transitions are handled inconsistently by callers, causing drift in review workflow semantics. | Define explicit lifecycle mapping in first-class review tooling and document supported transitions from documented `comments.*` methods. | Validate documented lifecycle behavior with repeatable command examples and integration assertions for expected state handling. |
+| G5: No live comment lifecycle tests. | Regressions in create/list/info/update/delete comment flows can ship undetected. | Add live integration coverage in `test/live.integration.test.js` using suite-created documents, threaded replies, and cleanup. | Run `npm test` and confirm comment lifecycle subtests pass, including threaded reply and delete behavior checks. |
+| G6: No operator docs for editorial review loops. | Operators lack a standard playbook, reducing adoption and causing inconsistent execution patterns. | Update `README.md` and `docs/TOOL_CONTRACTS.md` with editorial review workflow guidance and tool usage examples. | Review docs diffs and verify command examples align with implemented tool contracts and action-gate requirements. |
 
 ## Process checklist
 1. Re-verify Outline docs and OpenAPI `comments.*` endpoints before implementation.

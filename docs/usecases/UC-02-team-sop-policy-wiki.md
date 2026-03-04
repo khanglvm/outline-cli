@@ -32,17 +32,17 @@
   - `api.call` can invoke raw Outline API methods when wrappers are missing.
 
 ## Current limits/gaps in this repo
-- Missing first-class wrappers for people/group governance methods used in wiki permissions:
+- G1: Missing first-class wrappers for people/group governance methods used in wiki permissions:
   - no `users.*` tool wrappers.
   - no `groups.*` tool wrappers.
   - no `collections.add_user/remove_user/memberships` wrappers.
   - no `collections.add_group/remove_group/group_memberships` wrappers.
-- Missing first-class wrappers for policy distribution/reuse helpers:
+- G2: Missing first-class wrappers for policy distribution/reuse helpers:
   - no `shares.*` wrappers.
   - no `templates.list/info/update` wrappers (only `templateId` passthrough on document create/update).
-- Schema and UX gap:
+- G3: Schema and UX gap:
   - these flows currently require `api.call` with raw method/body, reducing deterministic arg validation and discoverability.
-- Test coverage gap:
+- G4: Test coverage gap:
   - live integration tests currently validate documents/collections flows but not users/groups/membership/share/template wrappers.
 
 ## Improvement proposal (concrete: tool wrappers/schema/tests/docs)
@@ -68,6 +68,14 @@
 - Docs:
   - update `docs/TOOL_CONTRACTS.md` signatures/examples for all new wrappers.
   - update `README.md` with governance-oriented examples for SOP/policy wiki operations.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Missing first-class wrappers for people/group governance methods used in wiki permissions | Permission governance remains dependent on raw calls, increasing access-control mistakes and reducing workflow consistency. | Add `users.*`, `groups.*`, and collection membership wrappers with explicit action-gating on mutating methods. | Add live integration subtests for list/info/memberships wrappers and confirm stable `tool/ok/result` envelopes. |
+| G2: Missing first-class wrappers for policy distribution/reuse helpers | Share and template workflows stay ad hoc, making policy rollout and reuse less repeatable. | Add `shares.*` and `templates.*` wrappers in phased read-first then guarded-write rollout. | Validate new tool signatures in `docs/TOOL_CONTRACTS.md` and cover list/info plus selected write operations in live tests. |
+| G3: Schema and UX gap | Deterministic arg validation and discoverability degrade when operators must craft raw API payloads manually. | Add explicit arg schemas for all new wrappers, including bounded pagination and exclusivity validation (`id` vs `ids`). | Run `npm run check` to validate schemas, then verify invalid inputs fail with deterministic validation errors. |
+| G4: Test coverage gap | Regressions in wrappers can ship unnoticed, especially around permissions, memberships, sharing, and templates. | Expand `test/live.integration.test.js` with wrapper-focused subtests and cleanup-safe mutation coverage under opt-in flags. | Run `npm test` and confirm wrapper scenarios pass with create-then-cleanup behavior for suite-created entities only. |
 
 ## Process checklist
 - [ ] Confirm target methods against Outline OpenAPI at `https://www.getoutline.com/developers`.

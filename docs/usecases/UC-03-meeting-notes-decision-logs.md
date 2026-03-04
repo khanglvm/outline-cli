@@ -72,6 +72,15 @@
   - `docs/TOOL_CONTRACTS.md`: signatures/examples/best-practice notes for all new wrappers
   - `README.md`: concise UC-03 command sequence (template-first notes, decision search, revision recovery)
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Template lifecycle is not first-class (missing `templates.create|list|info|update|delete|restore|duplicate`). | Teams cannot run meeting-note templates end-to-end through first-class tools, increasing `api.call` fallback usage and inconsistent automation. | Add dedicated `templates.*` wrappers and matching arg schemas so template lifecycle actions are explicit and validated. | Add live integration subtests that create, list, inspect, duplicate, restore, and delete templates via wrappers. |
+| G2: No dedicated wrapper for converting a document into a reusable template (missing `documents.templatize`). | Reusable meeting-note setup remains manual or raw-call based, reducing deterministic workflows for recurring meetings. | Add `documents.templatize` wrapper with strict schema validation and mutation gating rules. | In live tests, create a suite doc, templatize it, then instantiate a new doc from the resulting template and assert success. |
+| G3: Revision inspection is partial (missing `revisions.info`). | Users can list and restore revisions but cannot deterministically hydrate one revision for precise audit and tooling. | Add `revisions.info` wrapper and schema to support single-revision retrieval by ID. | Extend revision flow tests: update doc, list revisions, call `revisions.info` on one revision, then restore and verify content rollback. |
+| G4: Decision discussion context is not first-class (missing `comments.create|info|list|update|delete`). | Decision rationale threads remain outside wrapper contracts, weakening traceability for why decisions were made or changed. | Implement full `comments.*` wrappers with validated args and `performAction: true` on mutating comment operations. | Add live comment workflow tests on suite-created docs covering create, list, info, update, and delete operations. |
+| G5: Live integration coverage is missing for template and comment workflows. | New wrappers can regress unnoticed, and UC-03 behavior cannot be reliably validated in real environments. | Add dedicated live subtests for template, templatize, revision detail, and comments flows with strict setup and cleanup. | Run `npm test` in live mode and confirm new UC-03 subtests pass with cleanup assertions. |
+
 ## Process checklist
 1. Confirm API methods and payload shapes against Outline developer references:
    - https://www.getoutline.com/developers

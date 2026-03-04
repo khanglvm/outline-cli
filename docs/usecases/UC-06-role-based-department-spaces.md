@@ -3,7 +3,7 @@
 ## Scenario
 - use_case_id: UC-06
 - name: Department spaces with role-based visibility
-- primary_goal: Keep each department’s knowledge space visible only to the right people while preserving discoverability and governance.
+- primary_goal: Keep each department's knowledge space visible only to the right people while preserving discoverability and governance.
 - typical_actors: workspace admin, department lead, department member, cross-functional stakeholder.
 - core_workflow:
   1. Create department collections (HR, Finance, Engineering, Legal).
@@ -34,15 +34,15 @@
 - Net: the repo can organize department spaces and edit content safely, but role/group visibility control is mostly indirect through `api.call`.
 
 ## Current limits/gaps in this repo
-- No first-class `users.*` wrappers for role-aware administration (for example, `users.list`, `users.info`, `users.update_role`).
-- No first-class `groups.*` wrappers (`groups.list/info/create/update/delete/memberships/add_user/remove_user`).
-- No first-class collection membership wrappers:
+- G1: No first-class `users.*` wrappers for role-aware administration (for example, `users.list`, `users.info`, `users.update_role`).
+- G2: No first-class `groups.*` wrappers (`groups.list/info/create/update/delete/memberships/add_user/remove_user`).
+- G3: No first-class collection membership wrappers:
   - `collections.memberships`, `collections.group_memberships`
   - `collections.add_user`, `collections.remove_user`, `collections.add_group`, `collections.remove_group`
-- Related document-level access wrappers are also missing (`documents.memberships`, `documents.group_memberships`, `documents.add_user/remove_user/add_group/remove_group`) for exceptions under department spaces.
-- `src/tool-arg-schemas.js` has no dedicated schemas for the missing users/groups/membership surfaces.
-- `test/live.integration.test.js` has no live coverage for role/group/membership visibility workflows.
-- `docs/TOOL_CONTRACTS.md` and `README.md` currently do not provide a role-based department-space playbook using first-class wrappers.
+- G4: Related document-level access wrappers are also missing (`documents.memberships`, `documents.group_memberships`, `documents.add_user/remove_user/add_group/remove_group`) for exceptions under department spaces.
+- G5: `src/tool-arg-schemas.js` has no dedicated schemas for the missing users/groups/membership surfaces.
+- G6: `test/live.integration.test.js` has no live coverage for role/group/membership visibility workflows.
+- G7: `docs/TOOL_CONTRACTS.md` and `README.md` currently do not provide a role-based department-space playbook using first-class wrappers.
 
 ## Improvement proposal (specific wrappers/schema/tests/docs)
 - Wrappers (read-first):
@@ -69,7 +69,18 @@
   - keep destructive/tenant-sensitive paths behind explicit env opt-in when needed.
 - Docs:
   - `docs/TOOL_CONTRACTS.md`: add signatures/examples/best practices for all new wrappers.
-  - `README.md`: add deterministic “department spaces” sequence (discover -> grant -> verify -> audit).
+  - `README.md`: add deterministic "department spaces" sequence (discover -> grant -> verify -> audit).
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Missing `users.*` wrappers for role-aware administration | Role and user state checks remain indirect and inconsistent through `api.call`, increasing operator error risk | Add first-class `users.list`, `users.info`, and gated `users.update_role` wrappers with stable envelopes | Run live read tests for `users.list/info` and a gated role update subtest on test entities |
+| G2: Missing `groups.*` wrappers | Department membership automation remains manual and brittle at scale | Add first-class group wrappers (`list/info/create/update/delete/memberships/add_user/remove_user`) with `performAction` gating on writes | Execute create/add/remove/delete group flow in live integration tests and assert membership deltas |
+| G3: Missing collection membership wrappers | Cannot implement department-space visibility with a deterministic wrapper workflow | Add `collections.memberships`, `collections.group_memberships`, `collections.add_user/remove_user/add_group/remove_group` wrappers | Validate read-before/after membership states for a suite-created collection and group |
+| G4: Missing document-level access exception wrappers | Exception handling under department spaces requires raw API calls and may drift from collection policy intent | Add `documents.memberships`, `documents.group_memberships`, and add/remove user/group wrappers for controlled exceptions | Add live tests for document-level grant and revoke flows on suite-created documents |
+| G5: Missing arg schemas for users/groups/membership surfaces | New wrappers may accept invalid inputs and produce non-deterministic failures | Add explicit schema validation in `src/tool-arg-schemas.js` including required IDs, role enums, and mutual exclusivity rules | Run schema-focused checks in `npm run check` and negative-case tool argument tests |
+| G6: Missing live integration coverage for visibility workflows | Regressions in role/group/membership behavior may ship unnoticed | Add end-to-end live subtests that create isolated entities, mutate memberships, verify state, and clean up | `npm test` passes with dedicated visibility workflow assertions |
+| G7: Missing department-space playbook in docs | Operators lack a canonical sequence for discover -> grant -> verify -> audit | Update `docs/TOOL_CONTRACTS.md` and `README.md` with first-class wrapper signatures and workflow examples | Confirm docs include wrapper contracts and a deterministic department-space sequence consistent with shipped tools |
 
 ## Process checklist
 1. Confirm endpoint contracts against Outline API docs/OpenAPI (`collections.*`, `users.*`, `groups.*`).

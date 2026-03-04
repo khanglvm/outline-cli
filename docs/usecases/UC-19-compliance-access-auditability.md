@@ -13,7 +13,7 @@
   5. Generate machine-readable compliance artifacts for ticketing/audit systems.
 
 ## Why this is real (source links)
-- Outline’s user/role and group model is explicit and central to workspace access governance.
+- Outline's user/role and group model is explicit and central to workspace access governance.
   - sources:
     - https://docs.getoutline.com/s/guide/doc/users-groups-cwCxXP8R3V
     - https://docs.getoutline.com/s/guide/doc/groups-Jy1rROTFmN
@@ -90,6 +90,16 @@
   - Update `docs/TOOL_CONTRACTS.md` with signatures/examples/AI best practices for new compliance wrappers.
   - Update `README.md` with a compliance runbook (`discover access` -> `review scoped creds` -> `dry-run checks` -> `execute gated mutations` -> `collect audit bundle`).
   - Keep this UC-19 file as scenario anchor.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class wrappers for core access-model administration. | Compliance automation remains dependent on generic calls and manual parsing for users, groups, and memberships. | Add first-class access-model wrappers and register them in tool metadata (`users.*`, `groups.*`, membership tools). | Run live read-only tests for `users.list/info`, `groups.list/info/memberships`, and `collections.memberships`, then verify stable response envelopes. |
+| G2: No first-class wrappers for scoped API credential lifecycle. | OAuth client and authentication lifecycle actions stay opaque and harder to govern through deterministic contracts. | Add dedicated OAuth wrappers (`oauth_clients.*`, `oauth_authentications.*`) with explicit action gates for mutations. | Execute env-gated OAuth fixture tests (create/update/rotate/delete and auth revoke) and confirm cleanup plus expected envelopes. |
+| G3: No first-class audit-feed wrapper. | Audit evidence collection depends on ad hoc raw calls, weakening repeatability for compliance reporting. | Add a first-class `events.list` wrapper with `auditLog` and actor/document/collection filter support. | Add and run live tests that call `events.list` with `auditLog: true` and validate returned evidence fields. |
+| G4: Revision evidence is partial. | Single revision hydration remains incomplete, leaving gaps in defensible change evidence. | Add first-class `revisions.info` to complement existing `revisions.list` and `revisions.restore`. | Add a live test that resolves a known revision with `revisions.info` and checks deterministic detail fields. |
+| G5: `api.call` delete-read-token logic is over-broad. | Non-document delete endpoints can be blocked by document-only safeguards, causing false failures in compliance flows. | Restrict read-token enforcement to `documents.delete` and `documents.permanent_delete` only. | Add regression coverage proving non-document deletes through `api.call` are not read-token gated while document deletes remain gated. |
+| G6: Validation/test/docs coverage is document-centric. | New compliance wrappers can ship with schema gaps, weak test coverage, and contract drift. | Extend arg schemas, live integration tests, and docs (`TOOL_CONTRACTS.md`, `README.md`) for end-to-end compliance workflows. | Run `npm run check` and `npm test`, then confirm docs reflect shipped signatures and workflow guidance. |
 
 ## Process checklist
 1. Reconfirm endpoint contracts in Outline API docs and OpenAPI (`users.*`, `groups.*`, `collections.*memberships*`, `oauthClients.*`, `oauthAuthentications.*`, `events.list`, `revisions.info`).

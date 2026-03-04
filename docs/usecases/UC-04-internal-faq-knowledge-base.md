@@ -13,11 +13,11 @@
   5. Keep revision history for audit and rollback.
 
 ## Why this is real (source links)
-- Outline positions itself directly as “Team knowledge base and wiki software” for internal docs and repeatable knowledge workflows.
+- Outline positions itself directly as "Team knowledge base and wiki software" for internal docs and repeatable knowledge workflows.
   - source: https://www.getoutline.com/
 - Outline highlights the exact pain point: colleagues repeatedly requesting the same information.
   - source: https://www.getoutline.com/
-- Outline documents “Search and AI answers,” including generated answers with linked sources and Slack integration.
+- Outline documents "Search and AI answers," including generated answers with linked sources and Slack integration.
   - source: https://docs.getoutline.com/s/guide/doc/search-ai-answers-NIKPvYrx06
 - Confluence knowledge-base guidance states self-service knowledge bases reduce repetitive support questions and speed up user resolution.
   - source: https://www.atlassian.com/software/confluence/resources/guides/what-is-a-knowledge-base
@@ -67,7 +67,16 @@
   - membership read path: validate deterministic output for access debugging wrappers.
 - P5: Update docs.
   - `docs/TOOL_CONTRACTS.md`: add signatures/examples for new wrappers.
-  - `README.md`: add “internal FAQ playbook” command sequence using ids/summary-first retrieval.
+  - `README.md`: add "internal FAQ playbook" command sequence using ids/summary-first retrieval.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class wrapper for Outline AI answers endpoint. | FAQ answering continues to rely on `api.call`, causing inconsistent contracts in agent loops. | Add `documents.answer` as a thin wrapper over `documents.answerQuestion` with deterministic output fields. | Add a live happy-path test for `documents.answer` and assert stable response shape and citations behavior. |
+| G2: No deterministic FAQ answer envelope. | Downstream automation cannot reliably branch on answer state, citations, or no-answer outcomes. | Define and enforce a standard envelope such as `answer + citations + no_answer_reason` for answer tools. | Add live no-hit and hit tests that assert explicit no-answer and answer envelopes without opaque failures. |
+| G3: No batched FAQ-answer wrapper. | Operators must hand-roll loops for repeated questions, increasing latency and orchestration complexity. | Add `documents.answer_batch` with bounded concurrency and per-item deterministic results. | Add a live batch test that verifies per-item isolation and stable item schema across mixed outcomes. |
+| G4: Missing permission-debug wrappers for FAQ visibility issues. | Visibility incidents remain slower to debug because access checks require raw endpoint calls. | Add `documents.memberships` and `collections.memberships` wrappers for read-only access diagnosis. | Add membership read-path live tests and assert deterministic outputs for common access-debug workflows. |
+| G5: Live tests do not cover native AI-answer behavior. | Regressions in answer wrappers can ship without detection in CI and release checks. | Extend `test/live.integration.test.js` with answer and batch coverage tied to FAQ scenarios. | Run `npm test` and confirm dedicated answer-tool subtests execute and pass in the live suite. |
 
 ## Process checklist
 1. Identify FAQ scope collection (`collections.list` + `collections.tree`).

@@ -71,6 +71,15 @@
   - `docs/TOOL_CONTRACTS.md`: add signatures/examples for all template wrappers + placeholder pipeline tools.
   - `README.md`: add UC-11 command sequence (templatize -> list/info -> create_from_template -> validate -> cleanup).
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class wrappers for template lifecycle endpoints. | Template operations remain dependent on low-level `api.call`, reducing consistency, discoverability, and safe defaults. | Implement explicit wrapper tools for `templates.list|info|create|update|delete|restore|duplicate` with stable views and action gating. | Run live integration tests that exercise lifecycle listing, read, mutation, and recovery paths for suite-created templates. |
+| G2: No dedicated wrapper for `documents.templatize`. | A core conversion step in template pipelines stays manual and error-prone, increasing operator complexity. | Add `documents.templatize` as a first-class wrapper with validated arguments and `performAction` gating. | Execute a live flow that creates a suite-owned doc, templatizes it, and verifies visibility through template list/info wrappers. |
+| G3: No standardized placeholder pipeline abstraction. | Placeholder handling can drift across callers, causing unresolved tokens or inconsistent generated docs. | Add `templates.extract_placeholders` and `documents.create_from_template` with deterministic placeholder validation and strict mode failure on unresolved tokens. | Add tests that instantiate from a template with placeholder values and assert expected substitutions plus strict-mode unresolved-token failure behavior. |
+| G4: No live integration coverage for template-driven creation flows. | Regressions in template lifecycle and placeholder behavior may ship undetected. | Add live integration subtests for templatize, lifecycle mutation, placeholder completion, and cleanup in `test/live.integration.test.js`. | Run `npm test` in configured live environment and confirm passing UC-11 related subtests. |
+| G5: Contract documentation does not expose template lifecycle operations as first-class tools. | Users and agents cannot reliably discover canonical template workflows from docs, increasing misuse and support overhead. | Update `docs/TOOL_CONTRACTS.md` and `README.md` with signatures, examples, and UC-11 flow sequence. | Verify docs include template lifecycle wrappers and placeholder pipeline examples aligned with implemented tool contracts. |
+
 ## Process checklist
 1. Validate endpoint contracts and payloads in Outline Templates docs and OpenAPI:
    - https://docs.getoutline.com/s/guide/doc/templates-GP6DXgRtxl

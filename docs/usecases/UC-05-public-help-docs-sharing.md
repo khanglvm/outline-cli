@@ -32,11 +32,11 @@
 - Raw fallback exists for non-wrapped endpoints: `api.call`.
 
 ## Current limits/gaps in this repo
-- No dedicated `shares.*` wrappers (`shares.info`, `shares.list`, `shares.create`, `shares.update`, `shares.revoke`).
+- G1: No dedicated `shares.*` wrappers (`shares.info`, `shares.list`, `shares.create`, `shares.update`, `shares.revoke`).
   - source: https://github.com/outline/openapi/blob/main/spec3.yml
-- Share lifecycle automation currently requires generic `api.call`, which reduces deterministic tool discoverability and schema enforcement.
-- No first-class share lifecycle tests in `test/live.integration.test.js`.
-- No public-docs-sharing playbook in docs contracts/README despite this being a common deployment path.
+- G2: Share lifecycle automation currently requires generic `api.call`, which reduces deterministic tool discoverability and schema enforcement.
+- G3: No first-class share lifecycle tests in `test/live.integration.test.js`.
+- G4: No public-docs-sharing playbook in docs contracts/README despite this being a common deployment path.
 
 ## Improvement proposal (specific wrappers/schema/tests/docs)
 - Wrappers:
@@ -57,6 +57,14 @@
 - Docs:
   - update `docs/TOOL_CONTRACTS.md` with `shares.*` signatures/examples.
   - update `README.md` with a deterministic public-help-docs sharing flow.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No dedicated `shares.*` wrappers (`shares.info`, `shares.list`, `shares.create`, `shares.update`, `shares.revoke`). | Share operations stay fragmented behind generic calls, lowering contract clarity and agent discoverability. | Add dedicated `shares.*` wrappers with stable `tool/profile/result` envelopes. | Run `tools contract all` and confirm all `shares.*` tools are listed with expected signatures. |
+| G2: Share lifecycle automation currently requires generic `api.call`, which reduces deterministic tool discoverability and schema enforcement. | Invalid or inconsistent arguments can reach runtime and reduce deterministic behavior in automation. | Add strict `shares.*` argument schemas in `src/tool-arg-schemas.js` and route share lifecycle through typed wrappers. | Execute invalid-arg and valid-arg calls to verify schema rejection/acceptance behavior for each `shares.*` tool. |
+| G3: No first-class share lifecycle tests in `test/live.integration.test.js`. | Regressions in create/publish/read/revoke flows can ship without detection. | Add live integration subtests that create a suite-owned doc, exercise share lifecycle, and clean up. | Run `npm test` and confirm the share lifecycle subtests pass end-to-end. |
+| G4: No public-docs-sharing playbook in docs contracts/README despite this being a common deployment path. | Users lack a deterministic reference flow, increasing misuse and support overhead. | Document the public help docs sharing flow in `docs/TOOL_CONTRACTS.md` and `README.md` with examples. | Review docs output to confirm `shares.*` usage and flow steps are documented consistently. |
 
 ## Process checklist
 1. Verify share endpoint contracts against Outline Sharing docs and OpenAPI.

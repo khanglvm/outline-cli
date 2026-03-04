@@ -67,6 +67,15 @@
   - `docs/TOOL_CONTRACTS.md`: add signatures/examples/best practices for new wrappers
   - `README.md`: add a deterministic UC-08 command sequence (template-first incident response + revision recovery)
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Template lifecycle is not first-class (`templates.list|info|create|update|delete|restore|duplicate` wrappers missing). | Incident teams cannot reliably standardize or evolve runbook/playbook templates through CLI-first workflows. | Implement template lifecycle wrappers and expose deterministic output modes consistent with existing tool contracts. | Add live integration subtests that create, list, inspect, update, duplicate, restore, and delete suite-owned templates. |
+| G2: No dedicated wrapper for `documents.templatize`. | High-quality incident docs are not easily promoted into reusable templates, causing repeated manual setup. | Add `documents.templatize` wrapper with explicit argument validation and mutation gating. | Add flow coverage that creates a suite-owned incident doc, templatizes it, and uses the resulting template in `documents.create` via `templateId`. |
+| G3: Revision inspection is incomplete because `revisions.info` is missing. | Post-incident forensics and deterministic audit trails remain shallow when responders need full revision hydration. | Implement `revisions.info` and align schema/output with existing revision wrappers. | Extend revision flow tests to call `revisions.list`, hydrate selected entries via `revisions.info`, then verify restore behavior. |
+| G4: Incident timeline discussion is not first-class (`comments.*` wrappers missing). | Responder notes and decision context become fragmented outside document-native workflows, reducing incident traceability. | Implement `comments.list|info|create|update|delete` wrappers with strict schemas and `performAction` on mutations. | Add live tests that create, list, update, and delete comments on suite-owned incident docs. |
+| G5: Live integration tests do not cover full runbook/playbook workflows. | Regressions can ship in template, templatize, comment, and revision paths without deterministic detection. | Add end-to-end UC-08 test flows for template lifecycle, incident edits/revisions, and comment timeline operations. | Run `npm test` in live env and confirm dedicated UC-08 subtests pass across all newly wrapped endpoints. |
+
 ## Process checklist
 1. Verify endpoint contracts in Outline developer references and OpenAPI.
    - https://www.getoutline.com/developers

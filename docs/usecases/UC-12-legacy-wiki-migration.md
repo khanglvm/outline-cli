@@ -69,6 +69,15 @@
   - Update `README.md` with a “legacy wiki migration” command sequence.
   - Keep this UC-12 file as the scenario anchor for migration-specific guidance.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class import wrappers. | Operators depend on raw `api.call`, creating inconsistent invocation patterns and higher error rates during migration runs. | Add `documents.import_file` and `file_operations.list/info/delete` wrappers with stable CLI contracts. | Run `node ./bin/outline-agent.js tools contract all --result-mode inline` and confirm new tool contracts are listed and callable. |
+| G2: JSON-only transport blocks file import workflows. | Documented import flows cannot be executed from this CLI, forcing manual UI-only import and breaking automated migration pipelines. | Extend `OutlineClient` request handling to support `multipart/form-data` for import while preserving JSON behavior for existing tools. | Execute a live import of a suite fixture file and verify imported content appears via `documents.list/search/info`. |
+| G3: Confluence migration flow is undocumented in this repo. | Teams lack a repeatable runbook for combining Outline native import with post-import validation and cleanup, increasing cutover risk. | Add migration runbook guidance in this UC and link command sequence in `README.md` for verification/remediation flow. | Follow documented sequence end to end on a test collection and confirm each step is executable without ad-hoc decisions. |
+| G4: Action-gating heuristic does not include `import` methods. | Mutating import calls can run without explicit operator intent, weakening safety guarantees of mutation gating. | Extend action gate mutation detection to include `import` (and optionally `export`) and require `performAction: true`. | Add and run a gating test that fails import mutation without `performAction=true` and passes with explicit approval. |
+| G5: No live integration tests for migration lifecycle. | Regressions in import, status tracking, and post-import remediation can ship unnoticed and break production migration workflows. | Add live integration coverage for fixture import, verification queries, remediation operations, and cleanup on suite-created docs. | Run `npm test` in live environment and confirm migration lifecycle subtests pass consistently. |
+
 ## Process checklist
 1. Confirm migration scope and cutover criteria with workspace owners.
 2. Prepare destination collections and access controls in Outline.

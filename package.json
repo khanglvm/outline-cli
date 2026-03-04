@@ -1,0 +1,20 @@
+{
+  "name": "outline-agent-cli",
+  "version": "0.1.0",
+  "description": "Agent-optimized CLI for Outline API",
+  "type": "module",
+  "bin": {
+    "outline-agent": "bin/outline-agent.js"
+  },
+  "scripts": {
+    "start": "node ./bin/outline-agent.js",
+    "check": "node ./bin/outline-agent.js --help",
+    "test": "node --test ./test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  }
+}

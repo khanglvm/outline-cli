@@ -72,6 +72,16 @@
   - `README.md`: add semantic Q&A playbook (`ids/summary-first`, answer call, no-answer fallback, permission diagnosis using `includePolicies`).
   - keep this UC-15 as scenario reference for permission-aware AI-answer implementation.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class AI-answer wrapper. | Agents must rely on raw `api.call`, increasing contract drift risk and reducing deterministic orchestration. | Implement `documents.answer` as a first-class wrapper over `documents.answerQuestion` with stable response shaping. | Run live test for `documents.answer` happy path and assert stable top-level keys (`question`, `answer`, `citations`, `answerState`). |
+| G2: No deterministic permission-aware answer envelope. | Downstream automation cannot reliably branch on no-answer vs answered states or audit citation payloads. | Standardize envelope fields (`answer`, `citations`, `documents`, `answerState`, `noAnswerReason`, optional permission context). | Add schema assertions in live tests for both answered and no-answer flows; confirm required fields always exist. |
+| G3: No batch Q&A wrapper. | Helpdesk/support workloads pay extra round trips and have fragile manual loop/error handling. | Add `documents.answer_batch` with bounded concurrency, dedupe, and per-item isolation. | Execute batch test with mixed questions and verify per-item status plus partial-failure isolation. |
+| G4: Permission-awareness is implicit, not surfaced. | Automation may misclassify restricted-access outcomes as retrieval failures and leak incorrect diagnostics. | Normalize explicit answer-state signals, including restricted/uncertain no-answer reasons tied to access constraints. | In guarded multi-profile test, compare broader vs restricted outputs and confirm restricted result does not expose disallowed evidence and returns explicit no-answer signaling when applicable. |
+| G5: No live tests for native AI-answer path. | Regressions in wrapper behavior or response shaping can ship unnoticed. | Extend `test/live.integration.test.js` with native answer-path coverage (happy, no-answer, batch, permission-delta). | Run `npm test` and confirm all new AI-answer subtests pass in live environment. |
+| G6: No docs playbook for semantic Q&A + permission troubleshooting. | Operators and agent builders apply inconsistent patterns and cannot diagnose permission/indexing gaps quickly. | Update `README.md` and `docs/TOOL_CONTRACTS.md` with an end-to-end Q&A workflow and troubleshooting guidance. | Validate docs include wrapper signatures, envelope fields, and a permission troubleshooting flow aligned with tool contracts. |
+
 ## Process checklist
 1. Validate expected behavior against Outline Search/AI Answers and OpenAI integration docs before coding.
 2. Confirm raw endpoint contract for `documents.answerQuestion` against Outline OpenAPI.

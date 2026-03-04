@@ -84,6 +84,15 @@
   - `README.md`: add an “Enterprise federated search sync” playbook (manifest -> probe -> permission snapshot -> alerting).
   - Keep this UC-16 file as the scenario anchor and implementation checklist.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No federated-search-specific wrappers exist. | Teams must compose raw calls manually, increasing drift and inconsistent sync audits across environments. | Implement P1 wrappers `federated.sync_manifest`, `federated.sync_probe`, and `federated.permission_snapshot` in `src/tools.navigation.js` and register in `src/tools.js`. | Use `node ./bin/outline-agent.js tools contract all --result-mode inline` and live tests to verify wrapper presence and callable contracts. |
+| G2: No schema-level contracts exist for sync-audit inputs. | Invalid freshness windows, probe modes, or cursor inputs can produce non-deterministic results or runtime failures. | Implement P3 schema coverage in `src/tool-arg-schemas.js` for `since`, enum bounds, numeric bounds, and required argument combinations. | Add/adjust integration assertions that invalid args fail predictably and valid args pass with stable envelopes. |
+| G3: No dedicated tool output shape for enterprise sync operations. | Downstream CI/cron alerting cannot reliably classify stale, missing, or ACL-drift cases from mixed payloads. | Implement P2 deterministic report objects for manifest, probe, and permission outputs with stable fields and aggregate counts. | Validate NDJSON/JSON outputs contain expected keys (`status`, `driftType`, `missing`, `stale`, `aclDelta`) and deterministic per-item rows. |
+| G4: No live integration coverage for federated sync workflows. | Regressions in manifest/probe/snapshot behavior can ship undetected and break enterprise reconciliation flows. | Implement P4 live tests in `test/live.integration.test.js` using suite-created documents and deterministic cleanup. | Run `npm test` and confirm federated sync subtests pass end-to-end in a real Outline environment. |
+| G5: No operator runbook in docs for Glean-aligned sync verification cadence. | Operators may run checks at the wrong cadence and miss six-hour content drift or permission drift expectations. | Implement P5 documentation updates in `README.md` and `docs/TOOL_CONTRACTS.md` with a Glean-aligned manifest/probe/snapshot playbook. | Review published docs for the new playbook and examples, then verify command snippets match implemented tool contracts. |
+
 ## Process checklist
 1. Validate the latest Glean integration assumptions against Outline docs before coding (plan tier, content sync cadence, permission sync cadence).
 2. Confirm endpoint payload constraints from Outline API docs/OpenAPI for search + memberships.

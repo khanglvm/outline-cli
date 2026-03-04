@@ -13,7 +13,7 @@
   5. Produce machine-readable run output for scheduled jobs and compliance logs.
 
 ## Why this is real (source links)
-- Outline’s API guide positions the API as first-class for programmatic control (same surface used by the app), with API key/OAuth auth, scopes, pagination, and rate-limit behavior.
+- Outline's API guide positions the API as first-class for programmatic control (same surface used by the app), with API key/OAuth auth, scopes, pagination, and rate-limit behavior.
   - source: https://docs.getoutline.com/guide/doc/api
   - source: https://github.com/outline/openapi/blob/main/spec3.yml#L6
   - source: https://github.com/outline/openapi/blob/main/spec3.yml#L53
@@ -55,7 +55,8 @@
 - G4: Live integration coverage is document-heavy and does not validate workspace automation flows.
   - Current live suite exercises document/search/revision/delete safety paths but not users/groups/shares/events lifecycle flows.
   - source: ../../test/live.integration.test.js
-- G5 (inference from source comparison): OpenAPI publishes a much larger RPC surface than the current CLI contract set.
+- G5: OpenAPI publishes a much larger RPC surface than the current CLI contract set.
+  - inference from source comparison.
   - Practical impact: agents must use raw `api.call` for many high-value automation steps, reducing determinism and increasing operator error risk.
 
 ## Improvement proposal (specific wrappers/schema/tests/docs)
@@ -92,8 +93,17 @@
   - safe mutation tests behind explicit env guard + fixture IDs (for sandbox workspaces only), with mandatory cleanup.
 - P7: Update docs.
   - `docs/TOOL_CONTRACTS.md`: add signatures/examples for all new wrappers.
-  - `README.md`: add “workspace automation” playbook with plan/apply/gating flow.
+  - `README.md`: add "workspace automation" playbook with plan/apply/gating flow.
   - keep this UC-13 doc as the scenario anchor.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: Missing first-class wrappers for core workspace-admin APIs needed by automation. | Automation runs keep depending on raw `api.call`, which weakens deterministic contracts and increases operator error risk. | Implement P1 and P2 wrappers for read and mutation workspace operations with stable envelopes. | Run `node ./bin/outline-agent.js tools contract all --result-mode inline` and confirm the new workspace tool signatures are present. |
+| G2: `api.call` mutation gating has blind spots for workspace operations. | High-impact mutators can bypass explicit action intent checks when verbs are not matched. | Implement P5 by replacing the broad heuristic with explicit mutating method-family classification (or broader verb coverage). | Add/execute gating tests proving mutating workspace `api.call` methods fail without `performAction: true`. |
+| G3: No schema-level contracts for workspace lifecycle arguments. | Invalid payloads/enums are caught only at runtime by the API, reducing reliability and determinism. | Implement P4 by adding full arg schemas for workspace wrappers, including enum and payload-shape validation. | Confirm invalid workspace arguments are rejected by schema validation and `npm run check` stays green. |
+| G4: Live integration coverage is document-heavy and does not validate workspace automation flows. | Regressions in users/groups/shares/events automation are not detected before release. | Implement P6 with read-only coverage, mutator gating checks, and guarded mutation fixtures with cleanup. | Run `npm test` and verify workspace read/gating scenarios are included and passing. |
+| G5: OpenAPI publishes a much larger RPC surface than the current CLI contract set. | Contract drift persists, forcing raw-call usage for high-value workflows and reducing automation safety. | Implement P1, P2, and P7 to close high-value endpoint gaps and document the supported contract surface. | Re-run the raw-vs-wrapped endpoint inventory diff and confirm the documented contract surface is expanded. |
 
 ## Process checklist
 1. Rebuild and review current contract inventory:

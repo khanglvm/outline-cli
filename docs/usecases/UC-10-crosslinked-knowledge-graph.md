@@ -9,7 +9,7 @@
   1. Authors link related pages and mention collaborators/pages while writing.
   2. The system captures graph edges (backlinks, outgoing links, mention-like references).
   3. Agents start from a seed page and expand neighbors to gather full context.
-  4. Teams answer “what depends on this page?” and “what pages reference this topic/person?” quickly.
+  4. Teams answer "what depends on this page?" and "what pages reference this topic/person?" quickly.
   5. Changes are propagated by traversing affected linked pages instead of manual hunting.
 
 ## Why this is real (source links)
@@ -65,6 +65,15 @@
 - P4: Update docs.
   - `docs/TOOL_CONTRACTS.md`: add new graph wrappers and explicitly include `backlinkDocumentId` in `documents.list` signature.
   - `README.md`: add UC-10 command sequence (seed doc -> backlinks -> graph report -> targeted hydration).
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class graph/backlink wrapper. | Backlink traversal remains hidden behind generic `documents.list`, causing inconsistent usage and slower onboarding. | Implement `documents.backlinks` as the explicit wrapper described in P1 over `documents.list({ backlinkDocumentId })`. | Add live test with suite-created linked docs asserting `documents.backlinks(seedId)` returns expected referrers. |
+| G2: Contract docs drift for backlink support. | Users follow stale docs and miss `backlinkDocumentId`, creating avoidable integration errors. | Update `docs/TOOL_CONTRACTS.md` to include `backlinkDocumentId` in `documents.list` and document graph wrappers (P4). | Run `node ./bin/outline-agent.js tools contract all --result-mode inline` and confirm `documents.list` contract reflects `backlinkDocumentId`. |
+| G3: No dedicated mentions relationship tool. | Mention-derived edges cannot be consumed in a normalized way for graph automation. | Extend graph wrappers so mention/link relationships are emitted as normalized edges in `documents.graph_neighbors` (P1). | Add live subtest asserting normalized mention/link edge rows with stable keys for suite-owned docs. |
+| G4: No deterministic graph traversal/report shape. | Downstream automations cannot rely on stable edge/node schemas, increasing token and parsing overhead. | Add `documents.graph_neighbors` and `documents.graph_report` with stable `nodes[]` and `edges[]` outputs plus safety bounds in schemas (P1, P2). | Add live assertions for traversal depth/max node bounds and deterministic node IDs in `documents.graph_report`. |
+| G5: Live tests do not validate backlink/mention graph workflows end-to-end. | Regression risk stays high because graph behavior is not validated against real workspace data. | Add live integration coverage using suite-owned A/B/C docs, cross-links, and cleanup as listed in P3. | Execute `npm test` and confirm UC-10 graph subtests pass and cleanup removes suite-created docs. |
 
 ## Process checklist
 1. Validate behavior against Outline docs for backlinks/mentions/search and confirm API constraints in OpenAPI.

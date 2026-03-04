@@ -86,8 +86,18 @@
   - Flow D: `revisions.info` hydration check after obtaining revision IDs from `revisions.list`.
 - P6: Update docs.
   - `docs/TOOL_CONTRACTS.md`: add lifecycle tool contracts/examples and explicit governance best practices.
-  - `README.md`: add a “Secure lifecycle governance” command sequence (archive -> list archived/deleted -> safe delete -> restore -> cleanup dry-run/execute).
+  - `README.md`: add a "Secure lifecycle governance" command sequence (archive -> list archived/deleted -> safe delete -> restore -> cleanup dry-run/execute).
   - Keep this UC-20 file as the implementation anchor.
+
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class wrappers for major archive/trash lifecycle endpoints. | Lifecycle governance depends on generic `api.call`, reducing contract stability and increasing operator error. | Implement P1 lifecycle read wrappers for `documents.archived` and `documents.deleted`, and include `documents.archive` and `documents.empty_trash` wrappers from P2. | Add live subtests from P5 that call lifecycle wrappers directly and assert deterministic `ids|summary|full` output shapes. |
+| G2: Restore semantics are only partially modeled. | Recovery from archive/trash is inconsistent because only revision-targeted restore is first-class. | Implement P2 `documents.restore` wrapper with action gating and deterministic response shaping. | Run P5 restore path tests for archived and deleted documents and verify restored documents are active. |
+| G3: Cleanup automation bypasses the safe delete read-token protocol. | Cleanup deletes can bypass stale-revision/read-confirmation safeguards required by governance policy. | Implement P3 safe cleanup mode by default (`deleteMode: safe`) using `documents.info(armDelete=true)` and token-backed delete flow. | Add P5 cleanup regression tests to assert token issuance, revision check, and deletion evidence per candidate. |
+| G4: Revision lifecycle hydration is incomplete. | Operators cannot reliably capture revision-level evidence before or after restore decisions. | Implement P4/P5 coverage for `revisions.info` wrapper and schema validation. | Execute P5 revision hydration subtest: list revisions, call `revisions.info`, and verify evidence fields are present. |
+| G5: Live lifecycle tests are not end-to-end for archive/trash governance. | Lifecycle behavior can regress without detection across archive, deleted listing, and restore flows. | Implement P5 end-to-end live tests for archive, safe delete, deleted listing, restore, and cleanup. | Run `npm test` and verify lifecycle subtests pass using suite-created documents only. |
+| G6: Operator docs do not provide a single secure lifecycle runbook. | Teams may execute lifecycle actions inconsistently and miss required safeguards. | Implement P6 documentation updates in `README.md` and `docs/TOOL_CONTRACTS.md` with a unified secure lifecycle sequence. | Review updated docs for a complete archive -> list -> safe delete -> restore -> cleanup flow and matching contracts. |
 
 ## Process checklist
 1. Re-verify OpenAPI lifecycle contracts for `documents.archive/restore/delete/archived/deleted/empty_trash` and `revisions.info/list`.

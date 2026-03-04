@@ -75,6 +75,16 @@
   - update `docs/TOOL_CONTRACTS.md` with new revision wrappers and patch precondition contract.
   - update `README.md` with a UC-09 command sequence for postmortem drafting, review, and rollback-safe recovery.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No first-class `revisions.info` wrapper. | Automation cannot deterministically hydrate a specific revision body and metadata without falling back to generic `api.call`. | Add `revisions.info` wrapper and corresponding arg schema, then document the contract. | Live test: create doc revisions, call `revisions.info` for a known revision ID, assert returned revision content and metadata fields. |
+| G2: No direct revision-to-revision diff helper. | RCA audits stay manual and inconsistent because users must stitch raw calls with local diff logic. | Add `revisions.diff` wrapper that hydrates both revisions and reuses the existing line-diff engine with deterministic options. | Live test: generate two known revisions, run `revisions.diff`, assert stable hunks and summary stats. |
+| G3: `documents.apply_patch` lacks explicit `expectedRevision` guard. | Concurrent incident edits can slip through a race window and overwrite newer facts. | Extend patch flow with optional `expectedRevision` (or `documents.apply_patch_safe`) and enforce revision precondition checks. | Live test: read revision A, mutate document to revision B, run patch with expected revision A, assert deterministic revision-conflict failure. |
+| G4: `documents.batch_update` is non-transactional with partial progress default. | Tightly coupled postmortem sections can drift into inconsistent state after partial success. | Add an opt-in all-or-nothing mode for coupled updates and keep partial behavior as explicit default for general usage. | Live test: run multi-item batch where one item is forced to fail, assert transactional mode rolls back all items. |
+| G5: Arg schema drift around structured incident metadata (`dataAttributes`). | Contract validation is weaker and incident metadata tagging can be inconsistent across mutation tools. | Align `src/tool-arg-schemas.js` with mutation implementations to expose and validate `dataAttributes` on relevant tools. | Contract test: validate accepted `dataAttributes` payloads and reject malformed structures with deterministic errors. |
+| G6: No UC-09-specific end-to-end test flow. | Regressions across draft, concurrent edit handling, forensic review, and rollback safety may go undetected. | Add a dedicated live UC-09 subtest covering draft -> concurrent edits -> revision inspection -> rollback and content verification. | Live suite: run UC-09 scenario and assert each stage passes with expected revision and content outcomes. |
+
 ## Process checklist
 1. Verify revision/mutation endpoint contracts against Outline docs and OpenAPI (`revisions.info`, `revisions.list`, `documents.restore`, `documents.update`).
 2. Implement wrappers in `src/tools.mutation.js` and register contracts in tool metadata exports.

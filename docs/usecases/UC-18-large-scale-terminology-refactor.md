@@ -86,6 +86,16 @@
   - update `README.md` with a terminology-governance playbook (discover -> plan -> review -> dryRun -> apply -> audit).
   - keep this UC-18 file as the scenario anchor for controlled terminology programs.
 
+## Issue resolution matrix
+| Issue | Risk if unaddressed | Proposed remediation | Verification step |
+| --- | --- | --- | --- |
+| G1: No terminology-specific wrapper. | Refactor runs stay hand-built and inconsistent, increasing operator error and review friction. | Add `documents.plan_terminology_refactor` with strict `glossary` contract and plan output parity with current batch planning (`impacts`, hunks, `planHash`). | Create a glossary-based plan and confirm deterministic `planHash` plus expected replacement counts in live tests. |
+| G2: Scope controls are still generic. | Out-of-scope documents can be included, causing unintended broad edits in governance rollouts. | Extend terminology planning with explicit exclusion controls (`excludeDocIds`, `excludePatterns`) and preserve collection/query scope knobs. | Run a scoped plan with exclusion lists and assert excluded docs do not appear in `impacts` or apply targets. |
+| G3: No structure-aware replacement guards. | Replacements can corrupt code fences, inline code, or link targets where edits are unsafe. | Add guard args (`excludeCodeBlocks`, `excludeInlineCode`) and enforce them in terminology planning/apply behavior. | Use fixture docs containing code fences, inline code, and links; assert only safe prose segments are modified. |
+| G4: Governance metadata is not modeled in plan/apply contracts. | Approval traceability is weak, making audits and policy sign-off harder to defend. | Add governance fields (`changeRequestId`, `policyVersion`, `approver`) to terminology apply schema and output envelope. | Execute apply with governance metadata and assert returned results include those fields for evidence capture. |
+| G5: Audit surface is incomplete for enterprise reporting. | Teams must assemble evidence manually across tools, increasing audit risk and effort. | Add an `events.list` wrapper so audit-feed retrieval is available in the same workflow as plan/apply/revisions. | After apply, query `events.list` for the run window and verify relevant document change events are returned. |
+| G6: Live tests validate mechanics, not large-scale governance scenarios. | Regressions in multi-collection, policy-driven refactors can ship without detection. | Add UC-18 live integration subtests covering glossary exclusions, dry-run and apply, failure gates, and cleanup. | Run `npm test` and confirm the UC-18 path passes including hash mismatch and missing `performAction` negative checks. |
+
 ## Process checklist
 1. Confirm approved terminology map (owner, policy version, effective date, exception terms).
 2. Resolve target scope (`collectionId` and/or query set) and exclude known exception documents.

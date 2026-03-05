@@ -12,13 +12,18 @@ import {
 import { CliError, ApiError } from "./errors.js";
 import { OutlineClient } from "./outline-client.js";
 import { ResultStore } from "./result-store.js";
+import {
+  hydrateProfileFromKeychain,
+  removeProfileFromKeychain,
+  secureProfileForStorage,
+} from "./secure-keyring.js";
 import { getToolContract, invokeTool, listTools } from "./tools.js";
 import { mapLimit, parseJsonArg, parseCsv, toInteger } from "./utils.js";
 
 function configureSharedOutputOptions(command) {
   return command
     .option("--config <path>", "Config file path", defaultConfigPath())
-    .option("--profile <id>", "Profile ID")
+    .option("--profile <id>", "Profile ID (required when multiple profiles exist and no default is set)")
     .option("--output <format>", "Output format: json|ndjson", "json")
     .option("--result-mode <mode>", "Result mode: auto|inline|file", "auto")
     .option("--inline-max-bytes <n>", "Max inline JSON payload size", "12000")
@@ -38,7 +43,11 @@ function buildStoreFromOptions(opts) {
 async function getRuntime(opts, overrideProfileId) {
   const configPath = path.resolve(opts.config || defaultConfigPath());
   const config = await loadConfig(configPath);
-  const profile = getProfile(config, overrideProfileId || opts.profile);
+  const selectedProfile = getProfile(config, overrideProfileId || opts.profile);
+  const profile = hydrateProfileFromKeychain({
+    configPath,
+    profile: selectedProfile,
+  });
   const client = new OutlineClient(profile);
   return {
     configPath,
@@ -189,7 +198,7 @@ async function emitOutput(store, payload, opts, emitOptions = {}) {
 export async function run(argv = process.argv) {
   const program = new Command();
   program
-    .name("outline-agent")
+    .name("outline-cli")
     .description("Agent-optimized CLI for Outline API")
     .version("0.1.0")
     .showHelpAfterError(true);
@@ -236,8 +245,14 @@ export async function run(argv = process.argv) {
         headers: parseHeaders(opts.headers),
       });
 
-      config.profiles[id] = nextProfile;
-      if (opts.setDefault || !config.defaultProfile) {
+      const secured = secureProfileForStorage({
+        configPath,
+        profileId: id,
+        profile: nextProfile,
+      });
+
+      config.profiles[id] = secured.profile;
+      if (opts.setDefault) {
         config.defaultProfile = id;
       }
       await saveConfig(configPath, config);
@@ -247,7 +262,8 @@ export async function run(argv = process.argv) {
         ok: true,
         configPath,
         defaultProfile: config.defaultProfile,
-        profile: redactProfile({ id, ...nextProfile }),
+        profile: redactProfile({ id, ...secured.profile }),
+        security: secured.keychain,
       }, { mode: "inline", pretty: true, label: "profile-add" });
     });
 
@@ -333,10 +349,19 @@ export async function run(argv = process.argv) {
         );
       }
 
+      const profileRecord = {
+        id,
+        ...config.profiles[id],
+      };
+      const security = removeProfileFromKeychain({
+        configPath,
+        profileId: id,
+        profile: profileRecord,
+      });
+
       delete config.profiles[id];
       if (config.defaultProfile === id) {
-        const next = Object.keys(config.profiles)[0] || null;
-        config.defaultProfile = next;
+        config.defaultProfile = null;
       }
       await saveConfig(configPath, config);
 
@@ -346,6 +371,7 @@ export async function run(argv = process.argv) {
           ok: true,
           removed: id,
           defaultProfile: config.defaultProfile,
+          security,
         },
         { mode: "inline", pretty: true, label: "profile-remove" }
       );
@@ -438,12 +464,16 @@ export async function run(argv = process.argv) {
     const store = buildStoreFromOptions(opts);
     const clientCache = new Map();
 
-    function runtimeForProfile(profileId) {
+    async function runtimeForProfile(profileId) {
       const selected = getProfile(config, profileId || opts.profile);
       if (!clientCache.has(selected.id)) {
-        clientCache.set(selected.id, {
+        const hydrated = hydrateProfileFromKeychain({
+          configPath,
           profile: selected,
-          client: new OutlineClient(selected),
+        });
+        clientCache.set(selected.id, {
+          profile: hydrated,
+          client: new OutlineClient(hydrated),
         });
       }
       return clientCache.get(selected.id);
@@ -458,7 +488,7 @@ export async function run(argv = process.argv) {
         if (!operation.tool) {
           throw new CliError(`Operation at index ${index} is missing tool`);
         }
-        const runtime = runtimeForProfile(operation.profile);
+        const runtime = await runtimeForProfile(operation.profile);
         const payload = await invokeTool(runtime, operation.tool, operation.args || {});
         const mode = (opts.itemEnvelope || "compact").toLowerCase();
         const compactResult =

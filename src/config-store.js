@@ -1,21 +1,33 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 export const CONFIG_VERSION = 1;
 
 export function defaultConfigPath() {
+  if (process.env.OUTLINE_CLI_CONFIG) {
+    return path.resolve(process.env.OUTLINE_CLI_CONFIG);
+  }
   if (process.env.OUTLINE_AGENT_CONFIG) {
     return path.resolve(process.env.OUTLINE_AGENT_CONFIG);
   }
-  return path.join(os.homedir(), ".config", "outline-agent", "config.json");
+  const modern = path.join(os.homedir(), ".config", "outline-cli", "config.json");
+  const legacy = path.join(os.homedir(), ".config", "outline-agent", "config.json");
+  if (!fsSync.existsSync(modern) && fsSync.existsSync(legacy)) {
+    return legacy;
+  }
+  return modern;
 }
 
 export function defaultTmpDir() {
+  if (process.env.OUTLINE_CLI_TMP_DIR) {
+    return path.resolve(process.env.OUTLINE_CLI_TMP_DIR);
+  }
   if (process.env.OUTLINE_AGENT_TMP_DIR) {
     return path.resolve(process.env.OUTLINE_AGENT_TMP_DIR);
   }
-  return path.join(os.homedir(), ".cache", "outline-agent", "tmp");
+  return path.join(os.homedir(), ".cache", "outline-cli", "tmp");
 }
 
 function blankConfig() {
@@ -79,18 +91,46 @@ export function listProfiles(config) {
 }
 
 export function getProfile(config, explicitId) {
-  const profileId = explicitId || config.defaultProfile;
-  if (!profileId) {
-    throw new Error("No profile selected. Use `outline-agent profile add` then `profile use`.");
+  const profiles = config?.profiles || {};
+
+  if (explicitId) {
+    const profile = profiles[explicitId];
+    if (!profile) {
+      throw new Error(`Profile not found: ${explicitId}`);
+    }
+    return {
+      id: explicitId,
+      ...profile,
+    };
   }
-  const profile = config.profiles?.[profileId];
-  if (!profile) {
-    throw new Error(`Profile not found: ${profileId}`);
+
+  if (config.defaultProfile) {
+    const profile = profiles[config.defaultProfile];
+    if (!profile) {
+      throw new Error(`Profile not found: ${config.defaultProfile}`);
+    }
+    return {
+      id: config.defaultProfile,
+      ...profile,
+    };
   }
-  return {
-    id: profileId,
-    ...profile,
-  };
+
+  const profileIds = Object.keys(profiles);
+  if (profileIds.length === 1) {
+    const id = profileIds[0];
+    return {
+      id,
+      ...profiles[id],
+    };
+  }
+
+  if (profileIds.length > 1) {
+    throw new Error(
+      "Profile selection required: multiple profiles are saved and no default profile is set. Use --profile <id> or `outline-cli profile use <id>`."
+    );
+  }
+
+  throw new Error("No profiles configured. Use `outline-cli profile add <id> ...` first.");
 }
 
 export function redactProfile(profile) {

@@ -5,8 +5,17 @@ Each tool contract includes signature, usage example, and AI best practices.
 Use CLI to get canonical JSON contracts:
 
 ```bash
-outline-agent tools contract all --pretty
+outline-cli tools contract all --pretty
 ```
+
+## Runtime Profile Routing
+
+- Runtime commands (`invoke`, `batch`, `profile test`) resolve profile in this order:
+  1. `--profile <id>`
+  2. configured default profile
+  3. single-profile fallback when exactly one profile exists
+- If multiple profiles exist and no default is configured, `--profile <id>` is required.
+- `profile add` only sets default when `--set-default` is provided.
 
 ## `api.call`
 
@@ -483,7 +492,7 @@ outline-agent tools contract all --pretty
 {
   "tool": "documents.cleanup_test",
   "args": {
-    "markerPrefix": "outline-agent-live-test-",
+    "markerPrefix": "outline-cli-live-test-",
     "olderThanHours": 24,
     "dryRun": true
   }

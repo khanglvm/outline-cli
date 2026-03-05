@@ -350,7 +350,7 @@ test("documents.answer and documents.answer_batch schema match handler inputs", 
 });
 
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-hardening-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-hardening-"));
   const store = new ResultStore({ tmpDir });
 
   try {

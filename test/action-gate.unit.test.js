@@ -36,9 +36,9 @@ test("assertPerformAction blocks when performAction is not true", () => {
 });
 
 test("delete read receipt lifecycle: issue -> validate -> consume", async () => {
-  const previousTmp = process.env.OUTLINE_AGENT_TMP_DIR;
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-action-gate-"));
-  process.env.OUTLINE_AGENT_TMP_DIR = tmpDir;
+  const previousTmp = process.env.OUTLINE_CLI_TMP_DIR;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-action-gate-"));
+  process.env.OUTLINE_CLI_TMP_DIR = tmpDir;
 
   try {
     const issued = await issueDocumentDeleteReadReceipt({
@@ -96,18 +96,18 @@ test("delete read receipt lifecycle: issue -> validate -> consume", async () => 
     );
   } finally {
     if (previousTmp == null) {
-      delete process.env.OUTLINE_AGENT_TMP_DIR;
+      delete process.env.OUTLINE_CLI_TMP_DIR;
     } else {
-      process.env.OUTLINE_AGENT_TMP_DIR = previousTmp;
+      process.env.OUTLINE_CLI_TMP_DIR = previousTmp;
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
 
 test("delete read receipt only accepts document-scoped token kind", async () => {
-  const previousTmp = process.env.OUTLINE_AGENT_TMP_DIR;
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-action-gate-kind-"));
-  process.env.OUTLINE_AGENT_TMP_DIR = tmpDir;
+  const previousTmp = process.env.OUTLINE_CLI_TMP_DIR;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-action-gate-kind-"));
+  process.env.OUTLINE_CLI_TMP_DIR = tmpDir;
 
   try {
     const issued = await issueDocumentDeleteReadReceipt({
@@ -139,9 +139,9 @@ test("delete read receipt only accepts document-scoped token kind", async () => 
     );
   } finally {
     if (previousTmp == null) {
-      delete process.env.OUTLINE_AGENT_TMP_DIR;
+      delete process.env.OUTLINE_CLI_TMP_DIR;
     } else {
-      process.env.OUTLINE_AGENT_TMP_DIR = previousTmp;
+      process.env.OUTLINE_CLI_TMP_DIR = previousTmp;
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

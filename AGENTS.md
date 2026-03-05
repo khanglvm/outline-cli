@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Scope
-This repository contains `outline-agent`, a Node.js CLI optimized for AI agents to interact with Outline via real API calls.
+This repository contains `outline-cli` (`outline-agent` alias), a Node.js CLI optimized for AI agents to interact with Outline via real API calls.
 
 ## Core Principles
 - Keep outputs deterministic and machine-readable.
@@ -17,7 +17,7 @@ This repository contains `outline-agent`, a Node.js CLI optimized for AI agents 
 - Full tests (real environment): `npm test`
 
 ## Repository Map
-- CLI entrypoint: `bin/outline-agent.js`
+- CLI entrypoint: `bin/outline-cli.js`
 - Command wiring/output modes: `src/cli.js`
 - API client/auth/retry: `src/outline-client.js`
 - Tool registry/core tools: `src/tools.js`
@@ -36,7 +36,7 @@ This repository contains `outline-agent`, a Node.js CLI optimized for AI agents 
 
 ## Development Workflow
 1. Pull latest branch and inspect current tool contracts:
-   - `node ./bin/outline-agent.js tools contract all --result-mode inline`
+   - `node ./bin/outline-cli.js tools contract all --result-mode inline`
 2. Refresh raw API method inventory from prior sessions / wrappers, then diff wrapped vs raw:
    - `rg -o 'client\\.call\\(\"[^\"]+\"' src | sed -E 's/.*\\(\"//; s/\"$//' | sort | uniq`
    - record missing high-value endpoints in `/tmp/knowledges/outline-raw-api-gap.md`
@@ -81,13 +81,24 @@ This repository contains `outline-agent`, a Node.js CLI optimized for AI agents 
 
 ## Deployment / Release
 - Pre-release checklist:
-  1. `npm run check`
-  2. `npm test` (live)
-  3. verify `README.md` and `docs/TOOL_CONTRACTS.md` are in sync
-  4. verify `.gitignore` still blocks local env/knowledge files
-- Packaging:
-  - Ensure `bin` is executable and `package.json` `bin` mapping is correct.
-  - Validate `npx` path: `npx ./bin/outline-agent.js --help`.
+  1. Ensure clean git working tree.
+  2. Ensure `OUTLINE_ENTRY_BUILD_KEY` is set (`.env.local` or env).
+  3. Ensure npm auth is ready (`npm login`).
+- Primary workflow command:
+  - `npm run release -- --bump patch`
+  - or `npm run release -- --version X.Y.Z`
+- Prepare-only workflow (no publish/push):
+  - `npm run release:prepare -- --bump patch`
+- Agent execution rule:
+  - If user asks to "deploy" or "release", run `npm run release -- --bump patch` by default unless user specifies a version/tag strategy.
+- Release script responsibilities (`scripts/release.mjs`):
+  - version bump (`npm version --no-git-tag-version`)
+  - changelog update (`CHANGELOG.md`)
+  - integrity refresh (`npm run integrity:refresh`)
+  - verification (`npm run check`, `npm test`)
+  - packaging validation (`npm pack --dry-run`)
+  - git commit + tag (`chore(release): vX.Y.Z`, `vX.Y.Z`)
+  - npm publish (`--access public`) and git push to `origin`
 
 ## Temporary Knowledge Notes
 Use local scratch references under:

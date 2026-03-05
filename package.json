@@ -1,20 +1,25 @@
 {
-  "name": "outline-agent-cli",
+  "name": "@khanglvm/outline-cli",
   "version": "0.1.0",
   "description": "Agent-optimized CLI for Outline API",
   "type": "module",
   "bin": {
-    "outline-agent": "bin/outline-agent.js"
+    "outline-cli": "bin/outline-cli.js",
+    "outline-agent": "bin/outline-cli.js"
   },
   "scripts": {
-    "start": "node ./bin/outline-agent.js",
-    "check": "node ./bin/outline-agent.js --help",
-    "test": "node --test ./test/**/*.test.js"
+    "start": "node ./bin/outline-cli.js",
+    "check": "node ./bin/outline-cli.js --help",
+    "test": "node --test ./test/**/*.test.js",
+    "integrity:refresh": "node ./scripts/generate-entry-integrity.mjs",
+    "release": "node ./scripts/release.mjs",
+    "release:prepare": "node ./scripts/release.mjs --no-publish --no-push"
   },
   "engines": {
     "node": ">=18.17"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^1.2.0",
     "commander": "^13.1.0"
   }
 }

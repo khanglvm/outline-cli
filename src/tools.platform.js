@@ -202,9 +202,13 @@ function assertSafeMarkerPrefix(markerPrefix, allowUnsafePrefix) {
     throw new CliError("markerPrefix must be a string with length >= 8");
   }
 
-  if (!allowUnsafePrefix && !markerPrefix.startsWith("outline-agent-")) {
+  if (
+    !allowUnsafePrefix &&
+    !markerPrefix.startsWith("outline-cli-") &&
+    !markerPrefix.startsWith("outline-agent-")
+  ) {
     throw new CliError(
-      "Unsafe markerPrefix blocked. Use prefix starting with 'outline-agent-' or pass allowUnsafePrefix=true",
+      "Unsafe markerPrefix blocked. Use prefix starting with 'outline-cli-' (or legacy 'outline-agent-') or pass allowUnsafePrefix=true",
       { code: "UNSAFE_MARKER_PREFIX", markerPrefix }
     );
   }
@@ -358,7 +362,7 @@ async function directDeleteCandidate(ctx, candidate, maxAttempts) {
 }
 
 async function documentsCleanupTestTool(ctx, args) {
-  const markerPrefix = args.markerPrefix || "outline-agent-live-test-";
+  const markerPrefix = args.markerPrefix || "outline-cli-live-test-";
   const dryRun = toBoolean(args.dryRun, true);
   const deleteMode = args.deleteMode === "direct" ? "direct" : "safe";
   const olderThanHours = toInteger(args.olderThanHours, 0);
@@ -532,7 +536,7 @@ export const PLATFORM_TOOLS = {
     usageExample: {
       tool: "documents.cleanup_test",
       args: {
-        markerPrefix: "outline-agent-live-test-",
+        markerPrefix: "outline-cli-live-test-",
         olderThanHours: 24,
         dryRun: true,
         deleteMode: "safe",

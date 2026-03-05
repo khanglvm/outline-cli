@@ -1,15 +1,26 @@
 # Node
 node_modules/
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # OS/editor
 .DS_Store
 .vscode/
 .idea/
 ide/
+.ide/
+*.swp
+*.swo
+*.tmp
+*.temp
 
 # Agent/IDE local folders
 agents/
+.agents/
+.codex/
+.claude/
 
 # Local env and secrets
 .env
@@ -18,9 +29,18 @@ agents/
 !.env.test.example
 
 # Local runtime/test artifacts
-*.tmp
-*.temp
 coverage/
+.cache/
+.tmp/
+tmp/
+
+# Common local tooling / shell
+.direnv/
+.history/
+.npm/
+
+# Local docs / notes
+docs/
 
 # Local knowledge scratchpad (agent-generated notes)
 /tmp/knowledges/*.md

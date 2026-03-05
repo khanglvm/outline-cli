@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = process.cwd();
-const CLI_BIN = path.join(REPO_ROOT, "bin", "outline-agent.js");
+const CLI_BIN = path.join(REPO_ROOT, "bin", "outline-cli.js");
 
 function parseDotenv(text) {
   const env = {};
@@ -56,7 +56,10 @@ function runCli(args, opts = {}) {
   const res = spawnSync(process.execPath, [CLI_BIN, ...args], {
     cwd: REPO_ROOT,
     encoding: "utf8",
-    env: process.env,
+    env: {
+      ...process.env,
+      OUTLINE_CLI_KEYCHAIN_MODE: process.env.OUTLINE_CLI_KEYCHAIN_MODE || "disabled",
+    },
     maxBuffer: 20 * 1024 * 1024,
   });
 
@@ -161,7 +164,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
   assert.ok(env.baseUrl, "OUTLINE_TEST_BASE_URL is required");
   assert.ok(env.apiKey, "OUTLINE_TEST_API_KEY is required");
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-live-test-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-live-test-"));
   const configPath = path.join(tmpDir, "config.json");
 
   const state = {
@@ -363,7 +366,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     });
 
     await t.test("create isolated test document", async () => {
-      state.marker = `outline-agent-live-test-${Date.now()}`;
+      state.marker = `outline-cli-live-test-${Date.now()}`;
       const createDoc = await invokeTool(tmpDir, configPath, "documents.create", {
         title: state.marker,
         text: `# ${state.marker}\n\nCreated by live integration suite.`,
@@ -784,7 +787,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
       try {
         const cleanupDryRun = await invokeTool(tmpDir, configPath, "documents.cleanup_test", {
-          markerPrefix: "outline-agent-live-test-",
+          markerPrefix: "outline-cli-live-test-",
           olderThanHours: 0,
           dryRun: true,
         });

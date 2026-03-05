@@ -116,6 +116,10 @@ export function isLikelyMutatingMethod(method) {
     return false;
   }
 
+  if (/^(import|export)(_|$)/.test(operation)) {
+    return true;
+  }
+
   return (
     /(^|_)(create|update|delete|permanent_delete|permanentdelete|restore|archive|unarchive|move|rename|patch|apply|publish|unpublish|batch|duplicate|templatize|invite|revoke|import|export|empty_trash|emptytrash|suspend|activate|deactivate)(_|$)/.test(
       operation

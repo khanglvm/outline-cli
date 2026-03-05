@@ -855,6 +855,118 @@ export const TOOL_ARG_SCHEMAS = {
       performAction: { type: "boolean" },
     },
   },
+  "documents.import": {
+    allowUnknown: true,
+    properties: {
+      collectionId: { type: "string" },
+      parentDocumentId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      const hasCollectionId =
+        typeof args.collectionId === "string" && args.collectionId.trim().length > 0;
+      const hasParentDocumentId =
+        typeof args.parentDocumentId === "string" && args.parentDocumentId.trim().length > 0;
+
+      if (typeof args.collectionId === "string" && args.collectionId.trim().length === 0) {
+        issues.push({ path: "args.collectionId", message: "must be a non-empty string when provided" });
+      }
+      if (
+        typeof args.parentDocumentId === "string" &&
+        args.parentDocumentId.trim().length === 0
+      ) {
+        issues.push({
+          path: "args.parentDocumentId",
+          message: "must be a non-empty string when provided",
+        });
+      }
+      if (hasCollectionId && hasParentDocumentId) {
+        issues.push({
+          path: "args.parentDocumentId",
+          message: "cannot be combined with args.collectionId",
+        });
+      }
+    },
+  },
+  "documents.import_file": {
+    allowUnknown: true,
+    required: ["filePath"],
+    properties: {
+      filePath: { type: "string" },
+      collectionId: { type: "string" },
+      parentDocumentId: { type: "string" },
+      publish: { type: "boolean" },
+      contentType: { type: "string" },
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      const hasCollectionId =
+        typeof args.collectionId === "string" && args.collectionId.trim().length > 0;
+      const hasParentDocumentId =
+        typeof args.parentDocumentId === "string" && args.parentDocumentId.trim().length > 0;
+
+      if (typeof args.filePath === "string" && args.filePath.trim().length === 0) {
+        issues.push({ path: "args.filePath", message: "must be a non-empty string" });
+      }
+      if (typeof args.collectionId === "string" && args.collectionId.trim().length === 0) {
+        issues.push({ path: "args.collectionId", message: "must be a non-empty string when provided" });
+      }
+      if (
+        typeof args.parentDocumentId === "string" &&
+        args.parentDocumentId.trim().length === 0
+      ) {
+        issues.push({
+          path: "args.parentDocumentId",
+          message: "must be a non-empty string when provided",
+        });
+      }
+      if (hasCollectionId && hasParentDocumentId) {
+        issues.push({
+          path: "args.parentDocumentId",
+          message: "cannot be combined with args.collectionId",
+        });
+      }
+    },
+  },
+  "file_operations.list": {
+    allowUnknown: true,
+    properties: {
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "file_operations.info": {
+    allowUnknown: true,
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "file_operations.delete": {
+    allowUnknown: true,
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
   "documents.create_from_template": {
     required: ["templateId"],
     properties: {

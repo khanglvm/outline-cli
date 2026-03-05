@@ -10,6 +10,7 @@ import {
   consumeDocumentDeleteReadReceipt,
   getActionGateStorePath,
   getDocumentDeleteReadReceipt,
+  isLikelyMutatingMethod,
   issueDocumentDeleteReadReceipt,
 } from "../src/action-gate.js";
 
@@ -33,6 +34,14 @@ test("assertPerformAction blocks when performAction is not true", () => {
       action: "update a document",
     })
   );
+});
+
+test("isLikelyMutatingMethod treats import/export paths as mutating", () => {
+  assert.equal(isLikelyMutatingMethod("documents.import"), true);
+  assert.equal(isLikelyMutatingMethod("documents.importFile"), true);
+  assert.equal(isLikelyMutatingMethod("/documents.export"), true);
+  assert.equal(isLikelyMutatingMethod("fileOperations.delete"), true);
+  assert.equal(isLikelyMutatingMethod("fileOperations.info"), false);
 });
 
 test("delete read receipt lifecycle: issue -> validate -> consume", async () => {

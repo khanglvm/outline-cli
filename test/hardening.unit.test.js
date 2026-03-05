@@ -194,6 +194,123 @@ test("data_attributes wrappers map to dataAttributes RPC methods with action gat
   assert.equal(calls.length, 5);
 });
 
+test("import and file operation wrappers expose deterministic envelopes and action gating", async () => {
+  for (const method of [
+    "documents.import",
+    "documents.import_file",
+    "file_operations.list",
+    "file_operations.info",
+    "file_operations.delete",
+  ]) {
+    assert.ok(EXTENDED_TOOLS[method], `${method} should be registered`);
+  }
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-import-wrapper-"));
+  const filePath = path.join(tmpDir, "legacy-wiki.md");
+  await fs.writeFile(filePath, "# Legacy Wiki\n\nImported content.\n", "utf8");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        return {
+          body: {
+            data: { id: `file-op-${calls.length}` },
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  try {
+    const importRes = await EXTENDED_TOOLS["documents.import"].handler(ctx, {
+      collectionId: "collection-1",
+      publish: false,
+      performAction: true,
+    });
+    const importFileRes = await EXTENDED_TOOLS["documents.import_file"].handler(ctx, {
+      filePath,
+      collectionId: "collection-1",
+      publish: false,
+      performAction: true,
+    });
+    const listRes = await EXTENDED_TOOLS["file_operations.list"].handler(ctx, {
+      limit: 10,
+      offset: 0,
+    });
+    const infoRes = await EXTENDED_TOOLS["file_operations.info"].handler(ctx, {
+      id: "file-op-1",
+    });
+    const deleteRes = await EXTENDED_TOOLS["file_operations.delete"].handler(ctx, {
+      id: "file-op-1",
+      performAction: true,
+    });
+
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      [
+        "documents.import",
+        "documents.import",
+        "fileOperations.list",
+        "fileOperations.info",
+        "fileOperations.delete",
+      ]
+    );
+    assert.deepEqual(calls[0].body, {
+      collectionId: "collection-1",
+      publish: false,
+    });
+    assert.equal(calls[0].options?.maxAttempts, 1);
+
+    assert.equal(calls[1].options?.bodyType, "multipart");
+    assert.equal(calls[1].options?.maxAttempts, 1);
+    assert.ok(calls[1].body instanceof FormData);
+    const multipartEntries = Array.from(calls[1].body.entries());
+    const filePart = multipartEntries.find(([key]) => key === "file")?.[1];
+    const collectionPart = multipartEntries.find(([key]) => key === "collectionId")?.[1];
+    const publishPart = multipartEntries.find(([key]) => key === "publish")?.[1];
+    assert.ok(filePart instanceof Blob);
+    assert.equal(filePart.name, "legacy-wiki.md");
+    assert.equal(collectionPart, "collection-1");
+    assert.equal(publishPart, "false");
+
+    assert.deepEqual(importRes.result, { data: { id: "file-op-1" } });
+    assert.deepEqual(importFileRes.result, { data: { id: "file-op-2" } });
+    assert.deepEqual(listRes.result, { data: { id: "file-op-3" } });
+    assert.deepEqual(infoRes.result, { data: { id: "file-op-4" } });
+    assert.deepEqual(deleteRes.result, { data: { id: "file-op-5" } });
+
+    await assert.rejects(
+      () =>
+        EXTENDED_TOOLS["documents.import"].handler(ctx, {
+          collectionId: "collection-1",
+        }),
+      (err) => {
+        assert.ok(err instanceof CliError);
+        assert.match(err.message, /performAction/);
+        return true;
+      }
+    );
+
+    await assert.rejects(
+      () =>
+        EXTENDED_TOOLS["documents.import_file"].handler(ctx, {
+          filePath,
+        }),
+      (err) => {
+        assert.ok(err instanceof CliError);
+        assert.match(err.message, /performAction/);
+        return true;
+      }
+    );
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
   assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
@@ -232,6 +349,26 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
       offset: 0,
       view: "summary",
     })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.import", {
+      collectionId: "collection-1",
+      publish: false,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.import_file", {
+      filePath: "./tmp/wiki.md",
+      collectionId: "collection-1",
+      publish: false,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("file_operations.list", { limit: 10 }));
+  assert.doesNotThrow(() => validateToolArgs("file_operations.info", { id: "file-op-1" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("file_operations.delete", { id: "file-op-1", performAction: true })
   );
 
   assert.throws(
@@ -290,6 +427,39 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
 
   assert.throws(
     () => validateToolArgs("documents.remove_group", { groupId: "group-1", performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.import_file", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.filePath"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.import_file", {
+        filePath: "./tmp/wiki.md",
+        collectionId: "collection-1",
+        parentDocumentId: "doc-1",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.parentDocumentId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("file_operations.info", {}),
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));

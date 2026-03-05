@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { ApiError, CliError } from "./errors.js";
 import { assertPerformAction } from "./action-gate.js";
 import { compactValue, ensureStringArray, mapLimit, toInteger } from "./utils.js";
@@ -36,6 +38,21 @@ function buildBody(args = {}, omit = []) {
   return compactValue(body) || {};
 }
 
+function appendMultipartValue(form, key, value) {
+  if (value === undefined) {
+    return;
+  }
+  if (value instanceof Blob) {
+    form.append(key, value);
+    return;
+  }
+  if (Array.isArray(value) || (value && typeof value === "object")) {
+    form.append(key, JSON.stringify(value));
+    return;
+  }
+  form.append(key, String(value));
+}
+
 function defaultUsageArgs(def) {
   if (def.tool === "documents.empty_trash") {
     return def.mutating ? { performAction: true } : {};
@@ -56,6 +73,13 @@ function defaultUsageArgs(def) {
   if (def.tool === "shares.revoke") {
     return {
       id: "share-id",
+      performAction: true,
+    };
+  }
+  if (def.tool === "documents.import") {
+    return {
+      collectionId: "collection-id",
+      data: {},
       performAction: true,
     };
   }
@@ -143,6 +167,7 @@ const RPC_WRAPPER_DEFS = [
   { tool: "templates.restore", method: "templates.restore", description: "Restore a template.", mutating: true },
   { tool: "templates.duplicate", method: "templates.duplicate", description: "Duplicate a template.", mutating: true },
   { tool: "documents.templatize", method: "documents.templatize", description: "Convert a document into a template.", mutating: true },
+  { tool: "documents.import", method: "documents.import", description: "Import a document from JSON payload.", mutating: true },
   { tool: "comments.list", method: "comments.list", description: "List comments." },
   { tool: "comments.info", method: "comments.info", description: "Get comment details." },
   { tool: "comments.create", method: "comments.create", description: "Create a comment.", mutating: true },
@@ -187,6 +212,9 @@ const RPC_WRAPPER_DEFS = [
   { tool: "documents.remove_user", method: "documents.remove_user", description: "Remove a user from a document.", mutating: true },
   { tool: "documents.add_group", method: "documents.add_group", description: "Add a group to a document.", mutating: true },
   { tool: "documents.remove_group", method: "documents.remove_group", description: "Remove a group from a document.", mutating: true },
+  { tool: "file_operations.list", method: "fileOperations.list", description: "List file operations." },
+  { tool: "file_operations.info", method: "fileOperations.info", description: "Get file operation details." },
+  { tool: "file_operations.delete", method: "fileOperations.delete", description: "Delete a file operation.", mutating: true },
 ];
 
 const RPC_TOOLS = Object.fromEntries(
@@ -318,6 +346,79 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
       failed,
       items,
     },
+  };
+}
+
+async function documentsImportFileTool(ctx, args = {}) {
+  assertPerformAction(args, {
+    tool: "documents.import_file",
+    action: "import a document from local file content",
+  });
+
+  const requestedPath = typeof args.filePath === "string" ? args.filePath.trim() : "";
+  if (!requestedPath) {
+    throw new CliError("documents.import_file requires args.filePath");
+  }
+
+  const resolvedPath = path.resolve(requestedPath);
+  let stat;
+  try {
+    stat = await fs.stat(resolvedPath);
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      throw new CliError(`Import file not found: ${resolvedPath}`, {
+        code: "IMPORT_FILE_NOT_FOUND",
+        filePath: resolvedPath,
+      });
+    }
+    throw new CliError(`Unable to access import file: ${resolvedPath}`, {
+      code: "IMPORT_FILE_ACCESS_FAILED",
+      filePath: resolvedPath,
+      reason: err?.message || String(err),
+    });
+  }
+
+  if (!stat.isFile()) {
+    throw new CliError(`Import file path must point to a regular file: ${resolvedPath}`, {
+      code: "IMPORT_FILE_INVALID_PATH",
+      filePath: resolvedPath,
+    });
+  }
+
+  let fileBuffer;
+  try {
+    fileBuffer = await fs.readFile(resolvedPath);
+  } catch (err) {
+    throw new CliError(`Unable to read import file: ${resolvedPath}`, {
+      code: "IMPORT_FILE_READ_FAILED",
+      filePath: resolvedPath,
+      reason: err?.message || String(err),
+    });
+  }
+
+  const fileName = path.basename(resolvedPath);
+  const contentType =
+    typeof args.contentType === "string" && args.contentType.trim().length > 0
+      ? args.contentType.trim()
+      : "application/octet-stream";
+
+  const form = new FormData();
+  form.append("file", new Blob([fileBuffer], { type: contentType }), fileName);
+
+  const body = buildBody(args, ["filePath", "contentType"]);
+  for (const key of Object.keys(body).sort((a, b) => a.localeCompare(b))) {
+    appendMultipartValue(form, key, body[key]);
+  }
+
+  const res = await ctx.client.call("documents.import", form, {
+    maxAttempts: toInteger(args.maxAttempts, 1),
+    bodyType: "multipart",
+  });
+
+  return {
+    tool: "documents.import_file",
+    profile: ctx.profile.id,
+    result: maybeDropPolicies(res.body, !!args.includePolicies),
   };
 }
 
@@ -2213,6 +2314,27 @@ export const EXTENDED_TOOLS = {
       "Prefer view=ids for graph planning and fetch full nodes only for selected IDs.",
     ],
     handler: documentsGraphReportTool,
+  },
+  "documents.import_file": {
+    signature:
+      "documents.import_file(args: { filePath: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; contentType?: string; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean; ...endpointArgs })",
+    description:
+      "Upload a local file as multipart/form-data to documents.import while preserving deterministic output envelopes.",
+    usageExample: {
+      tool: "documents.import_file",
+      args: {
+        filePath: "./tmp/wiki-export.md",
+        collectionId: "collection-id",
+        publish: false,
+        performAction: true,
+      },
+    },
+    bestPractices: [
+      "Provide exactly one placement target when needed: collectionId or parentDocumentId.",
+      "Use file_operations.info to poll async import status after documents.import_file returns.",
+      "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
+    ],
+    handler: documentsImportFileTool,
   },
   "templates.extract_placeholders": {
     signature: "templates.extract_placeholders(args: { id: string; maxAttempts?: number })",

@@ -40,7 +40,9 @@ export class OutlineClient {
   }
 
   async #callOnce(url, body, options) {
-    const headers = await this.#buildHeaders(options.headers || {});
+    const bodyType = options.bodyType === "multipart" ? "multipart" : "json";
+    const requestBody = this.#buildRequestBody(bodyType, body);
+    const headers = await this.#buildHeaders(options.headers || {}, { bodyType });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -49,7 +51,7 @@ export class OutlineClient {
       res = await fetch(url, {
         method: "POST",
         headers,
-        body: JSON.stringify(body || {}),
+        body: requestBody,
         signal: controller.signal,
       });
     } catch (err) {
@@ -94,13 +96,53 @@ export class OutlineClient {
     };
   }
 
-  async #buildHeaders(extraHeaders) {
+  #buildRequestBody(bodyType, body) {
+    if (bodyType === "multipart") {
+      if (body instanceof FormData) {
+        return body;
+      }
+
+      const form = new FormData();
+      if (body && typeof body === "object") {
+        const keys = Object.keys(body).sort((a, b) => a.localeCompare(b));
+        for (const key of keys) {
+          const value = body[key];
+          if (value === undefined) {
+            continue;
+          }
+          if (value instanceof Blob) {
+            form.append(key, value);
+            continue;
+          }
+          if (value && typeof value === "object") {
+            form.append(key, JSON.stringify(value));
+            continue;
+          }
+          form.append(key, String(value));
+        }
+      }
+
+      return form;
+    }
+
+    return JSON.stringify(body || {});
+  }
+
+  async #buildHeaders(extraHeaders, { bodyType = "json" } = {}) {
     const headers = {
       Accept: "application/json",
-      "Content-Type": "application/json",
       ...this.profile.headers,
       ...extraHeaders,
     };
+    const existingContentTypeKey = Object.keys(headers).find((key) => key.toLowerCase() === "content-type");
+
+    if (bodyType === "multipart") {
+      if (existingContentTypeKey) {
+        delete headers[existingContentTypeKey];
+      }
+    } else if (!existingContentTypeKey) {
+      headers["Content-Type"] = "application/json";
+    }
 
     const auth = this.profile.auth || {};
     if (auth.type === "apiKey") {

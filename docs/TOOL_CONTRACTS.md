@@ -85,6 +85,93 @@ outline-cli tools contract all --pretty
 - Best practice (AI): prefer a specific `id` to keep hydration deterministic and cheap.
 - Best practice (AI): use `ids[]` + `concurrency` when hydrating multiple principals.
 
+## `users.invite` (optional wrapper)
+
+- Signature: `users.invite(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "users.invite",
+  "args": {
+    "invites": [
+      {
+        "email": "new.user@example.com",
+        "name": "New User",
+        "role": "member"
+      }
+    ],
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-13 helper; contract may be unavailable in older deployments/builds.
+- Best practice (AI): keep invites batched and explicit; always pass `performAction: true` only at the final approved mutation step.
+- Best practice (AI): run with `view: "summary"` and audit `result` rows per invite for partial failures.
+
+## `users.update_role` (optional wrapper)
+
+- Signature: `users.update_role(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "users.update_role",
+  "args": {
+    "id": "user-id",
+    "role": "member",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-13 helper; contract may be unavailable in older deployments/builds.
+- Best practice (AI): resolve the target user with `users.info` first and persist the original role for rollback planning.
+- Best practice (AI): treat role mutation as high-impact; require explicit approval before sending `performAction: true`.
+
+## `users.activate` (optional wrapper)
+
+- Signature: `users.activate(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "users.activate",
+  "args": {
+    "id": "user-id",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-13 helper; contract may be unavailable in older deployments/builds.
+- Best practice (AI): verify current lifecycle state via `users.info` before activation to keep idempotent runs deterministic.
+- Best practice (AI): log activation evidence via follow-up `events.list` filters.
+
+## `users.suspend` (optional wrapper)
+
+- Signature: `users.suspend(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "users.suspend",
+  "args": {
+    "id": "user-id",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-13 helper; contract may be unavailable in older deployments/builds.
+- Best practice (AI): suspend only after confirming the principal and blast radius; keep action gating explicit.
+- Best practice (AI): run post-checks with `users.info` + `events.list` for compliance evidence.
+
 ## `groups.list`
 
 - Signature: `groups.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
@@ -301,6 +388,26 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): keep batch sizes small and use low concurrency for predictable latency/token usage.
 - Best practice (AI): inspect per-item `ok/status/error` and retry only failed questions.
+
+## `documents.users` (optional wrapper)
+
+- Signature: `documents.users(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.users",
+  "args": {
+    "id": "doc-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-13 helper; contract may be unavailable in older deployments/builds.
+- Best practice (AI): use this read path for direct principal visibility checks before ACL mutations.
+- Best practice (AI): pair with `documents.memberships`/`documents.group_memberships` for complete user + group audit trails.
 
 ## `documents.memberships`
 

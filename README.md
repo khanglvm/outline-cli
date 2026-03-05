@@ -605,7 +605,48 @@ npx ./bin/outline-cli.js invoke documents.delete \
 
 If wrappers are unavailable in your deployment, use `api.call` with `method` set to the same endpoint and keep the same action-gate discipline (`performAction: true` on mutating calls).
 
-### 16. Capability mapping and test cleanup
+### 16. UC-13: API-driven workspace automation (discover -> plan -> gated execute -> verify)
+
+```bash
+# 1) Discover principals and workspace context
+npx ./bin/outline-cli.js invoke users.list \
+  --args '{"limit":25,"view":"summary"}'
+npx ./bin/outline-cli.js invoke users.info \
+  --args '{"id":"<user-id>","view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.users \
+  --args '{"id":"<doc-id>","limit":25,"view":"summary"}'
+
+# 2) Preflight mutator contracts safely (without performAction)
+npx ./bin/outline-cli.js invoke users.invite \
+  --args '{"invites":[]}'
+npx ./bin/outline-cli.js invoke users.update_role \
+  --args '{"id":"","role":"member"}'
+npx ./bin/outline-cli.js invoke users.activate \
+  --args '{"id":""}'
+npx ./bin/outline-cli.js invoke users.suspend \
+  --args '{"id":""}'
+# expected: ACTION_GATED or ARG_VALIDATION_FAILED (no mutation)
+
+# 3) Approved execution path (sandbox/explicit approval only)
+npx ./bin/outline-cli.js invoke users.invite \
+  --args '{"invites":[{"email":"new.user@example.com","name":"New User","role":"member"}],"performAction":true,"view":"summary"}'
+npx ./bin/outline-cli.js invoke users.update_role \
+  --args '{"id":"<user-id>","role":"member","performAction":true,"view":"summary"}'
+npx ./bin/outline-cli.js invoke users.suspend \
+  --args '{"id":"<user-id>","performAction":true,"view":"summary"}'
+npx ./bin/outline-cli.js invoke users.activate \
+  --args '{"id":"<user-id>","performAction":true,"view":"summary"}'
+
+# 4) Verify post-conditions + audit trail
+npx ./bin/outline-cli.js invoke users.info \
+  --args '{"id":"<user-id>","view":"summary"}'
+npx ./bin/outline-cli.js invoke events.list \
+  --args '{"documentId":"<doc-id>","limit":20,"view":"summary"}'
+```
+
+If optional UC-13 wrappers are unavailable in your deployment, keep the same sequence with `api.call` and explicit `performAction: true` on every mutating method.
+
+### 17. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -680,6 +721,10 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `file_operations.delete`
 - `users.list`
 - `users.info`
+- `users.invite` (optional UC-13 helper; may be unavailable in older builds)
+- `users.update_role` (optional UC-13 helper; may be unavailable in older builds)
+- `users.activate` (optional UC-13 helper; may be unavailable in older builds)
+- `users.suspend` (optional UC-13 helper; may be unavailable in older builds)
 - `groups.list`
 - `groups.info`
 - `groups.create`
@@ -689,6 +734,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `groups.remove_user`
 - `documents.memberships`
 - `documents.group_memberships`
+- `documents.users` (optional UC-13 helper; may be unavailable in older builds)
 - `documents.add_user`
 - `documents.remove_user`
 - `documents.add_group`

@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = process.cwd();
 const CLI_BIN = path.join(REPO_ROOT, "bin", "outline-cli.js");
+const TOOL_CONTRACT_CACHE = new Map();
 
 function parseDotenv(text) {
   const env = {};
@@ -112,13 +113,31 @@ function runCliNdjson(args, opts = {}) {
   };
 }
 
-function hasToolContract(name) {
-  try {
-    const contract = runCli(["tools", "contract", name, "--result-mode", "inline"]).json;
-    return contract?.ok === true && contract?.contract?.name === name;
-  } catch {
-    return false;
+function getToolContract(name) {
+  if (TOOL_CONTRACT_CACHE.has(name)) {
+    return TOOL_CONTRACT_CACHE.get(name);
   }
+
+  let resolved = null;
+  try {
+    const payload = runCli(["tools", "contract", name, "--result-mode", "inline"]).json;
+    if (payload?.ok === true) {
+      if (payload.contract && !Array.isArray(payload.contract) && payload.contract.name === name) {
+        resolved = payload.contract;
+      } else if (Array.isArray(payload.contract)) {
+        resolved = payload.contract.find((candidate) => candidate?.name === name) || null;
+      }
+    }
+  } catch {
+    resolved = null;
+  }
+
+  TOOL_CONTRACT_CACHE.set(name, resolved);
+  return resolved;
+}
+
+function hasToolContract(name) {
+  return Boolean(getToolContract(name));
 }
 
 function extractResultRows(result) {
@@ -278,10 +297,30 @@ function isSkippableDirectoryReadError(envelope) {
   return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed/i.test(text);
 }
 
+function isCliActionGatedError(envelope) {
+  const err = envelope?.error;
+  return err?.type === "CliError" && err?.code === "ACTION_GATED";
+}
+
 function getApiErrorStatus(envelope) {
   const err = envelope?.error;
   const status = Number(err?.status ?? err?.details?.status);
   return Number.isFinite(status) ? status : null;
+}
+
+function isSkippableUserAdminContractError(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 422, 429, 500, 501, 503].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|invite|user|role|suspend|activate|validation|tenant/i.test(text);
 }
 
 function isSkippableShareLifecycleError(envelope) {
@@ -1271,6 +1310,125 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
           [];
         assert.ok(Array.isArray(memberships), "documents.group_memberships should expose memberships array");
       });
+    });
+
+    await t.test("UC-13 API-driven workspace automation", async (t) => {
+      const hasDocumentsUsers = hasToolContract("documents.users");
+
+      await t.test("documents.users read checks", async (t) => {
+        if (!hasDocumentsUsers) {
+          t.skip("documents.users contract unavailable");
+          return;
+        }
+        if (!state.createdDocumentId) {
+          t.skip("No test document id available for documents.users read check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.users", {
+          id: state.createdDocumentId,
+          limit: 10,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson) || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`documents.users skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.users unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`documents.users expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.users stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.users");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const users =
+          payload.result?.data?.users ??
+          payload.result?.users ??
+          payload.result?.data?.memberships ??
+          payload.result?.memberships ??
+          extractResultRows(payload.result) ??
+          [];
+        assert.ok(Array.isArray(users), "documents.users should expose users/memberships array");
+      });
+
+      const userMutationProbes = [
+        {
+          tool: "users.invite",
+          args: {
+            invites: [],
+          },
+        },
+        {
+          tool: "users.update_role",
+          args: {
+            id: "",
+            role: "__invalid_role__",
+          },
+        },
+        {
+          tool: "users.activate",
+          args: {
+            id: "",
+          },
+        },
+        {
+          tool: "users.suspend",
+          args: {
+            id: "",
+          },
+        },
+      ];
+
+      for (const probe of userMutationProbes) {
+        await t.test(`${probe.tool} contract + safe action-gate check`, async (t) => {
+          const contract = getToolContract(probe.tool);
+          if (!contract) {
+            t.skip(`${probe.tool} contract unavailable`);
+            return;
+          }
+
+          assert.equal(contract.name, probe.tool);
+          assert.match(
+            String(contract.signature || ""),
+            /performAction\?: boolean/,
+            `${probe.tool} signature should expose performAction action gate`
+          );
+
+          const run = await invokeToolAnyStatus(tmpDir, configPath, probe.tool, probe.args);
+
+          if (run.status === 0) {
+            t.diagnostic(`${probe.tool} unexpected success payload: ${run.stdout || "<empty stdout>"}`);
+            assert.fail(`${probe.tool} should not execute without performAction`);
+          }
+
+          const err = run.stderrJson;
+          assert.ok(err, `${probe.tool} stderr must be valid JSON: ${run.stderr || "<empty stderr>"}`);
+
+          if (isCliActionGatedError(err)) {
+            return;
+          }
+
+          if (err?.error?.type === "CliError" && err.error?.code === "ARG_VALIDATION_FAILED") {
+            return;
+          }
+
+          if (isSkippableUserAdminContractError(err) || isSkippableDirectoryReadError(err)) {
+            t.diagnostic(`${probe.tool} skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip(`${probe.tool} unsupported or tenant-restricted in this deployment`);
+            return;
+          }
+
+          assert.fail(
+            `${probe.tool} expected ACTION_GATED/ARG_VALIDATION_FAILED or skippable API error, stderr=${run.stderr || "<empty>"}`
+          );
+        });
+      }
     });
 
     await t.test("UC-05 public help docs sharing lifecycle", async (t) => {

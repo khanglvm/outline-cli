@@ -8,55 +8,39 @@
 - Safe mutation gates (`performAction: true`)
 - Automatic large-result offload to temp files
 
-## Quick Start
+## Quick Start (Copy for AI Agent)
 
-Prerequisites:
+Copy and paste this into your AI agent:
 
-- Node.js `>=18.17`
-- An Outline workspace URL
-- An Outline API key (recommended auth mode)
+```text
+You are my setup assistant for outline-cli. I am a non-experienced user.
 
-Install globally (recommended):
+Do this in order:
+1. Check Node.js version first and confirm it is >= 18.17.
+2. Install outline-cli globally:
+   npm i -g @khanglvm/outline-cli
+3. Run these commands to understand usage and required setup:
+   outline-cli --help
+   outline-cli profile --help
+   outline-cli tools --help
+   outline-cli invoke --help
+4. Explain in simple language what must be configured first.
+5. Ask me follow-up questions for missing values:
+   - Outline base URL
+   - Outline API key
+   - Profile ID (default to `prod` if I do not care)
+6. Guide me to create a default profile:
+   outline-cli profile add <profile-id> --base-url <base-url> --api-key "<api-key>" --set-default
+7. Verify setup:
+   outline-cli profile test <profile-id> --pretty
+8. After setup succeeds, show 2 example use cases in natural language, then run one command for each example.
+   Use `outline-cli invoke ...` examples and explain output in plain language.
 
-```bash
-npm i -g @khanglvm/outline-cli
-outline-cli --help
-```
-
-Alternative (no global install):
-
-```bash
-npx @khanglvm/outline-cli --help
-```
-
-Local development in this repo:
-
-```bash
-npm install
-node ./bin/outline-cli.js --help
-```
-
-Set up a profile (API key mode):
-
-```bash
-outline-cli profile add prod \
-  --base-url https://app.getoutline.com \
-  --api-key "$OUTLINE_API_KEY" \
-  --set-default
-```
-
-Verify auth:
-
-```bash
-outline-cli profile test prod --pretty
-```
-
-Run your first search:
-
-```bash
-outline-cli invoke documents.search \
-  --args '{"query":"oncall runbook","mode":"semantic","limit":5,"view":"summary"}' \
-  --pretty
+Interaction rules:
+- Use short, clear instructions for a beginner.
+- Ask one question at a time when information is missing.
+- If a command fails, explain why and give the exact next command to fix it.
+- Confirm completion of each step before moving on.
 ```
 
 ## Day-to-Day Usage

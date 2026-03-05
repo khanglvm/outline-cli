@@ -367,28 +367,36 @@ npx ./bin/outline-cli.js invoke groups.remove_user \
 
 ### 10. Project docs + issue tracker linkage (UC-07)
 
-Deterministic loop: `discover issue refs -> hydrate docs -> patch -> audit`.
+Deterministic loop: `discover -> extract refs -> report -> hydrate -> patch -> audit`.
 
 ```bash
 # 1) Discover docs that already mention the issue token/key
 npx ./bin/outline-cli.js invoke documents.search \
   --args '{"query":"ENG-4312","mode":"titles","limit":10,"view":"ids"}'
 
-# 2) Resolve fuzzy references, then hydrate only selected docs
+# 2) Extract normalized issue references from explicit docs
+npx ./bin/outline-cli.js invoke documents.issue_refs \
+  --args '{"ids":["<doc-id-1>","<doc-id-2>"],"issueDomains":["linear.app"],"view":"summary"}'
+
+# 3) Run a query-scoped issue-reference report (summary-first)
+npx ./bin/outline-cli.js invoke documents.issue_ref_report \
+  --args '{"query":"ENG-4312","collectionId":"<collection-id>","limit":10,"view":"summary"}'
+
+# 4) Resolve fuzzy references, then hydrate only selected docs
 npx ./bin/outline-cli.js invoke documents.resolve \
   --args '{"query":"ENG-4312","limit":8,"view":"summary"}'
 npx ./bin/outline-cli.js invoke documents.info \
   --args '{"ids":["<doc-id-1>","<doc-id-2>"],"view":"summary","concurrency":2}'
 
-# 3) Patch the target project doc with deterministic issue references
+# 5) Patch the target project doc with deterministic issue references
 npx ./bin/outline-cli.js invoke documents.update \
   --args '{"id":"<project-doc-id>","text":"\n\n## Issue links\n- Linear: ENG-4312\n- URL: https://linear.app/acme/issue/eng-4312","editMode":"append","performAction":true,"view":"summary"}'
 
-# 4) Traverse internal backlinks (which docs reference the project doc)
+# 6) Traverse internal backlinks (which docs reference the project doc)
 npx ./bin/outline-cli.js invoke documents.list \
   --args '{"backlinkDocumentId":"<project-doc-id>","limit":20,"view":"summary"}'
 
-# 5) Audit update context through workspace events
+# 7) Audit update context through workspace events
 npx ./bin/outline-cli.js invoke events.list \
   --args '{"documentId":"<project-doc-id>","auditLog":true,"limit":25,"sort":"createdAt","direction":"DESC","view":"summary"}'
 

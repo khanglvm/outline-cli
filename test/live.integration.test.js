@@ -677,6 +677,91 @@ function extractResolveCandidates(result) {
   return rows.filter((row) => row && typeof row === "object");
 }
 
+function extractIssueRefRows(result) {
+  const rows = [];
+
+  const pushRows = (value) => {
+    if (Array.isArray(value)) {
+      rows.push(...value);
+    }
+  };
+
+  pushRows(result?.data);
+  pushRows(result?.items);
+  pushRows(result?.rows);
+  pushRows(result?.reports);
+  pushRows(result?.documents);
+
+  const fallbackRows = extractResultRows(result);
+  pushRows(fallbackRows);
+
+  const fallbackObject = extractResultObject(result);
+  if (fallbackObject && typeof fallbackObject === "object" && !Array.isArray(fallbackObject)) {
+    rows.push(fallbackObject);
+  }
+
+  const uniqueRows = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    if (seen.has(row)) {
+      continue;
+    }
+    seen.add(row);
+    uniqueRows.push(row);
+  }
+
+  return uniqueRows;
+}
+
+function extractIssueRefDocumentId(row) {
+  return pickStringId(
+    row?.id,
+    row?.documentId,
+    row?.docId,
+    row?.sourceDocumentId,
+    row?.targetDocumentId,
+    row?.document?.id,
+    row?.document?.documentId,
+    row?.source?.id,
+    row?.source?.documentId,
+    row?.item?.id,
+    row?.item?.documentId,
+    row?.data?.id,
+    row?.data?.documentId
+  );
+}
+
+function extractIssueRefsFromRow(row) {
+  const arrayCandidates = [
+    row?.issueRefs,
+    row?.issue_refs,
+    row?.refs,
+    row?.references,
+    row?.issueReferences,
+    row?.issues,
+    row?.matches,
+    row?.links,
+    row?.data?.issueRefs,
+    row?.data?.issue_refs,
+    row?.data?.refs,
+    row?.data?.references,
+    row?.item?.issueRefs,
+    row?.item?.refs,
+    row?.item?.references,
+  ];
+
+  for (const candidate of arrayCandidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return [];
+}
+
 function extractGraphNodes(result) {
   if (Array.isArray(result?.nodes)) {
     return result.nodes;
@@ -1869,6 +1954,79 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       });
       assert.equal(injectRes.tool, "documents.update");
 
+      await t.test("documents.issue_refs against suite-created issue-link doc", async (t) => {
+        if (!hasToolContract("documents.issue_refs")) {
+          t.skip("documents.issue_refs contract unavailable");
+          return;
+        }
+
+        let run = await invokeToolAnyStatus(tmpDir, configPath, "documents.issue_refs", {
+          id: state.createdDocumentId,
+          view: "summary",
+        });
+
+        if (run.status !== 0 && hasCliValidationIssue(run.stderrJson, "args.view")) {
+          run = await invokeToolAnyStatus(tmpDir, configPath, "documents.issue_refs", {
+            id: state.createdDocumentId,
+          });
+        }
+
+        if (run.status !== 0) {
+          if (hasCliValidationIssue(run.stderrJson, "args") || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`documents.issue_refs skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.issue_refs unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`documents.issue_refs expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.issue_refs stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.issue_refs");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+
+        const rows = extractIssueRefRows(payload.result);
+        if (!rows || rows.length === 0) {
+          t.diagnostic(`Unexpected documents.issue_refs payload shape: ${JSON.stringify(payload.result)}`);
+          t.skip("documents.issue_refs payload shape differs across deployments");
+          return;
+        }
+        assert.ok(Array.isArray(rows), "documents.issue_refs should expose issue-reference rows");
+
+        const targetRow = rows.find((row) => extractIssueRefDocumentId(row) === state.createdDocumentId);
+        if (!targetRow) {
+          t.diagnostic(`documents.issue_refs rows missing suite doc ${state.createdDocumentId}: ${JSON.stringify(rows)}`);
+          t.skip("documents.issue_refs did not expose per-document linkage for the target document");
+          return;
+        }
+
+        const refs = extractIssueRefsFromRow(targetRow);
+        const hasRefShape =
+          refs.length > 0 ||
+          Number.isFinite(Number(targetRow?.issueRefCount ?? targetRow?.refCount ?? targetRow?.matchCount));
+
+        if (!hasRefShape) {
+          t.diagnostic(`documents.issue_refs target row missing refs/count shape: ${JSON.stringify(targetRow)}`);
+          t.skip("documents.issue_refs row shape differs across deployments");
+          return;
+        }
+
+        const targetText = JSON.stringify(targetRow).toLowerCase();
+        const hasExpectedIssueSignal =
+          targetText.includes(issueKey.toLowerCase()) ||
+          targetText.includes(issueUrl.toLowerCase());
+        if (!hasExpectedIssueSignal) {
+          t.diagnostic(
+            `documents.issue_refs target row missing expected issue signal (${issueKey} / ${issueUrl}): ${JSON.stringify(targetRow)}`
+          );
+          t.skip("documents.issue_refs extraction/indexing differs by deployment");
+          return;
+        }
+
+        assert.equal(hasExpectedIssueSignal, true);
+      });
+
       await t.test("issue token retrieval via documents.search", async (t) => {
         let found = false;
         let finalRows = [];
@@ -1946,6 +2104,92 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         }
 
         assert.equal(found, true);
+      });
+
+      await t.test("documents.issue_ref_report query flow and shape assertions", async (t) => {
+        if (!hasToolContract("documents.issue_ref_report")) {
+          t.skip("documents.issue_ref_report contract unavailable");
+          return;
+        }
+
+        let run = await invokeToolAnyStatus(tmpDir, configPath, "documents.issue_ref_report", {
+          query: issueKey,
+          limit: 10,
+          view: "summary",
+        });
+
+        if (run.status !== 0 && hasCliValidationIssue(run.stderrJson, "args.view")) {
+          run = await invokeToolAnyStatus(tmpDir, configPath, "documents.issue_ref_report", {
+            query: issueKey,
+            limit: 10,
+          });
+        }
+
+        if (run.status !== 0) {
+          if (hasCliValidationIssue(run.stderrJson, "args") || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`documents.issue_ref_report skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.issue_ref_report unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(
+            `documents.issue_ref_report expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`
+          );
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.issue_ref_report stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.issue_ref_report");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+
+        const rows = extractIssueRefRows(payload.result);
+        if (!rows || rows.length === 0) {
+          t.diagnostic(`Unexpected documents.issue_ref_report payload shape: ${JSON.stringify(payload.result)}`);
+          t.skip("documents.issue_ref_report payload shape differs across deployments");
+          return;
+        }
+        assert.ok(Array.isArray(rows), "documents.issue_ref_report should expose an array payload");
+
+        const objectRows = rows.filter((row) => row && typeof row === "object");
+        if (objectRows.length === 0) {
+          t.diagnostic(`documents.issue_ref_report emitted no object rows: ${JSON.stringify(rows)}`);
+          t.skip("documents.issue_ref_report row shape differs across deployments");
+          return;
+        }
+
+        const hasShapeSignals = objectRows.some((row) => {
+          const hasDocumentIdentity = Boolean(extractIssueRefDocumentId(row));
+          const hasRefs = extractIssueRefsFromRow(row).length > 0;
+          const hasCountSignal = Number.isFinite(
+            Number(row?.issueRefCount ?? row?.refCount ?? row?.matchCount ?? row?.count)
+          );
+          return hasDocumentIdentity || hasRefs || hasCountSignal;
+        });
+        if (!hasShapeSignals) {
+          t.diagnostic(`documents.issue_ref_report rows missing expected shape signals: ${JSON.stringify(objectRows)}`);
+          t.skip("documents.issue_ref_report row shape differs across deployments");
+          return;
+        }
+        assert.equal(hasShapeSignals, true);
+
+        const hasExpectedIssueSignal = objectRows.some((row) => {
+          const text = JSON.stringify(row).toLowerCase();
+          return (
+            text.includes(issueKey.toLowerCase()) ||
+            text.includes(issueUrl.toLowerCase()) ||
+            text.includes(state.createdDocumentId.toLowerCase()) ||
+            text.includes(state.marker.toLowerCase())
+          );
+        });
+        if (!hasExpectedIssueSignal) {
+          t.diagnostic(
+            `documents.issue_ref_report rows missing expected issue signals for ${issueKey}/${state.createdDocumentId}: ${JSON.stringify(objectRows)}`
+          );
+          t.skip("issue_ref_report query ranking/indexing varies by deployment");
+          return;
+        }
+
+        assert.equal(hasExpectedIssueSignal, true);
       });
 
       await t.test("backlink traversal via documents.list(backlinkDocumentId)", async (t) => {

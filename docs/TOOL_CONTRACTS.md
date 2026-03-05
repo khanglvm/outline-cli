@@ -328,6 +328,45 @@ outline-cli tools contract all --pretty
 - Best practice (AI): keep `depth` and `maxNodes` conservative to preserve deterministic output size for automation.
 - Best practice (AI): treat report output as bounded graph context, then call `documents.info` only on selected node IDs.
 
+## `documents.issue_refs`
+
+- Signature: `documents.issue_refs(args: { id?: string; ids?: string[]; issueDomains?: string[]; keyPattern?: string; view?: 'summary'|'full'; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.issue_refs",
+  "args": {
+    "id": "outline-api-NTpezNwhUP",
+    "issueDomains": ["linear.app"],
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): call this on explicit document IDs first to produce deterministic issue-link extraction without broad search fan-out.
+- Best practice (AI): use `issueDomains`/`keyPattern` to keep extraction focused and machine-friendly for downstream patch/audit steps.
+
+## `documents.issue_ref_report`
+
+- Signature: `documents.issue_ref_report(args: { query?: string; queries?: string[]; collectionId?: string; issueDomains?: string[]; keyPattern?: string; limit?: number; view?: 'ids'|'summary'; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.issue_ref_report",
+  "args": {
+    "query": "ENG-4312",
+    "collectionId": "collection-id",
+    "limit": 10,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): run report queries with bounded `limit` and `view: "ids"`/`"summary"` first, then hydrate only selected docs via `documents.info`.
+- Best practice (AI): pair report results with `events.list` for deterministic "link discovered -> doc updated -> audit trail" workflows.
+
 ## `documents.info`
 
 - Signature: `documents.info(args: { id?: string; ids?: string[]; shareId?: string; view?: 'summary'|'full'; includePolicies?: boolean; concurrency?: number; armDelete?: boolean; readTokenTtlSeconds?: number })`

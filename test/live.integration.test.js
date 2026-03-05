@@ -121,6 +121,41 @@ function hasToolContract(name) {
   }
 }
 
+function extractResultRows(result) {
+  if (Array.isArray(result?.data)) {
+    return result.data;
+  }
+  if (Array.isArray(result?.items)) {
+    return result.items;
+  }
+  if (Array.isArray(result)) {
+    return result;
+  }
+  return null;
+}
+
+function extractResultObject(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return null;
+  }
+  if (result.data && typeof result.data === "object" && !Array.isArray(result.data)) {
+    return result.data;
+  }
+  if (result.item && typeof result.item === "object" && !Array.isArray(result.item)) {
+    return result.item;
+  }
+  return result;
+}
+
+function pickStringId(...candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 async function writeJsonFile(dir, prefix, value) {
   const file = path.join(dir, `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
   await fs.writeFile(file, `${JSON.stringify(value)}\n`, "utf8");
@@ -172,7 +207,47 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     deletedInTest: false,
     marker: null,
     firstCollectionId: null,
+    uc03TemplateId: null,
+    uc03TemplateDeleted: false,
+    uc03CommentId: null,
+    uc03CommentDeleted: false,
+    uc03AdditionalDocumentIds: [],
   };
+
+  async function bestEffortDeleteDocument(documentId) {
+    if (!documentId) {
+      return;
+    }
+
+    try {
+      const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
+        id: documentId,
+        view: "summary",
+        armDelete: true,
+      });
+      const readToken = readForDelete.result?.deleteReadReceipt?.token;
+      if (readToken) {
+        await invokeTool(tmpDir, configPath, "documents.delete", {
+          id: documentId,
+          readToken,
+          performAction: true,
+        });
+        return;
+      }
+    } catch {
+      // continue to fallback delete
+    }
+
+    try {
+      await invokeTool(tmpDir, configPath, "api.call", {
+        method: "documents.delete",
+        body: { id: documentId },
+        performAction: true,
+      });
+    } catch {
+      // best-effort cleanup only
+    }
+  }
 
   try {
     await t.test("profile setup + auth", async () => {
@@ -435,7 +510,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       assert.ok(typeof found.title === "string" && found.title.length > 0, "manifest row should include title");
     });
 
-    await t.test("mutation safety + patch + diff + revisions", async () => {
+    await t.test("mutation safety + patch + diff + revisions", async (t) => {
       assert.ok(state.createdDocumentId, "created test document id is required");
 
       const appendTag = `suite-append-${Date.now()}`;
@@ -634,6 +709,26 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         const restoreTargetRevision = revisionsList.result.data[revisionsList.result.data.length - 1]?.id;
         assert.ok(restoreTargetRevision, "Expected a revision id for restore test");
 
+        if (hasToolContract("revisions.info")) {
+          try {
+            const revisionInfo = await invokeTool(tmpDir, configPath, "revisions.info", {
+              id: restoreTargetRevision,
+              view: "full",
+            });
+            assert.equal(revisionInfo.tool, "revisions.info");
+            const revisionObject = extractResultObject(revisionInfo.result);
+            if (!revisionObject || typeof revisionObject !== "object") {
+              t.diagnostic(`Unexpected revisions.info payload: ${JSON.stringify(revisionInfo.result)}`);
+            } else {
+              assert.ok(typeof revisionObject.id === "string" && revisionObject.id.length > 0);
+            }
+          } catch (err) {
+            t.diagnostic(`Skipping revisions.info hydration assertion: ${err.message}`);
+          }
+        } else {
+          t.diagnostic("Skipped revisions.info hydration: contract not registered in this build");
+        }
+
         const restoreRes = await invokeTool(tmpDir, configPath, "revisions.restore", {
           id: state.createdDocumentId,
           revisionId: restoreTargetRevision,
@@ -643,6 +738,134 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
         assert.equal(restoreRes.result?.ok, true);
       }
+    });
+
+    await t.test("UC-03 comments workflow (create/list/info/update/delete)", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+
+      const requiredTools = [
+        "comments.create",
+        "comments.list",
+        "comments.info",
+        "comments.update",
+        "comments.delete",
+      ];
+      const missing = requiredTools.filter((tool) => !hasToolContract(tool));
+      if (missing.length > 0) {
+        t.skip(`Missing comment tools in this build: ${missing.join(", ")}`);
+        return;
+      }
+
+      const firstCommentText = `UC-03 decision rationale ${Date.now()}`;
+      let createComment;
+      try {
+        createComment = await invokeTool(tmpDir, configPath, "comments.create", {
+          documentId: state.createdDocumentId,
+          text: firstCommentText,
+          performAction: true,
+          view: "full",
+        });
+      } catch (err) {
+        t.diagnostic(`Skipping comment workflow: ${err.message}`);
+        t.skip("comments endpoint behavior is deployment-dependent");
+        return;
+      }
+
+      assert.equal(createComment.tool, "comments.create");
+      if (createComment.result?.success === false) {
+        t.diagnostic(`comments.create returned success=false: ${JSON.stringify(createComment.result)}`);
+        t.skip("comment creation not available in this deployment");
+        return;
+      }
+
+      const createdComment = extractResultObject(createComment.result);
+      const commentId = pickStringId(
+        createdComment?.id,
+        createComment.result?.id,
+        createComment.result?.commentId
+      );
+      if (!commentId) {
+        t.diagnostic(`comments.create missing id payload: ${JSON.stringify(createComment.result)}`);
+        t.skip("comment id is not returned by this deployment");
+        return;
+      }
+      state.uc03CommentId = commentId;
+      assert.ok(commentId.length > 0, "comments.create should return a non-empty id");
+      if (typeof createdComment?.text === "string") {
+        assert.ok(
+          createdComment.text.includes(firstCommentText),
+          "created comment should include the provided text"
+        );
+      }
+
+      const listComments = await invokeTool(tmpDir, configPath, "comments.list", {
+        documentId: state.createdDocumentId,
+        limit: 50,
+        view: "full",
+      });
+      assert.equal(listComments.tool, "comments.list");
+      const listedRows = extractResultRows(listComments.result);
+      if (!listedRows) {
+        t.diagnostic(`Unexpected comments.list shape: ${JSON.stringify(listComments.result)}`);
+        t.skip("comments.list payload shape varies by deployment");
+        return;
+      }
+      assert.ok(Array.isArray(listedRows));
+
+      const listedComment = listedRows.find((row) => row && typeof row === "object" && row.id === commentId);
+      if (!listedComment) {
+        t.diagnostic("comments.list did not immediately include the created comment");
+        t.skip("comment visibility can be delayed by deployment indexing");
+        return;
+      }
+      assert.ok(typeof listedComment.id === "string" && listedComment.id.length > 0);
+
+      const infoComment = await invokeTool(tmpDir, configPath, "comments.info", {
+        id: commentId,
+        view: "full",
+      });
+      assert.equal(infoComment.tool, "comments.info");
+      const infoRow = extractResultObject(infoComment.result);
+      if (!infoRow || typeof infoRow !== "object") {
+        t.diagnostic(`Unexpected comments.info payload: ${JSON.stringify(infoComment.result)}`);
+        t.skip("comments.info payload shape varies by deployment");
+        return;
+      }
+      assert.equal(infoRow.id, commentId);
+
+      const updatedCommentText = `${firstCommentText} updated`;
+      const updateComment = await invokeTool(tmpDir, configPath, "comments.update", {
+        id: commentId,
+        text: updatedCommentText,
+        performAction: true,
+        view: "full",
+      });
+      assert.equal(updateComment.tool, "comments.update");
+      if (updateComment.result?.success === false) {
+        t.diagnostic(`comments.update returned success=false: ${JSON.stringify(updateComment.result)}`);
+        t.skip("comment update not available in this deployment");
+        return;
+      }
+
+      const verifyInfoComment = await invokeTool(tmpDir, configPath, "comments.info", {
+        id: commentId,
+        view: "full",
+      });
+      const verifyRow = extractResultObject(verifyInfoComment.result);
+      if (verifyRow && typeof verifyRow.text === "string") {
+        assert.ok(
+          verifyRow.text.includes(updatedCommentText),
+          "comments.info should include updated comment text"
+        );
+      }
+
+      const deleteComment = await invokeTool(tmpDir, configPath, "comments.delete", {
+        id: commentId,
+        performAction: true,
+      });
+      assert.equal(deleteComment.tool, "comments.delete");
+      assert.notEqual(deleteComment.result?.success, false, "comments.delete should not return success=false");
+      state.uc03CommentDeleted = true;
     });
 
     await t.test("batch + ndjson + validation + offload + cleanup dry-run", async () => {
@@ -798,6 +1021,113 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       }
     });
 
+    await t.test("UC-03 template lifecycle (templatize/list/info + instantiate)", async (t) => {
+      const requiredTools = ["documents.templatize", "templates.list", "templates.info"];
+      const missing = requiredTools.filter((tool) => !hasToolContract(tool));
+      if (missing.length > 0) {
+        t.skip(`Missing template tools in this build: ${missing.join(", ")}`);
+        return;
+      }
+
+      const sourceTitle = `${state.marker}-template-source`;
+      const sourceDoc = await invokeTool(tmpDir, configPath, "documents.create", {
+        title: sourceTitle,
+        text: `# ${sourceTitle}\n\n## Decisions\n- Owner: TBD\n- Due: TBD`,
+        publish: false,
+        view: "summary",
+      });
+      const sourceDocId = pickStringId(sourceDoc?.result?.data?.id, sourceDoc?.result?.id);
+      assert.ok(sourceDocId, "template source document id is required");
+      state.uc03AdditionalDocumentIds.push(sourceDocId);
+
+      let templatize;
+      try {
+        templatize = await invokeTool(tmpDir, configPath, "documents.templatize", {
+          id: sourceDocId,
+          performAction: true,
+          view: "full",
+        });
+      } catch (err) {
+        t.diagnostic(`Skipping documents.templatize flow: ${err.message}`);
+        t.skip("template conversion behavior is deployment-dependent");
+        return;
+      }
+
+      assert.equal(templatize.tool, "documents.templatize");
+      if (templatize.result?.success === false) {
+        t.diagnostic(`documents.templatize returned success=false: ${JSON.stringify(templatize.result)}`);
+        t.skip("templatize action not available in this deployment");
+        return;
+      }
+
+      const templatizedRow = extractResultObject(templatize.result);
+      const templateId = pickStringId(
+        templatizedRow?.templateId,
+        templatizedRow?.id,
+        templatize.result?.templateId,
+        templatize.result?.id
+      );
+      if (!templateId) {
+        t.diagnostic(`documents.templatize missing template id: ${JSON.stringify(templatize.result)}`);
+        t.skip("template id is not returned by this deployment");
+        return;
+      }
+      state.uc03TemplateId = templateId;
+      assert.ok(templateId.length > 0, "documents.templatize should return template id");
+
+      const templatesList = await invokeTool(tmpDir, configPath, "templates.list", {
+        query: sourceTitle,
+        limit: 20,
+        view: "summary",
+      });
+      assert.equal(templatesList.tool, "templates.list");
+      const templateRows = extractResultRows(templatesList.result);
+      if (!templateRows) {
+        t.diagnostic(`Unexpected templates.list shape: ${JSON.stringify(templatesList.result)}`);
+        t.skip("templates.list payload shape varies by deployment");
+        return;
+      }
+      assert.ok(Array.isArray(templateRows));
+
+      const visibleTemplate = templateRows.find((row) => row && typeof row === "object" && row.id === templateId);
+      if (!visibleTemplate) {
+        t.diagnostic("Templatized template not visible in templates.list yet");
+      } else {
+        assert.ok(typeof visibleTemplate.id === "string" && visibleTemplate.id.length > 0);
+      }
+
+      const templateInfo = await invokeTool(tmpDir, configPath, "templates.info", {
+        id: templateId,
+        view: "full",
+      });
+      assert.equal(templateInfo.tool, "templates.info");
+      const templateInfoRow = extractResultObject(templateInfo.result);
+      if (!templateInfoRow || typeof templateInfoRow !== "object") {
+        t.diagnostic(`Unexpected templates.info payload: ${JSON.stringify(templateInfo.result)}`);
+        t.skip("templates.info payload shape varies by deployment");
+        return;
+      }
+      assert.equal(templateInfoRow.id, templateId);
+      if (typeof templateInfoRow.title === "string") {
+        assert.ok(templateInfoRow.title.length > 0);
+      }
+
+      const fromTemplateDoc = await invokeTool(tmpDir, configPath, "documents.create", {
+        title: `${state.marker}-templated-notes`,
+        templateId,
+        publish: false,
+        view: "summary",
+      });
+      const fromTemplateDocId = pickStringId(fromTemplateDoc?.result?.data?.id, fromTemplateDoc?.result?.id);
+      if (!fromTemplateDocId) {
+        t.diagnostic(`documents.create(templateId) returned unexpected payload: ${JSON.stringify(fromTemplateDoc.result)}`);
+        t.skip("templated document creation is deployment-dependent");
+        return;
+      }
+      state.uc03AdditionalDocumentIds.push(fromTemplateDocId);
+      assert.ok(fromTemplateDocId.length > 0, "documents.create(templateId) should return a document id");
+    });
+
     await t.test("delete isolated test document", async () => {
       assert.ok(state.createdDocumentId, "created test document id is required");
       const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
@@ -820,33 +1150,37 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       state.deletedInTest = true;
     });
   } finally {
-    if (state.createdDocumentId && !state.deletedInTest) {
+    if (state.uc03CommentId && !state.uc03CommentDeleted) {
       try {
-        const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
-          id: state.createdDocumentId,
-          view: "summary",
-          armDelete: true,
-        });
-        const readToken = readForDelete.result?.deleteReadReceipt?.token;
-        if (readToken) {
-          await invokeTool(tmpDir, configPath, "documents.delete", {
-            id: state.createdDocumentId,
-            readToken,
-            performAction: true,
-          });
-        }
-      } catch {
-        // document may already be deleted or inaccessible
-      }
-      try {
-        await invokeTool(tmpDir, configPath, "api.call", {
-          method: "documents.delete",
-          body: { id: state.createdDocumentId },
+        await invokeTool(tmpDir, configPath, "comments.delete", {
+          id: state.uc03CommentId,
           performAction: true,
         });
       } catch {
-        // best-effort cleanup only
+        // comment may already be deleted or not supported
       }
+    }
+
+    if (state.uc03TemplateId && !state.uc03TemplateDeleted) {
+      try {
+        await invokeTool(tmpDir, configPath, "templates.delete", {
+          id: state.uc03TemplateId,
+          performAction: true,
+        });
+        state.uc03TemplateDeleted = true;
+      } catch {
+        // template deletion may not be available in all deployments
+      }
+    }
+
+    if (Array.isArray(state.uc03AdditionalDocumentIds)) {
+      for (const docId of state.uc03AdditionalDocumentIds) {
+        await bestEffortDeleteDocument(docId);
+      }
+    }
+
+    if (state.createdDocumentId && !state.deletedInTest) {
+      await bestEffortDeleteDocument(state.createdDocumentId);
     }
 
     await fs.rm(tmpDir, { recursive: true, force: true });

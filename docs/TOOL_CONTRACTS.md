@@ -465,6 +465,255 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): restore only after explicit target revision confirmation.
 
+## `revisions.info`
+
+- Signature: `revisions.info(args: { id: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "revisions.info",
+  "args": {
+    "id": "revision-id",
+    "view": "full"
+  }
+}
+```
+
+- Best practice (AI): hydrate a specific revision from `revisions.list` before restore so recovery targets are explicit and auditable.
+
+## `documents.templatize`
+
+- Signature: `documents.templatize(args: { id: string; collectionId?: string | null; publish?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.templatize",
+  "args": {
+    "id": "doc-id",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): run on a suite-owned canonical note document, then persist resulting `templateId` for later `documents.create`.
+
+## `templates.list`
+
+- Signature: `templates.list(args?: { collectionId?: string; query?: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.list",
+  "args": {
+    "query": "meeting notes",
+    "limit": 10,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use summary/ids views first, then hydrate selected template IDs with `templates.info`.
+
+## `templates.info`
+
+- Signature: `templates.info(args: { id?: string; ids?: string[]; includePolicies?: boolean; concurrency?: number; view?: 'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.info",
+  "args": {
+    "id": "template-id",
+    "view": "full"
+  }
+}
+```
+
+- Best practice (AI): prefer batched `ids[]` hydration when validating multiple templates.
+
+## `templates.create`
+
+- Signature: `templates.create(args: { title: string; data: object; icon?: string; color?: string; collectionId?: string; fullWidth?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.create",
+  "args": {
+    "title": "Weekly Team Meeting",
+    "data": {
+      "text": "# Agenda\n\n## Decisions\n- Owner:\n- Due:"
+    },
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): keep `data` minimal and deterministic; gate writes with explicit `performAction=true`.
+
+## `templates.update`
+
+- Signature: `templates.update(args: { id: string; title?: string; data?: object; icon?: string | null; color?: string | null; collectionId?: string | null; fullWidth?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.update",
+  "args": {
+    "id": "template-id",
+    "title": "Weekly Team Meeting v2",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): patch only changed fields to keep write payloads small and reviewable.
+
+## `templates.delete`
+
+- Signature: `templates.delete(args: { id: string; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.delete",
+  "args": {
+    "id": "template-id",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): delete only suite-created templates in test automation.
+
+## `templates.restore`
+
+- Signature: `templates.restore(args: { id: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.restore",
+  "args": {
+    "id": "template-id",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use restore for controlled rollback after accidental template deletion.
+
+## `templates.duplicate`
+
+- Signature: `templates.duplicate(args: { id: string; title?: string; collectionId?: string | null; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.duplicate",
+  "args": {
+    "id": "template-id",
+    "title": "Weekly Team Meeting Copy",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): duplicate then customize to preserve stable base templates.
+
+## `comments.list`
+
+- Signature: `comments.list(args?: { documentId?: string; collectionId?: string; parentCommentId?: string; includeAnchorText?: boolean; includeReplies?: boolean; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "comments.list",
+  "args": {
+    "documentId": "doc-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): scope by `documentId` in meeting-note workflows to keep review output deterministic.
+
+## `comments.info`
+
+- Signature: `comments.info(args: { id: string; includeAnchorText?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "comments.info",
+  "args": {
+    "id": "comment-id",
+    "view": "full"
+  }
+}
+```
+
+- Best practice (AI): hydrate individual comment records before moderation or deletion actions.
+
+## `comments.create`
+
+- Signature: `comments.create(args: { documentId: string; text?: string; data?: object; parentCommentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "comments.create",
+  "args": {
+    "documentId": "doc-id",
+    "text": "Decision rationale: lower migration risk.",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): provide `text` for human-readable rationale threads; use `data` only when rich payloads are required.
+
+## `comments.update`
+
+- Signature: `comments.update(args: { id: string; text?: string; data?: object; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "comments.update",
+  "args": {
+    "id": "comment-id",
+    "text": "Updated rationale after stakeholder review.",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): update comment text in place to preserve thread continuity for decision history.
+
+## `comments.delete`
+
+- Signature: `comments.delete(args: { id: string; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "comments.delete",
+  "args": {
+    "id": "comment-id",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): reserve deletes for invalid/noise comments; prefer edits for audit continuity.
+
 ## `capabilities.map`
 
 - Signature: `capabilities.map(args?: { includePolicies?: boolean; includeRaw?: boolean })`

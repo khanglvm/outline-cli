@@ -300,7 +300,45 @@ npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","l
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
 
-### 8. Capability mapping and test cleanup
+### 8. UC-03: meeting notes + decision logs
+
+```bash
+# 1) Turn a canonical meeting-note document into a reusable template
+npx ./bin/outline-agent.js invoke documents.templatize \
+  --args '{"id":"meeting-notes-canonical-doc-id","performAction":true}'
+
+npx ./bin/outline-agent.js invoke templates.list \
+  --args '{"query":"meeting notes","limit":10,"view":"summary"}'
+
+npx ./bin/outline-agent.js invoke templates.info \
+  --args '{"id":"template-id","view":"summary"}'
+
+# 2) Start a fresh meeting note from that template
+npx ./bin/outline-agent.js invoke documents.create \
+  --args '{"title":"Team Sync 2026-03-05","templateId":"template-id","publish":false,"view":"summary"}'
+
+# 3) Record decision edits + rationale comments
+npx ./bin/outline-agent.js invoke documents.update \
+  --args '{"id":"meeting-doc-id","text":"\n\n## Decision\n- Adopt option B\n- Owner: Alex\n- Due: 2026-03-12","editMode":"append","performAction":true}'
+
+npx ./bin/outline-agent.js invoke comments.create \
+  --args '{"documentId":"meeting-doc-id","text":"Reasoning: lower operational risk","performAction":true}'
+
+npx ./bin/outline-agent.js invoke comments.list \
+  --args '{"documentId":"meeting-doc-id","limit":20,"view":"summary"}'
+
+# 4) Hydrate a revision and restore if needed
+npx ./bin/outline-agent.js invoke revisions.list \
+  --args '{"documentId":"meeting-doc-id","limit":10,"view":"summary"}'
+
+npx ./bin/outline-agent.js invoke revisions.info \
+  --args '{"id":"revision-id","view":"full"}'
+
+npx ./bin/outline-agent.js invoke revisions.restore \
+  --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
+```
+
+### 9. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -339,7 +377,21 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `collections.create`
 - `collections.update`
 - `revisions.list`
+- `revisions.info`
 - `revisions.restore`
+- `templates.list`
+- `templates.info`
+- `templates.create`
+- `templates.update`
+- `templates.delete`
+- `templates.restore`
+- `templates.duplicate`
+- `documents.templatize`
+- `comments.list`
+- `comments.info`
+- `comments.create`
+- `comments.update`
+- `comments.delete`
 - `search.expand`
 - `capabilities.map`
 - `documents.cleanup_test`

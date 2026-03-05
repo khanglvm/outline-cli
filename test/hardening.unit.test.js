@@ -107,6 +107,92 @@ test("groups.memberships is exposed as a first-class extended wrapper", async ()
   });
 });
 
+test("data_attributes wrappers map to dataAttributes RPC methods with action gating", async () => {
+  const methods = [
+    "data_attributes.list",
+    "data_attributes.info",
+    "data_attributes.create",
+    "data_attributes.update",
+    "data_attributes.delete",
+  ];
+  for (const method of methods) {
+    assert.ok(EXTENDED_TOOLS[method], `${method} should be registered`);
+  }
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "dataAttributes.delete") {
+          return { body: { success: true } };
+        }
+        return {
+          body: {
+            data: { id: "attr-1", name: "Status" },
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const listRes = await EXTENDED_TOOLS["data_attributes.list"].handler(ctx, {
+    limit: 10,
+    offset: 0,
+  });
+  const infoRes = await EXTENDED_TOOLS["data_attributes.info"].handler(ctx, { id: "attr-1" });
+  await EXTENDED_TOOLS["data_attributes.create"].handler(ctx, {
+    name: "Status",
+    dataType: "string",
+    performAction: true,
+  });
+  await EXTENDED_TOOLS["data_attributes.update"].handler(ctx, {
+    id: "attr-1",
+    name: "Status",
+    performAction: true,
+  });
+  const deleteRes = await EXTENDED_TOOLS["data_attributes.delete"].handler(ctx, {
+    id: "attr-1",
+    performAction: true,
+  });
+
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    [
+      "dataAttributes.list",
+      "dataAttributes.info",
+      "dataAttributes.create",
+      "dataAttributes.update",
+      "dataAttributes.delete",
+    ]
+  );
+  assert.equal(calls[0].options?.maxAttempts, 2);
+  assert.equal(calls[2].options?.maxAttempts, 1);
+  assert.equal(calls[4].options?.maxAttempts, 1);
+  assert.equal(listRes.tool, "data_attributes.list");
+  assert.equal(infoRes.tool, "data_attributes.info");
+  assert.deepEqual(listRes.result, {
+    data: { id: "attr-1", name: "Status" },
+  });
+  assert.deepEqual(deleteRes.result, { success: true });
+
+  await assert.rejects(
+    () =>
+      EXTENDED_TOOLS["data_attributes.create"].handler(ctx, {
+        name: "Status",
+        dataType: "string",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+  assert.equal(calls.length, 5);
+});
+
 test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
   assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
@@ -206,6 +292,173 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+});
+
+test("data_attributes schemas and document dataAttributes alignment validate valid and invalid inputs", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("data_attributes.list", {
+      limit: 25,
+      offset: 0,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("data_attributes.info", { id: "attr-1" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("data_attributes.create", {
+      name: "Status",
+      dataType: "list",
+      options: {
+        icon: "status",
+        options: [{ value: "In Progress", color: "#0366d6" }],
+      },
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("data_attributes.update", {
+      id: "attr-1",
+      name: "Status",
+      pinned: true,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("data_attributes.delete", {
+      id: "attr-1",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.create", {
+      title: "Release plan",
+      dataAttributes: [{ dataAttributeId: "attr-1", value: "In Progress" }],
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.update", {
+      id: "doc-1",
+      dataAttributes: [{ dataAttributeId: "attr-1", value: "Done" }],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.safe_update", {
+      id: "doc-1",
+      expectedRevision: 3,
+      dataAttributes: [{ dataAttributeId: "attr-1", value: true }],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.batch_update", {
+      updates: [
+        {
+          id: "doc-1",
+          dataAttributes: [{ dataAttributeId: "attr-1", value: 42 }],
+        },
+      ],
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("data_attributes.list", { limit: 251 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.limit"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("data_attributes.info", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("data_attributes.create", {
+        name: "Status",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.dataType"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("data_attributes.create", {
+        name: "Status",
+        dataType: "date",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.dataType"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("data_attributes.update", {
+        id: "attr-1",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.name"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("data_attributes.delete", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.create", {
+        title: "Release plan",
+        dataAttributes: { dataAttributeId: "attr-1", value: "In Progress" },
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.dataAttributes"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.safe_update", {
+        id: "doc-1",
+        expectedRevision: 3,
+        dataAttributes: "invalid",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.dataAttributes"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.batch_update", {
+        updates: [{ id: "doc-1", dataAttributes: { dataAttributeId: "attr-1", value: "In Progress" } }],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.updates[0].dataAttributes"));
       return true;
     }
   );

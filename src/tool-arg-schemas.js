@@ -93,6 +93,8 @@ const SHARED_DOC_COMMON = {
   view: { type: "string", enum: ["ids", "summary", "full"] },
 };
 
+const DATA_ATTRIBUTE_DATA_TYPES = ["string", "number", "boolean", "list"];
+
 export const TOOL_ARG_SCHEMAS = {
   "api.call": {
     properties: {
@@ -182,6 +184,7 @@ export const TOOL_ARG_SCHEMAS = {
       templateId: { type: "string" },
       publish: { type: "boolean" },
       fullWidth: { type: "boolean" },
+      dataAttributes: { type: "array" },
       view: { type: "string", enum: ["summary", "full"] },
     },
   },
@@ -199,6 +202,7 @@ export const TOOL_ARG_SCHEMAS = {
       insightsEnabled: { type: "boolean" },
       editMode: { type: "string", enum: ["replace", "append", "prepend"] },
       publish: { type: "boolean" },
+      dataAttributes: { type: "array" },
       view: { type: "string", enum: ["summary", "full"] },
       performAction: { type: "boolean" },
     },
@@ -373,6 +377,7 @@ export const TOOL_ARG_SCHEMAS = {
       insightsEnabled: { type: "boolean" },
       editMode: { type: "string", enum: ["replace", "append", "prepend"] },
       publish: { type: "boolean" },
+      dataAttributes: { type: "array" },
       view: { type: "string", enum: ["summary", "full"] },
       excerptChars: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
@@ -438,6 +443,12 @@ export const TOOL_ARG_SCHEMAS = {
           !["replace", "append", "prepend"].includes(update.editMode)
         ) {
           issues.push({ path: `args.updates[${i}].editMode`, message: "must be replace, append, or prepend" });
+        }
+        if (
+          Object.prototype.hasOwnProperty.call(update, "dataAttributes") &&
+          !Array.isArray(update.dataAttributes)
+        ) {
+          issues.push({ path: `args.updates[${i}].dataAttributes`, message: "must be an array" });
         }
       }
     },
@@ -769,6 +780,77 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "comments.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "data_attributes.list": {
+    properties: {
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.limit === "number" && args.limit > 250) {
+        issues.push({ path: "args.limit", message: "must be <= 250" });
+      }
+    },
+  },
+  "data_attributes.info": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "data_attributes.create": {
+    required: ["name", "dataType"],
+    properties: {
+      name: { type: "string" },
+      description: { type: "string" },
+      dataType: { type: "string", enum: DATA_ATTRIBUTE_DATA_TYPES },
+      options: { type: "object" },
+      pinned: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.name === "string" && args.name.trim().length === 0) {
+        issues.push({ path: "args.name", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "data_attributes.update": {
+    required: ["id", "name"],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      description: { type: "string" },
+      options: { type: "object" },
+      pinned: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.name === "string" && args.name.trim().length === 0) {
+        issues.push({ path: "args.name", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "data_attributes.delete": {
     required: ["id"],
     properties: {
       id: { type: "string" },

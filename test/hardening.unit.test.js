@@ -108,6 +108,98 @@ test("groups.memberships is exposed as a first-class extended wrapper", async ()
   });
 });
 
+test("users lifecycle wrappers and documents.users wrapper enforce gating and deterministic envelopes", async () => {
+  for (const method of [
+    "users.invite",
+    "users.update_role",
+    "users.activate",
+    "users.suspend",
+    "documents.users",
+  ]) {
+    assert.ok(EXTENDED_TOOLS[method], `${method} should be registered`);
+  }
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.users") {
+          return {
+            body: {
+              data: [{ id: "user-1", documentId: body.id }],
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        return {
+          body: {
+            data: { id: `user-op-${calls.length}` },
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const usersRes = await EXTENDED_TOOLS["documents.users"].handler(ctx, {
+    id: "doc-1",
+    limit: 10,
+    offset: 0,
+  });
+  const inviteRes = await EXTENDED_TOOLS["users.invite"].handler(ctx, {
+    email: "new.user@example.com",
+    role: "member",
+    performAction: true,
+  });
+  const updateRoleRes = await EXTENDED_TOOLS["users.update_role"].handler(ctx, {
+    id: "user-1",
+    role: "viewer",
+    performAction: true,
+  });
+  await EXTENDED_TOOLS["users.activate"].handler(ctx, {
+    id: "user-1",
+    performAction: true,
+  });
+  const suspendRes = await EXTENDED_TOOLS["users.suspend"].handler(ctx, {
+    id: "user-2",
+    performAction: true,
+  });
+
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["documents.users", "users.invite", "users.update_role", "users.activate", "users.suspend"]
+  );
+  assert.deepEqual(calls[0].body, { id: "doc-1", limit: 10, offset: 0 });
+  assert.deepEqual(calls[1].body, { email: "new.user@example.com", role: "member" });
+  assert.deepEqual(calls[2].body, { id: "user-1", role: "viewer" });
+  assert.deepEqual(calls[3].body, { id: "user-1" });
+  assert.deepEqual(calls[4].body, { id: "user-2" });
+  assert.equal(calls[0].options?.maxAttempts, 2);
+  assert.equal(calls[1].options?.maxAttempts, 1);
+  assert.equal(calls[4].options?.maxAttempts, 1);
+
+  assert.equal(usersRes.tool, "documents.users");
+  assert.deepEqual(usersRes.result, { data: [{ id: "user-1", documentId: "doc-1" }] });
+  assert.deepEqual(inviteRes.result, { data: { id: "user-op-2" } });
+  assert.deepEqual(updateRoleRes.result, { data: { id: "user-op-3" } });
+  assert.deepEqual(suspendRes.result, { data: { id: "user-op-5" } });
+
+  await assert.rejects(
+    () =>
+      EXTENDED_TOOLS["users.suspend"].handler(ctx, {
+        id: "user-3",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+  assert.equal(calls.length, 5);
+});
+
 test("data_attributes wrappers map to dataAttributes RPC methods with action gating", async () => {
   const methods = [
     "data_attributes.list",
@@ -923,6 +1015,107 @@ test("users/groups schemas enforce deterministic id selector constraints", () =>
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+});
+
+test("user lifecycle and documents.users schemas enforce required selectors and role enum", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("users.invite", {
+      email: "new.user@example.com",
+      role: "member",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("users.update_role", {
+      id: "user-1",
+      role: "viewer",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("users.activate", {
+      id: "user-1",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("users.suspend", {
+      id: "user-1",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.users", {
+      id: "doc-1",
+      limit: 20,
+      offset: 0,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("users.invite", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.email"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("users.invite", {
+        email: "new.user@example.com",
+        role: "owner",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.role"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("users.update_role", {
+        id: "user-1",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.role"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("users.activate", {
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("users.suspend", {
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("documents.users", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
       return true;
     }
   );

@@ -57,6 +57,20 @@ function defaultUsageArgs(def) {
   if (def.tool === "documents.empty_trash") {
     return def.mutating ? { performAction: true } : {};
   }
+  if (def.tool === "users.invite") {
+    return {
+      email: "new.user@example.com",
+      role: "member",
+      performAction: true,
+    };
+  }
+  if (def.tool === "users.update_role") {
+    return {
+      id: "user-id",
+      role: "member",
+      performAction: true,
+    };
+  }
   if (def.tool === "shares.create") {
     return {
       documentId: "document-id",
@@ -192,6 +206,15 @@ const RPC_WRAPPER_DEFS = [
   { tool: "webhooks.delete", method: "webhooks.delete", description: "Delete a webhook.", mutating: true },
   { tool: "users.list", method: "users.list", description: "List users." },
   { tool: "users.info", method: "users.info", description: "Get user details." },
+  { tool: "users.invite", method: "users.invite", description: "Invite a user.", mutating: true },
+  {
+    tool: "users.update_role",
+    method: "users.update_role",
+    description: "Update a user's workspace role.",
+    mutating: true,
+  },
+  { tool: "users.activate", method: "users.activate", description: "Activate a user.", mutating: true },
+  { tool: "users.suspend", method: "users.suspend", description: "Suspend a user.", mutating: true },
   { tool: "groups.list", method: "groups.list", description: "List groups." },
   { tool: "groups.info", method: "groups.info", description: "Get group details." },
   { tool: "groups.memberships", method: "groups.memberships", description: "List group user memberships." },
@@ -206,6 +229,7 @@ const RPC_WRAPPER_DEFS = [
   { tool: "collections.remove_user", method: "collections.remove_user", description: "Remove a user from a collection.", mutating: true },
   { tool: "collections.add_group", method: "collections.add_group", description: "Add a group to a collection.", mutating: true },
   { tool: "collections.remove_group", method: "collections.remove_group", description: "Remove a group from a collection.", mutating: true },
+  { tool: "documents.users", method: "documents.users", description: "List users with access to a document." },
   { tool: "documents.memberships", method: "documents.memberships", description: "List document user memberships." },
   { tool: "documents.group_memberships", method: "documents.group_memberships", description: "List document group memberships." },
   { tool: "documents.add_user", method: "documents.add_user", description: "Add a user to a document.", mutating: true },

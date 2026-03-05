@@ -94,6 +94,7 @@ const SHARED_DOC_COMMON = {
 };
 
 const DATA_ATTRIBUTE_DATA_TYPES = ["string", "number", "boolean", "list"];
+const USER_ROLE_TYPES = ["admin", "member", "viewer", "guest"];
 
 export const TOOL_ARG_SCHEMAS = {
   "api.call": {
@@ -1513,6 +1514,54 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "users.invite": {
+    required: ["email"],
+    properties: {
+      email: { type: "string" },
+      name: { type: "string" },
+      role: { type: "string", enum: USER_ROLE_TYPES },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.email === "string" && args.email.trim().length === 0) {
+        issues.push({ path: "args.email", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "users.update_role": {
+    required: ["id", "role"],
+    properties: {
+      id: { type: "string" },
+      role: { type: "string", enum: USER_ROLE_TYPES },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "users.activate": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "users.suspend": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
   "groups.list": {
     properties: {
       query: { type: "string" },
@@ -1678,6 +1727,19 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "documents.memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.users": {
     required: ["id"],
     properties: {
       id: { type: "string" },

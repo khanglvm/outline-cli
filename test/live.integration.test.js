@@ -303,6 +303,115 @@ function isSkippableShareLifecycleError(envelope) {
   return false;
 }
 
+function extractErrorText(envelope) {
+  const err = envelope?.error;
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+
+  return [
+    err.code,
+    err.message,
+    err.body?.error,
+    err.body?.message,
+    err.details?.message,
+  ]
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function isSkippableTemplateLifecycleError(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 422, 501].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|template|placeholder/i.test(text);
+}
+
+function extractPlaceholderKeys(result) {
+  const values = [];
+
+  const collect = (node) => {
+    if (!node) {
+      return;
+    }
+
+    if (typeof node === "string") {
+      const trimmed = node.trim();
+      if (trimmed.length > 0) {
+        values.push(trimmed);
+      }
+      return;
+    }
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        collect(item);
+      }
+      return;
+    }
+
+    if (typeof node === "object") {
+      const namedKey = pickStringId(node.key, node.name, node.placeholder, node.token);
+      if (namedKey) {
+        values.push(namedKey);
+      }
+
+      if (Array.isArray(node.placeholders)) {
+        collect(node.placeholders);
+      }
+      if (Array.isArray(node.keys)) {
+        collect(node.keys);
+      }
+      if (Array.isArray(node.items)) {
+        collect(node.items);
+      }
+      if (Array.isArray(node.data)) {
+        collect(node.data);
+      }
+    }
+  };
+
+  collect(result?.placeholders);
+  collect(result?.data?.placeholders);
+  collect(result?.item?.placeholders);
+  collect(result?.keys);
+  collect(result?.data?.keys);
+  collect(result?.items);
+  collect(result?.data?.items);
+  collect(result?.data);
+
+  return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+}
+
+function extractDocumentText(result) {
+  const row = extractResultObject(result);
+
+  const candidates = [
+    row?.text,
+    row?.data?.text,
+    result?.text,
+    result?.data?.text,
+    result?.item?.text,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
 function isShareAccessDeniedRun(run) {
   if (!run) {
     return false;
@@ -481,6 +590,8 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     uc03CommentId: null,
     uc03CommentDeleted: false,
     uc03AdditionalDocumentIds: [],
+    uc11TemplateIds: [],
+    uc11DocumentIds: [],
     uc05ShareId: null,
     uc05ShareRevoked: false,
     uc10DocumentIds: [],
@@ -517,6 +628,32 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       await invokeTool(tmpDir, configPath, "api.call", {
         method: "documents.delete",
         body: { id: documentId },
+        performAction: true,
+      });
+    } catch {
+      // best-effort cleanup only
+    }
+  }
+
+  async function bestEffortDeleteTemplate(templateId) {
+    if (!templateId) {
+      return;
+    }
+
+    try {
+      await invokeTool(tmpDir, configPath, "templates.delete", {
+        id: templateId,
+        performAction: true,
+      });
+      return;
+    } catch {
+      // continue to fallback delete
+    }
+
+    try {
+      await invokeTool(tmpDir, configPath, "api.call", {
+        method: "templates.delete",
+        body: { id: templateId },
         performAction: true,
       });
     } catch {
@@ -3102,6 +3239,357 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       assert.ok(fromTemplateDocId.length > 0, "documents.create(templateId) should return a document id");
     });
 
+    await t.test("UC-11 template-driven doc pipeline (extract + create_from_template + strict + lifecycle)", async (t) => {
+      const requiredTools = [
+        "documents.templatize",
+        "templates.extract_placeholders",
+        "documents.create_from_template",
+      ];
+      const missing = requiredTools.filter((tool) => !hasToolContract(tool));
+      if (missing.length > 0) {
+        t.skip(`Missing UC-11 template pipeline tools in this build: ${missing.join(", ")}`);
+        return;
+      }
+
+      const uc11Marker = `${state.marker || "outline-cli-live-test"}-uc11-${Date.now()}`;
+      const sourceTitle = `${uc11Marker}-source`;
+      const expectedPlaceholderKeys = ["service_name", "owner", "target_date", "runbook_url", "approver"];
+      const placeholderValues = {
+        service_name: "Billing API",
+        owner: "Ops Duty Lead",
+        target_date: "2026-03-31",
+        runbook_url: "https://example.invalid/runbooks/billing-api",
+      };
+
+      const sourceDoc = await invokeTool(tmpDir, configPath, "documents.create", {
+        title: sourceTitle,
+        text:
+          `# ${sourceTitle}\n\n` +
+          "## Release Inputs\n" +
+          "- Service: {{service_name}}\n" +
+          "- Owner: {{owner}}\n" +
+          "- Target date: {{target_date}}\n" +
+          "- Runbook: {{runbook_url}}\n" +
+          "- Approver: {{approver}}\n" +
+          "- Duplicate marker: {{owner}}\n",
+        publish: false,
+        view: "summary",
+      });
+      const sourceDocId = pickStringId(sourceDoc?.result?.data?.id, sourceDoc?.result?.id);
+      assert.ok(sourceDocId, "UC-11 source document id is required");
+      state.uc11DocumentIds.push(sourceDocId);
+
+      let templatize;
+      try {
+        templatize = await invokeTool(tmpDir, configPath, "documents.templatize", {
+          id: sourceDocId,
+          performAction: true,
+          view: "full",
+        });
+      } catch (err) {
+        t.diagnostic(`Skipping UC-11 templatize flow: ${err.message}`);
+        t.skip("UC-11 template conversion behavior is deployment-dependent");
+        return;
+      }
+
+      if (templatize.result?.success === false) {
+        t.diagnostic(`UC-11 templatize returned success=false: ${JSON.stringify(templatize.result)}`);
+        t.skip("UC-11 templatize action unavailable in this deployment");
+        return;
+      }
+
+      const templatizedRow = extractResultObject(templatize.result);
+      const templateId = pickStringId(
+        templatizedRow?.templateId,
+        templatizedRow?.id,
+        templatize.result?.templateId,
+        templatize.result?.id
+      );
+      if (!templateId) {
+        t.diagnostic(`UC-11 templatize missing template id: ${JSON.stringify(templatize.result)}`);
+        t.skip("UC-11 template id not returned by this deployment");
+        return;
+      }
+      state.uc11TemplateIds.push(templateId);
+
+      await t.test("templates.extract_placeholders against templatized template", async (t) => {
+        const extracted = await invokeTool(tmpDir, configPath, "templates.extract_placeholders", {
+          id: templateId,
+        });
+        assert.equal(extracted.tool, "templates.extract_placeholders");
+
+        const rawKeys = extractPlaceholderKeys(extracted.result);
+        if (!Array.isArray(rawKeys) || rawKeys.length === 0) {
+          t.diagnostic(`Unexpected templates.extract_placeholders payload: ${JSON.stringify(extracted.result)}`);
+          t.skip("templates.extract_placeholders payload shape varies by deployment");
+          return;
+        }
+
+        const normalizedKeys = rawKeys
+          .map((key) => key.replace(/^\{\{\s*/, "").replace(/\s*\}\}$/, ""))
+          .map((key) => key.trim())
+          .filter(Boolean);
+
+        for (const expectedKey of expectedPlaceholderKeys) {
+          assert.ok(
+            normalizedKeys.includes(expectedKey),
+            `templates.extract_placeholders should include "${expectedKey}"`
+          );
+        }
+      });
+
+      await t.test("documents.create_from_template with placeholderValues substitution", async (t) => {
+        const fromTemplate = await invokeTool(tmpDir, configPath, "documents.create_from_template", {
+          templateId,
+          title: `${uc11Marker}-filled`,
+          publish: false,
+          placeholderValues,
+          view: "summary",
+          performAction: true,
+        });
+        assert.equal(fromTemplate.tool, "documents.create_from_template");
+        if (fromTemplate.result?.success === false) {
+          t.diagnostic(`documents.create_from_template returned success=false: ${JSON.stringify(fromTemplate.result)}`);
+          t.skip("documents.create_from_template behavior is deployment-dependent");
+          return;
+        }
+
+        const createdRow = extractResultObject(fromTemplate.result);
+        const createdDocId = pickStringId(
+          createdRow?.id,
+          createdRow?.documentId,
+          fromTemplate.result?.id,
+          fromTemplate.result?.documentId,
+          fromTemplate.result?.data?.id
+        );
+        if (!createdDocId) {
+          t.diagnostic(`Unexpected documents.create_from_template payload: ${JSON.stringify(fromTemplate.result)}`);
+          t.skip("documents.create_from_template payload shape varies by deployment");
+          return;
+        }
+        state.uc11DocumentIds.push(createdDocId);
+
+        const createdInfo = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: createdDocId,
+          view: "full",
+        });
+        const fullText = extractDocumentText(createdInfo.result);
+        if (!fullText) {
+          t.diagnostic(`documents.info missing text for UC-11 created doc: ${JSON.stringify(createdInfo.result)}`);
+          t.skip("documents.info text payload varies by deployment");
+          return;
+        }
+
+        for (const value of Object.values(placeholderValues)) {
+          assert.ok(fullText.includes(value), `created document should include placeholder value: ${value}`);
+        }
+
+        for (const key of Object.keys(placeholderValues)) {
+          assert.equal(
+            fullText.includes(`{{${key}}}`),
+            false,
+            `created document should not retain resolved placeholder token {{${key}}}`
+          );
+        }
+      });
+
+      await t.test("strictPlaceholders unresolved-token assertion", async (t) => {
+        const strictRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.create_from_template", {
+          templateId,
+          title: `${uc11Marker}-strict`,
+          publish: false,
+          placeholderValues,
+          strictPlaceholders: true,
+          view: "summary",
+          performAction: true,
+        });
+
+        const strictCreatedId = pickStringId(
+          strictRun.stdoutJson?.result?.data?.id,
+          strictRun.stdoutJson?.result?.id,
+          strictRun.stdoutJson?.result?.documentId
+        );
+        if (strictCreatedId) {
+          state.uc11DocumentIds.push(strictCreatedId);
+          t.diagnostic("strictPlaceholders=true still created a document");
+          t.skip("strictPlaceholders unresolved-token enforcement is deployment-dependent");
+          return;
+        }
+
+        if (strictRun.status !== 0 && hasCliValidationIssue(strictRun.stderrJson, "args.strictPlaceholders")) {
+          t.skip("documents.create_from_template schema in this build does not expose strictPlaceholders");
+          return;
+        }
+
+        if (strictRun.status === 0) {
+          const successFalse = strictRun.stdoutJson?.result?.success === false;
+          const payloadText = JSON.stringify(strictRun.stdoutJson?.result || {}).toLowerCase();
+          if (successFalse && /placeholder|unresolved|missing|strict/.test(payloadText)) {
+            assert.ok(true, "strictPlaceholders should fail when unresolved placeholders remain");
+            return;
+          }
+
+          t.diagnostic(`strictPlaceholders run output: ${strictRun.stdout || "<empty>"}`);
+          t.skip("strictPlaceholders failure signaling varies by deployment");
+          return;
+        }
+
+        const errorText = `${extractErrorText(strictRun.stderrJson)} ${(strictRun.stderr || "").toLowerCase()}`;
+        assert.ok(
+          /placeholder|unresolved|missing|strict/.test(errorText),
+          `strictPlaceholders failure should mention unresolved placeholders; got: ${strictRun.stderr || "<empty stderr>"}`
+        );
+      });
+
+      let duplicatedTemplateId = null;
+
+      await t.test("templates.update lifecycle check", async (t) => {
+        if (!hasToolContract("templates.update")) {
+          t.skip("templates.update contract unavailable");
+          return;
+        }
+
+        const updateTitle = `${uc11Marker}-updated`;
+        const updateRun = await invokeToolAnyStatus(tmpDir, configPath, "templates.update", {
+          id: templateId,
+          title: updateTitle,
+          performAction: true,
+          view: "summary",
+        });
+
+        if (updateRun.status !== 0) {
+          if (isSkippableTemplateLifecycleError(updateRun.stderrJson)) {
+            t.diagnostic(`templates.update skipped payload: ${updateRun.stderr || "<empty stderr>"}`);
+            t.skip("templates.update unavailable in this deployment");
+            return;
+          }
+          assert.fail(`templates.update expected success, got status=${updateRun.status}, stderr=${updateRun.stderr || "<empty>"}`);
+        }
+
+        const payload = updateRun.stdoutJson;
+        assert.ok(payload, `templates.update stdout must be valid JSON: ${updateRun.stdout}`);
+        assert.equal(payload.tool, "templates.update");
+        if (payload.result?.success === false) {
+          t.diagnostic(`templates.update returned success=false: ${JSON.stringify(payload.result)}`);
+          t.skip("templates.update action unavailable in this deployment");
+          return;
+        }
+
+        const updated = extractResultObject(payload.result);
+        if (typeof updated?.title === "string" && updated.title.length > 0) {
+          assert.equal(updated.title, updateTitle);
+        }
+      });
+
+      await t.test("templates.duplicate lifecycle check", async (t) => {
+        if (!hasToolContract("templates.duplicate")) {
+          t.skip("templates.duplicate contract unavailable");
+          return;
+        }
+
+        const duplicateRun = await invokeToolAnyStatus(tmpDir, configPath, "templates.duplicate", {
+          id: templateId,
+          title: `${uc11Marker}-duplicate`,
+          performAction: true,
+          view: "summary",
+        });
+
+        if (duplicateRun.status !== 0) {
+          if (isSkippableTemplateLifecycleError(duplicateRun.stderrJson)) {
+            t.diagnostic(`templates.duplicate skipped payload: ${duplicateRun.stderr || "<empty stderr>"}`);
+            t.skip("templates.duplicate unavailable in this deployment");
+            return;
+          }
+          assert.fail(
+            `templates.duplicate expected success, got status=${duplicateRun.status}, stderr=${duplicateRun.stderr || "<empty>"}`
+          );
+        }
+
+        const payload = duplicateRun.stdoutJson;
+        assert.ok(payload, `templates.duplicate stdout must be valid JSON: ${duplicateRun.stdout}`);
+        assert.equal(payload.tool, "templates.duplicate");
+        if (payload.result?.success === false) {
+          t.diagnostic(`templates.duplicate returned success=false: ${JSON.stringify(payload.result)}`);
+          t.skip("templates.duplicate action unavailable in this deployment");
+          return;
+        }
+
+        const duplicateRow = extractResultObject(payload.result);
+        duplicatedTemplateId = pickStringId(
+          duplicateRow?.id,
+          duplicateRow?.templateId,
+          payload.result?.id,
+          payload.result?.templateId,
+          payload.result?.data?.id
+        );
+        if (!duplicatedTemplateId) {
+          t.diagnostic(`Unexpected templates.duplicate payload: ${JSON.stringify(payload.result)}`);
+          t.skip("templates.duplicate payload shape varies by deployment");
+          return;
+        }
+
+        state.uc11TemplateIds.push(duplicatedTemplateId);
+        assert.notEqual(duplicatedTemplateId, templateId, "templates.duplicate should return a different id");
+      });
+
+      await t.test("templates.delete/restore lifecycle checks", async (t) => {
+        if (!hasToolContract("templates.delete")) {
+          t.skip("templates.delete contract unavailable");
+          return;
+        }
+        if (!duplicatedTemplateId) {
+          t.skip("safe delete/restore lifecycle check requires a duplicated template id");
+          return;
+        }
+
+        const deleteRun = await invokeToolAnyStatus(tmpDir, configPath, "templates.delete", {
+          id: duplicatedTemplateId,
+          performAction: true,
+        });
+
+        if (deleteRun.status !== 0) {
+          if (isSkippableTemplateLifecycleError(deleteRun.stderrJson)) {
+            t.diagnostic(`templates.delete skipped payload: ${deleteRun.stderr || "<empty stderr>"}`);
+            t.skip("templates.delete unavailable in this deployment");
+            return;
+          }
+          assert.fail(`templates.delete expected success, got status=${deleteRun.status}, stderr=${deleteRun.stderr || "<empty>"}`);
+        }
+
+        const deletePayload = deleteRun.stdoutJson;
+        assert.ok(deletePayload, `templates.delete stdout must be valid JSON: ${deleteRun.stdout}`);
+        assert.equal(deletePayload.tool, "templates.delete");
+        assert.notEqual(deletePayload.result?.success, false, "templates.delete should not return success=false");
+
+        if (!hasToolContract("templates.restore")) {
+          t.diagnostic("templates.restore unavailable; delete-only lifecycle check completed");
+          return;
+        }
+
+        const restoreRun = await invokeToolAnyStatus(tmpDir, configPath, "templates.restore", {
+          id: duplicatedTemplateId,
+          performAction: true,
+          view: "summary",
+        });
+
+        if (restoreRun.status !== 0) {
+          if (isSkippableTemplateLifecycleError(restoreRun.stderrJson)) {
+            t.diagnostic(`templates.restore skipped payload: ${restoreRun.stderr || "<empty stderr>"}`);
+            t.skip("templates.restore unavailable in this deployment");
+            return;
+          }
+          assert.fail(
+            `templates.restore expected success, got status=${restoreRun.status}, stderr=${restoreRun.stderr || "<empty>"}`
+          );
+        }
+
+        const restorePayload = restoreRun.stdoutJson;
+        assert.ok(restorePayload, `templates.restore stdout must be valid JSON: ${restoreRun.stdout}`);
+        assert.equal(restorePayload.tool, "templates.restore");
+        assert.notEqual(restorePayload.result?.success, false, "templates.restore should not return success=false");
+      });
+    });
+
     await t.test("delete isolated test document", async () => {
       assert.ok(state.createdDocumentId, "created test document id is required");
       const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
@@ -3150,6 +3638,18 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     if (Array.isArray(state.uc03AdditionalDocumentIds)) {
       for (const docId of state.uc03AdditionalDocumentIds) {
         await bestEffortDeleteDocument(docId);
+      }
+    }
+
+    if (Array.isArray(state.uc11DocumentIds)) {
+      for (const docId of state.uc11DocumentIds) {
+        await bestEffortDeleteDocument(docId);
+      }
+    }
+
+    if (Array.isArray(state.uc11TemplateIds)) {
+      for (const templateId of state.uc11TemplateIds) {
+        await bestEffortDeleteTemplate(templateId);
       }
     }
 

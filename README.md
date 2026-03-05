@@ -544,7 +544,29 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 14. Capability mapping and test cleanup
+### 14. UC-11: template-driven doc pipeline (templatize -> extract -> create_from_template -> validate)
+
+```bash
+# 1) Convert a suite-owned canonical document into a template
+npx ./bin/outline-cli.js invoke documents.templatize \
+  --args '{"id":"canonical-runbook-doc-id","performAction":true,"view":"summary"}'
+
+# 2) Extract deterministic placeholder keys from the template
+npx ./bin/outline-cli.js invoke templates.extract_placeholders \
+  --args '{"id":"template-id"}'
+
+# 3) Create a document from the template with placeholder substitutions
+npx ./bin/outline-cli.js invoke documents.create_from_template \
+  --args '{"templateId":"template-id","title":"Billing API Release Checklist 2026-03-05","placeholderValues":{"service_name":"Billing API","owner":"Ops Duty Lead","target_date":"2026-03-31","runbook_url":"https://example.invalid/runbooks/billing-api"},"strictPlaceholders":true,"publish":false,"performAction":true,"view":"summary"}'
+
+# 4) Validate substitutions in the created document
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"created-doc-id","view":"full"}'
+```
+
+Use `strictPlaceholders=true` when unresolved tokens must fail the pipeline instead of creating incomplete documents.
+
+### 15. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -569,6 +591,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `documents.list`
 - `documents.info`
 - `documents.create`
+- `documents.create_from_template`
 - `documents.update`
 - `documents.safe_update`
 - `documents.diff`
@@ -597,6 +620,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `shares.update`
 - `shares.revoke`
 - `templates.list`
+- `templates.extract_placeholders`
 - `templates.info`
 - `templates.create`
 - `templates.update`

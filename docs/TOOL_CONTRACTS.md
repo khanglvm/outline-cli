@@ -888,6 +888,51 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): run on a suite-owned canonical note document, then persist resulting `templateId` for later `documents.create`.
 
+## `templates.extract_placeholders`
+
+- Signature: `templates.extract_placeholders(args: { id: string; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "templates.extract_placeholders",
+  "args": {
+    "id": "template-id"
+  }
+}
+```
+
+- Best practice (AI): run immediately after `documents.templatize` (or template update) so placeholder key discovery stays deterministic.
+- Best practice (AI): normalize keys to bare names (`service_name` vs `{{service_name}}`) before building `placeholderValues`.
+
+## `documents.create_from_template`
+
+- Signature: `documents.create_from_template(args: { templateId: string; title?: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; placeholderValues?: Record<string, string>; strictPlaceholders?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.create_from_template",
+  "args": {
+    "templateId": "template-id",
+    "title": "Billing API Release Checklist 2026-03-05",
+    "placeholderValues": {
+      "service_name": "Billing API",
+      "owner": "Ops Duty Lead",
+      "target_date": "2026-03-31"
+    },
+    "strictPlaceholders": true,
+    "publish": false,
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use `templates.extract_placeholders` first and pass a complete `placeholderValues` object.
+- Best practice (AI): set `strictPlaceholders=true` in automation to fail fast on unresolved tokens.
+- Best practice (AI): this tool is action-gated; set `performAction=true` only for the final create step.
+
 ## `templates.list`
 
 - Signature: `templates.list(args?: { collectionId?: string; query?: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })`

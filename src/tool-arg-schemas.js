@@ -268,6 +268,126 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "documents.issue_refs": {
+    properties: {
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      issueDomains: { type: "string[]" },
+      keyPattern: { type: "string" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+
+      if (!hasId && !hasIds) {
+        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      }
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+      if (Array.isArray(args.ids)) {
+        if (args.ids.length === 0) {
+          issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.ids.length; i += 1) {
+          if (typeof args.ids[i] === "string" && args.ids[i].trim().length === 0) {
+            issues.push({ path: `args.ids[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+      if (Array.isArray(args.issueDomains)) {
+        if (args.issueDomains.length === 0) {
+          issues.push({ path: "args.issueDomains", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.issueDomains.length; i += 1) {
+          if (
+            typeof args.issueDomains[i] === "string" &&
+            args.issueDomains[i].trim().length === 0
+          ) {
+            issues.push({ path: `args.issueDomains[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+      if (typeof args.keyPattern === "string") {
+        if (args.keyPattern.trim().length === 0) {
+          issues.push({ path: "args.keyPattern", message: "must be a non-empty string when provided" });
+        } else {
+          try {
+            // eslint-disable-next-line no-new
+            new RegExp(args.keyPattern.trim(), "g");
+          } catch {
+            issues.push({ path: "args.keyPattern", message: "must be a valid regex pattern" });
+          }
+        }
+      }
+    },
+  },
+  "documents.issue_ref_report": {
+    properties: {
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      collectionId: { type: "string" },
+      issueDomains: { type: "string[]" },
+      keyPattern: { type: "string" },
+      limit: { type: "number", min: 1 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasQuery = typeof args.query === "string" && args.query.trim().length > 0;
+      const hasQueries = Array.isArray(args.queries) && args.queries.length > 0;
+
+      if (!hasQuery && !hasQueries) {
+        issues.push({ path: "args.query", message: "or args.queries[] is required" });
+      }
+      if (typeof args.query === "string" && args.query.trim().length === 0) {
+        issues.push({ path: "args.query", message: "must be a non-empty string when provided" });
+      }
+      if (Array.isArray(args.queries)) {
+        if (args.queries.length === 0) {
+          issues.push({ path: "args.queries", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.queries.length; i += 1) {
+          if (typeof args.queries[i] === "string" && args.queries[i].trim().length === 0) {
+            issues.push({ path: `args.queries[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+      if (typeof args.collectionId === "string" && args.collectionId.trim().length === 0) {
+        issues.push({ path: "args.collectionId", message: "must be a non-empty string when provided" });
+      }
+      if (Array.isArray(args.issueDomains)) {
+        if (args.issueDomains.length === 0) {
+          issues.push({ path: "args.issueDomains", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.issueDomains.length; i += 1) {
+          if (
+            typeof args.issueDomains[i] === "string" &&
+            args.issueDomains[i].trim().length === 0
+          ) {
+            issues.push({ path: `args.issueDomains[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+      if (typeof args.keyPattern === "string") {
+        if (args.keyPattern.trim().length === 0) {
+          issues.push({ path: "args.keyPattern", message: "must be a non-empty string when provided" });
+        } else {
+          try {
+            // eslint-disable-next-line no-new
+            new RegExp(args.keyPattern.trim(), "g");
+          } catch {
+            issues.push({ path: "args.keyPattern", message: "must be a valid regex pattern" });
+          }
+        }
+      }
+      if (typeof args.limit === "number" && args.limit > 100) {
+        issues.push({ path: "args.limit", message: "must be <= 100" });
+      }
+    },
+  },
   "documents.info": {
     properties: {
       id: { type: "string" },

@@ -791,6 +791,576 @@ function normalizeGraphSearchQueries(value) {
   return uniqueStrings(ensureStringArray(value, "searchQueries") || []);
 }
 
+const DEFAULT_ISSUE_KEY_PATTERN = "[A-Z][A-Z0-9]+-\\d+";
+const ISSUE_LINK_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
+const ISSUE_LINK_TRAILING_PUNCTUATION = /[),.;!?]+$/;
+
+function normalizeIssueDomains(value) {
+  const raw = ensureStringArray(value, "issueDomains") || [];
+  const out = [];
+  const seen = new Set();
+
+  for (const item of raw) {
+    const normalized = String(item || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^\*\./, "")
+      .replace(/\.$/, "");
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  }
+
+  return out.sort(compareIdAsc);
+}
+
+function normalizeIssueKeyPatternSource(value) {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_ISSUE_KEY_PATTERN;
+  }
+
+  const source = String(value).trim();
+  if (!source) {
+    return DEFAULT_ISSUE_KEY_PATTERN;
+  }
+  try {
+    // Validate custom pattern once and always run with global matching.
+    // eslint-disable-next-line no-new
+    new RegExp(source, "g");
+  } catch (err) {
+    throw new CliError(`Invalid keyPattern regex: ${err.message}`);
+  }
+  return source;
+}
+
+function collectIssueKeyMatches(text, keyPatternSource) {
+  const sourceText = String(text || "");
+  if (!sourceText) {
+    return [];
+  }
+
+  const out = [];
+  const regex = new RegExp(keyPatternSource, "g");
+  let match;
+  while ((match = regex.exec(sourceText)) !== null) {
+    const raw = String(match[0] || "").trim();
+    if (raw) {
+      out.push(raw.toUpperCase());
+    }
+    if (match[0] === "") {
+      regex.lastIndex += 1;
+    }
+  }
+  return out;
+}
+
+function collectIssueLinkMatches(text) {
+  const sourceText = String(text || "");
+  if (!sourceText) {
+    return [];
+  }
+
+  const out = [];
+  const regex = new RegExp(ISSUE_LINK_PATTERN.source, "gi");
+  let match;
+  while ((match = regex.exec(sourceText)) !== null) {
+    const matchedValue = String(match[0] || "");
+    if (!matchedValue) {
+      if (match[0] === "") {
+        regex.lastIndex += 1;
+      }
+      continue;
+    }
+
+    const sanitized = matchedValue.replace(ISSUE_LINK_TRAILING_PUNCTUATION, "");
+    if (!sanitized) {
+      continue;
+    }
+
+    out.push({
+      url: sanitized,
+      start: match.index,
+      end: match.index + sanitized.length,
+    });
+
+    if (match[0] === "") {
+      regex.lastIndex += 1;
+    }
+  }
+
+  return out;
+}
+
+function maskIssueLinkRanges(text, ranges = []) {
+  const sourceText = String(text || "");
+  if (!sourceText || ranges.length === 0) {
+    return sourceText;
+  }
+
+  const sorted = [...ranges].sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+  let cursor = 0;
+  let output = "";
+
+  for (const range of sorted) {
+    const start = Math.max(0, Math.min(sourceText.length, Number(range.start || 0)));
+    const end = Math.max(start, Math.min(sourceText.length, Number(range.end || start)));
+    if (start > cursor) {
+      output += sourceText.slice(cursor, start);
+    }
+    if (end > start) {
+      output += " ".repeat(end - start);
+    }
+    cursor = Math.max(cursor, end);
+  }
+
+  if (cursor < sourceText.length) {
+    output += sourceText.slice(cursor);
+  }
+  return output;
+}
+
+function normalizeIssueUrl(raw) {
+  try {
+    const parsed = new URL(String(raw || ""));
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return null;
+    }
+    return {
+      url: parsed.toString(),
+      domain: parsed.hostname.toLowerCase(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function matchesIssueDomain(hostname, issueDomains = []) {
+  if (!hostname) {
+    return false;
+  }
+  if (!Array.isArray(issueDomains) || issueDomains.length === 0) {
+    return true;
+  }
+  const host = String(hostname).toLowerCase();
+  return issueDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function sortIssueRefs(rows = []) {
+  return rows.sort((a, b) => {
+    const keyCmp = compareIdAsc(a.key, b.key);
+    if (keyCmp !== 0) {
+      return keyCmp;
+    }
+    const domainCmp = compareIdAsc(a.domain, b.domain);
+    if (domainCmp !== 0) {
+      return domainCmp;
+    }
+    const urlCmp = compareIdAsc(a.url, b.url);
+    if (urlCmp !== 0) {
+      return urlCmp;
+    }
+    const sourcesCmp = String(a.sources?.join(",") || "").localeCompare(String(b.sources?.join(",") || ""));
+    if (sourcesCmp !== 0) {
+      return sourcesCmp;
+    }
+    return Number(a.count || 0) - Number(b.count || 0);
+  });
+}
+
+function extractIssueRefsFromText(text, options = {}) {
+  const sourceText = String(text || "");
+  const issueDomains = Array.isArray(options.issueDomains) ? options.issueDomains : [];
+  const keyPatternSource = normalizeIssueKeyPatternSource(options.keyPattern);
+  const linkMatches = collectIssueLinkMatches(sourceText);
+  const maskedText = maskIssueLinkRanges(
+    sourceText,
+    linkMatches.map((item) => ({
+      start: item.start,
+      end: item.end,
+    }))
+  );
+  const refMap = new Map();
+
+  const upsertRef = ({ key = "", url = "", domain = "", fromUrl = false, fromKeyPattern = false }) => {
+    const normalizedKey = key ? String(key).trim().toUpperCase() : "";
+    const normalizedUrl = url ? String(url).trim() : "";
+    const normalizedDomain = domain ? String(domain).trim().toLowerCase() : "";
+    const rowKey = [normalizedKey, normalizedDomain, normalizedUrl].join("\u0000");
+
+    const existing = refMap.get(rowKey);
+    if (!existing) {
+      refMap.set(rowKey, {
+        key: normalizedKey,
+        url: normalizedUrl,
+        domain: normalizedDomain,
+        fromUrl: fromUrl === true,
+        fromKeyPattern: fromKeyPattern === true,
+        count: 1,
+      });
+      return;
+    }
+
+    existing.fromUrl = existing.fromUrl || fromUrl === true;
+    existing.fromKeyPattern = existing.fromKeyPattern || fromKeyPattern === true;
+    existing.count += 1;
+  };
+
+  const standaloneKeys = collectIssueKeyMatches(maskedText, keyPatternSource);
+  for (const key of standaloneKeys) {
+    upsertRef({
+      key,
+      fromKeyPattern: true,
+    });
+  }
+
+  for (const match of linkMatches) {
+    const normalized = normalizeIssueUrl(match.url);
+    if (!normalized || !matchesIssueDomain(normalized.domain, issueDomains)) {
+      continue;
+    }
+
+    const linkedKeys = uniqueStrings(collectIssueKeyMatches(normalized.url, keyPatternSource));
+    if (linkedKeys.length === 0) {
+      upsertRef({
+        url: normalized.url,
+        domain: normalized.domain,
+        fromUrl: true,
+      });
+      continue;
+    }
+
+    for (const key of linkedKeys) {
+      upsertRef({
+        key,
+        url: normalized.url,
+        domain: normalized.domain,
+        fromUrl: true,
+        fromKeyPattern: true,
+      });
+    }
+  }
+
+  const refs = sortIssueRefs(
+    Array.from(refMap.values()).map((row) => ({
+      key: row.key,
+      url: row.url,
+      domain: row.domain,
+      sources: [
+        ...(row.fromKeyPattern ? ["key_pattern"] : []),
+        ...(row.fromUrl ? ["url"] : []),
+      ],
+      count: row.count,
+    }))
+  );
+
+  const keys = uniqueStrings(refs.map((row) => row.key).filter(Boolean)).sort(compareIdAsc);
+  return {
+    refs,
+    keys,
+    summary: {
+      refCount: refs.length,
+      urlRefCount: refs.filter((row) => row.sources.includes("url")).length,
+      keyRefCount: refs.filter((row) => row.sources.includes("key_pattern")).length,
+      keyCount: keys.length,
+      mentionCount: refs.reduce((sum, row) => sum + Number(row.count || 0), 0),
+      textLength: sourceText.length,
+    },
+  };
+}
+
+function normalizeIssueDocumentView(view) {
+  return normalizeGraphView(view);
+}
+
+function normalizeIssueDocument(row, fallbackId, view = "summary") {
+  const source = row && typeof row === "object" ? row : {};
+  const merged = source.id ? source : { ...source, id: fallbackId };
+  return normalizeGraphNode(merged, view);
+}
+
+function extractDocumentTextForIssueRefs(row) {
+  if (typeof row?.text === "string") {
+    return row.text;
+  }
+  if (row?.data && typeof row.data === "object") {
+    const textNodes = collectTemplateTextNodes(row.data);
+    return textNodes.map((node) => node.text).join("\n");
+  }
+  return "";
+}
+
+function sortIssueRefErrors(errors = []) {
+  return errors.sort((a, b) => {
+    const idCmp = compareIdAsc(a.id, b.id);
+    if (idCmp !== 0) {
+      return idCmp;
+    }
+    const statusCmp = Number(a.status || 0) - Number(b.status || 0);
+    if (statusCmp !== 0) {
+      return statusCmp;
+    }
+    return String(a.error || "").localeCompare(String(b.error || ""));
+  });
+}
+
+function normalizeIssueRefIds(args = {}) {
+  const values = [];
+  if (args.id !== undefined && args.id !== null) {
+    values.push(args.id);
+  }
+  for (const id of ensureStringArray(args.ids, "ids") || []) {
+    values.push(id);
+  }
+  return uniqueStrings(values).sort(compareIdAsc);
+}
+
+async function collectIssueRefsByIds(ctx, ids, options = {}) {
+  const documentIds = uniqueStrings(ids).sort(compareIdAsc);
+  const maxAttempts = Math.max(1, toInteger(options.maxAttempts, 2));
+  const view = normalizeIssueDocumentView(options.view);
+  const issueDomains = normalizeIssueDomains(options.issueDomains);
+  const keyPattern = normalizeIssueKeyPatternSource(options.keyPattern);
+  const concurrency = Math.min(4, Math.max(1, documentIds.length || 1));
+
+  const items = await mapLimit(documentIds, concurrency, async (id) => {
+    try {
+      const infoRes = await ctx.client.call("documents.info", { id }, { maxAttempts });
+      const row = infoRes.body?.data || { id };
+      const text = extractDocumentTextForIssueRefs(row);
+      const extraction = extractIssueRefsFromText(text, {
+        issueDomains,
+        keyPattern,
+      });
+      return {
+        id,
+        ok: true,
+        document: normalizeIssueDocument(row, id, view),
+        refs: extraction.refs,
+        keys: extraction.keys,
+        summary: extraction.summary,
+      };
+    } catch (err) {
+      if (err instanceof ApiError) {
+        return {
+          id,
+          ok: false,
+          error: err.message,
+          status: err.details.status,
+        };
+      }
+      throw err;
+    }
+  });
+
+  const documents = items
+    .filter((item) => item.ok)
+    .sort((a, b) => compareIdAsc(a.id, b.id))
+    .map((item) => ({
+      document: item.document,
+      summary: item.summary,
+      keys: item.keys,
+      refs: item.refs,
+    }));
+  const errors = sortIssueRefErrors(
+    items
+      .filter((item) => !item.ok)
+      .map((item) => ({
+        id: item.id,
+        error: item.error,
+        status: item.status,
+      }))
+  );
+  const allKeys = uniqueStrings(
+    documents.flatMap((item) => item.keys || []).filter(Boolean)
+  ).sort(compareIdAsc);
+  const totalMentions = documents.reduce(
+    (sum, item) => sum + Number(item.summary?.mentionCount || 0),
+    0
+  );
+  const totalRefCount = documents.reduce((sum, item) => sum + Number(item.summary?.refCount || 0), 0);
+  const documentsWithRefs = documents.filter((item) => Number(item.summary?.refCount || 0) > 0).length;
+
+  return {
+    issueDomains,
+    keyPattern,
+    requestedIds: documentIds,
+    documents,
+    errors,
+    summary: {
+      documentCount: documents.length,
+      documentsWithRefs,
+      refCount: totalRefCount,
+      keyCount: allKeys.length,
+      mentionCount: totalMentions,
+    },
+    keys: allKeys,
+  };
+}
+
+async function resolveIssueReportCandidates(ctx, args = {}) {
+  const queries = normalizeProbeQueries(args);
+  if (queries.length === 0) {
+    throw new CliError("documents.issue_ref_report requires args.query or args.queries[]");
+  }
+
+  const limit = Math.max(1, Math.min(100, toInteger(args.limit, 10)));
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const collectionId = args.collectionId ? String(args.collectionId) : "";
+  const queryConcurrency = Math.min(3, Math.max(1, queries.length));
+
+  const perQuery = await mapLimit(queries, queryConcurrency, async (query) => {
+    const hits = [];
+    const errors = [];
+    const baseBody = compactValue({
+      query,
+      collectionId: collectionId || undefined,
+      limit,
+      offset: 0,
+    }) || {};
+
+    try {
+      const titlesRes = await ctx.client.call("documents.search_titles", baseBody, { maxAttempts });
+      const rows = Array.isArray(titlesRes.body?.data) ? titlesRes.body.data : [];
+      for (let i = 0; i < rows.length; i += 1) {
+        const normalized = normalizeProbeTitleHit(rows[i], i);
+        if (normalized) {
+          hits.push(normalized);
+        }
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        errors.push({
+          source: "titles",
+          error: err.message,
+          status: err.details.status,
+        });
+      } else {
+        throw err;
+      }
+    }
+
+    try {
+      const semanticRes = await ctx.client.call(
+        "documents.search",
+        {
+          ...baseBody,
+          snippetMinWords: 16,
+          snippetMaxWords: 24,
+        },
+        { maxAttempts }
+      );
+      const rows = Array.isArray(semanticRes.body?.data) ? semanticRes.body.data : [];
+      for (let i = 0; i < rows.length; i += 1) {
+        const normalized = normalizeProbeSemanticHit(rows[i], i);
+        if (normalized) {
+          hits.push(normalized);
+        }
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        errors.push({
+          source: "semantic",
+          error: err.message,
+          status: err.details.status,
+        });
+      } else {
+        throw err;
+      }
+    }
+
+    const rankedHits = mergeProbeHits(hits, limit);
+    return {
+      query,
+      hitCount: rankedHits.length,
+      hits: rankedHits,
+      errors,
+    };
+  });
+
+  const candidateMap = new Map();
+  for (const [queryIndex, queryResult] of perQuery.entries()) {
+    for (const hit of queryResult.hits) {
+      const existing = candidateMap.get(hit.id);
+      if (!existing) {
+        candidateMap.set(hit.id, {
+          id: hit.id,
+          title: hit.title,
+          collectionId: hit.collectionId,
+          updatedAt: hit.updatedAt,
+          publishedAt: hit.publishedAt,
+          urlId: hit.urlId,
+          ranking: hit.ranking,
+          sources: [...(Array.isArray(hit.sources) ? hit.sources : [])].sort((a, b) => a.localeCompare(b)),
+          queries: [queryResult.query],
+          bestRank: hit.rank,
+          firstQueryIndex: queryIndex,
+        });
+        continue;
+      }
+
+      existing.ranking = Math.max(existing.ranking, hit.ranking);
+      if (compareIsoDesc(existing.updatedAt, hit.updatedAt) > 0) {
+        existing.updatedAt = hit.updatedAt;
+        existing.publishedAt = hit.publishedAt;
+      }
+      if (!existing.queries.includes(queryResult.query)) {
+        existing.queries.push(queryResult.query);
+        existing.queries.sort((a, b) => a.localeCompare(b));
+      }
+      for (const source of hit.sources || []) {
+        if (!existing.sources.includes(source)) {
+          existing.sources.push(source);
+        }
+      }
+      existing.sources.sort((a, b) => a.localeCompare(b));
+      existing.bestRank = Math.min(existing.bestRank, hit.rank);
+      existing.firstQueryIndex = Math.min(existing.firstQueryIndex, queryIndex);
+    }
+  }
+
+  const candidates = Array.from(candidateMap.values())
+    .sort((a, b) => {
+      if (b.ranking !== a.ranking) {
+        return b.ranking - a.ranking;
+      }
+      const updatedCmp = compareIsoDesc(a.updatedAt, b.updatedAt);
+      if (updatedCmp !== 0) {
+        return updatedCmp;
+      }
+      if (a.firstQueryIndex !== b.firstQueryIndex) {
+        return a.firstQueryIndex - b.firstQueryIndex;
+      }
+      if (a.bestRank !== b.bestRank) {
+        return a.bestRank - b.bestRank;
+      }
+      return compareIdAsc(a.id, b.id);
+    })
+    .slice(0, limit)
+    .map((candidate, index) => ({
+      rank: index + 1,
+      id: candidate.id,
+      title: candidate.title,
+      collectionId: candidate.collectionId,
+      updatedAt: candidate.updatedAt,
+      publishedAt: candidate.publishedAt,
+      urlId: candidate.urlId,
+      ranking: candidate.ranking,
+      sources: candidate.sources,
+      queries: candidate.queries,
+    }));
+
+  return {
+    queries,
+    collectionId,
+    limit,
+    perQuery,
+    candidates,
+    candidateIds: candidates.map((item) => item.id),
+  };
+}
+
 async function fetchGraphSourceDocs(ctx, sourceIds, maxAttempts) {
   const ids = uniqueStrings(sourceIds).sort(compareIdAsc);
   const byId = new Map();
@@ -1264,6 +1834,68 @@ async function documentsGraphReportTool(ctx, args = {}) {
       nodes,
       edges,
       errors: sortGraphErrors(errors),
+    },
+  };
+}
+
+async function documentsIssueRefsTool(ctx, args = {}) {
+  const ids = normalizeIssueRefIds(args);
+  if (ids.length === 0) {
+    throw new CliError("documents.issue_refs requires args.id or args.ids[]");
+  }
+
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const view = normalizeIssueDocumentView(args.view);
+
+  const extracted = await collectIssueRefsByIds(ctx, ids, {
+    issueDomains: args.issueDomains,
+    keyPattern: args.keyPattern,
+    maxAttempts,
+    view,
+  });
+
+  return {
+    tool: "documents.issue_refs",
+    profile: ctx.profile.id,
+    result: {
+      requestedIds: extracted.requestedIds,
+      issueDomains: extracted.issueDomains,
+      keyPattern: extracted.keyPattern,
+      ...extracted.summary,
+      keys: extracted.keys,
+      documents: extracted.documents,
+      errors: extracted.errors,
+    },
+  };
+}
+
+async function documentsIssueRefReportTool(ctx, args = {}) {
+  const resolved = await resolveIssueReportCandidates(ctx, args);
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const view = normalizeIssueDocumentView(args.view);
+  const extracted = await collectIssueRefsByIds(ctx, resolved.candidateIds, {
+    issueDomains: args.issueDomains,
+    keyPattern: args.keyPattern,
+    maxAttempts,
+    view,
+  });
+
+  return {
+    tool: "documents.issue_ref_report",
+    profile: ctx.profile.id,
+    result: {
+      queries: resolved.queries,
+      collectionId: resolved.collectionId,
+      limit: resolved.limit,
+      candidateCount: resolved.candidates.length,
+      candidates: resolved.candidates,
+      perQuery: resolved.perQuery,
+      issueDomains: extracted.issueDomains,
+      keyPattern: extracted.keyPattern,
+      ...extracted.summary,
+      keys: extracted.keys,
+      documents: extracted.documents,
+      errors: extracted.errors,
     },
   };
 }
@@ -2338,6 +2970,49 @@ export const EXTENDED_TOOLS = {
       "Prefer view=ids for graph planning and fetch full nodes only for selected IDs.",
     ],
     handler: documentsGraphReportTool,
+  },
+  "documents.issue_refs": {
+    signature:
+      "documents.issue_refs(args: { id?: string; ids?: string[]; issueDomains?: string[]; keyPattern?: string; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description:
+      "Extract deterministic issue references (URL links and key-pattern matches) from one or more documents.",
+    usageExample: {
+      tool: "documents.issue_refs",
+      args: {
+        ids: ["doc-1", "doc-2"],
+        issueDomains: ["jira.example.com", "github.com"],
+        keyPattern: "[A-Z][A-Z0-9]+-\\\\d+",
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Start with view=ids for low-token audits, then re-run selected docs with summary/full views.",
+      "Provide issueDomains to reduce non-issue URL noise and keep outputs focused.",
+      "Tune keyPattern when your tracker uses custom issue key formats.",
+    ],
+    handler: documentsIssueRefsTool,
+  },
+  "documents.issue_ref_report": {
+    signature:
+      "documents.issue_ref_report(args: { query?: string; queries?: string[]; collectionId?: string; issueDomains?: string[]; keyPattern?: string; limit?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description:
+      "Resolve candidate documents from title+semantic search, then extract deterministic issue reference summaries.",
+    usageExample: {
+      tool: "documents.issue_ref_report",
+      args: {
+        queries: ["incident response", "release checklist"],
+        collectionId: "collection-id",
+        issueDomains: ["jira.example.com"],
+        limit: 12,
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Use specific queries to keep the candidate set small and deterministic.",
+      "Scope by collectionId when possible to avoid cross-workspace noise.",
+      "Review perQuery errors before treating missing issue refs as definitive.",
+    ],
+    handler: documentsIssueRefReportTool,
   },
   "documents.import_file": {
     signature:

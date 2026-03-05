@@ -1722,6 +1722,68 @@ test("graph schemas enforce selector constraints and strict bounds", () => {
   );
 });
 
+test("issue reference schemas enforce selector, query, and regex constraints", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.issue_refs", {
+      ids: ["doc-1", "doc-2"],
+      issueDomains: ["jira.example.com"],
+      keyPattern: "[A-Z]+-\\d+",
+      view: "summary",
+      maxAttempts: 2,
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.issue_ref_report", {
+      query: "incident runbook",
+      collectionId: "collection-1",
+      issueDomains: ["jira.example.com", "github.com"],
+      keyPattern: "[A-Z]+-\\d+",
+      limit: 10,
+      view: "ids",
+      maxAttempts: 2,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.issue_refs", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.issue_refs", {
+        ids: [""],
+        keyPattern: "[",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids[0]"));
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.keyPattern"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.issue_ref_report", {
+        queries: [],
+        limit: 101,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.queries"));
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.limit"));
+      return true;
+    }
+  );
+});
+
 test("documents.backlinks wraps documents.list with backlinkDocumentId", async () => {
   const contract = EXTENDED_TOOLS["documents.backlinks"];
   assert.ok(contract);
@@ -2072,6 +2134,336 @@ test("documents.graph_report performs bounded BFS with stable output ordering", 
     ],
     errors: [],
   });
+});
+
+test("documents.issue_refs extracts deterministic issue URLs and keys per document", async () => {
+  const contract = EXTENDED_TOOLS["documents.issue_refs"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        assert.equal(method, "documents.info");
+
+        if (body.id === "doc-1") {
+          return {
+            body: {
+              data: {
+                id: "doc-1",
+                title: "Incident Notes",
+                text:
+                  "Ticket ABC-1 and https://jira.example.com/browse/ABC-2 plus https://github.com/acme/repo/issues/42",
+              },
+            },
+          };
+        }
+        if (body.id === "doc-2") {
+          return {
+            body: {
+              data: {
+                id: "doc-2",
+                title: "Release Checklist",
+                text:
+                  "OPS-2 and https://jira.example.com/browse/OPS-1 plus https://example.com/out-of-scope",
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected id: ${body.id}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    ids: ["doc-2", "doc-1"],
+    issueDomains: ["jira.example.com", "github.com"],
+    keyPattern: "[A-Z]+-\\d+",
+    view: "ids",
+    maxAttempts: 3,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "documents.info",
+      body: { id: "doc-1" },
+      options: { maxAttempts: 3 },
+    },
+    {
+      method: "documents.info",
+      body: { id: "doc-2" },
+      options: { maxAttempts: 3 },
+    },
+  ]);
+
+  assert.equal(output.tool, "documents.issue_refs");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result.requestedIds, ["doc-1", "doc-2"]);
+  assert.deepEqual(output.result.issueDomains, ["github.com", "jira.example.com"]);
+  assert.equal(output.result.keyPattern, "[A-Z]+-\\d+");
+  assert.equal(output.result.documentCount, 2);
+  assert.equal(output.result.documentsWithRefs, 2);
+  assert.equal(output.result.refCount, 5);
+  assert.equal(output.result.keyCount, 4);
+  assert.equal(output.result.mentionCount, 5);
+  assert.deepEqual(output.result.keys, ["ABC-1", "ABC-2", "OPS-1", "OPS-2"]);
+  assert.deepEqual(output.result.errors, []);
+
+  assert.deepEqual(output.result.documents, [
+    {
+      document: {
+        id: "doc-1",
+        title: "Incident Notes",
+      },
+      summary: {
+        refCount: 3,
+        urlRefCount: 2,
+        keyRefCount: 2,
+        keyCount: 2,
+        mentionCount: 3,
+        textLength: 98,
+      },
+      keys: ["ABC-1", "ABC-2"],
+      refs: [
+        {
+          key: "",
+          url: "https://github.com/acme/repo/issues/42",
+          domain: "github.com",
+          sources: ["url"],
+          count: 1,
+        },
+        {
+          key: "ABC-1",
+          url: "",
+          domain: "",
+          sources: ["key_pattern"],
+          count: 1,
+        },
+        {
+          key: "ABC-2",
+          url: "https://jira.example.com/browse/ABC-2",
+          domain: "jira.example.com",
+          sources: ["key_pattern", "url"],
+          count: 1,
+        },
+      ],
+    },
+    {
+      document: {
+        id: "doc-2",
+        title: "Release Checklist",
+      },
+      summary: {
+        refCount: 2,
+        urlRefCount: 1,
+        keyRefCount: 2,
+        keyCount: 2,
+        mentionCount: 2,
+        textLength: 85,
+      },
+      keys: ["OPS-1", "OPS-2"],
+      refs: [
+        {
+          key: "OPS-1",
+          url: "https://jira.example.com/browse/OPS-1",
+          domain: "jira.example.com",
+          sources: ["key_pattern", "url"],
+          count: 1,
+        },
+        {
+          key: "OPS-2",
+          url: "",
+          domain: "",
+          sources: ["key_pattern"],
+          count: 1,
+        },
+      ],
+    },
+  ]);
+});
+
+test("documents.issue_ref_report resolves candidates via search and extracts deterministic refs", async () => {
+  const contract = EXTENDED_TOOLS["documents.issue_ref_report"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+
+        if (method === "documents.search_titles") {
+          return {
+            body: {
+              data: [
+                {
+                  id: "doc-b",
+                  title: "Runbook",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-02T00:00:00.000Z",
+                  publishedAt: "2026-03-02T00:00:00.000Z",
+                  urlId: "runbook",
+                  ranking: 0.8,
+                },
+                {
+                  id: "doc-a",
+                  title: "Incident Notes",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-01T00:00:00.000Z",
+                  publishedAt: "2026-03-01T00:00:00.000Z",
+                  urlId: "incident-notes",
+                  ranking: 0.9,
+                },
+              ],
+            },
+          };
+        }
+
+        if (method === "documents.search") {
+          return {
+            body: {
+              data: [
+                {
+                  document: {
+                    id: "doc-c",
+                    title: "Postmortem",
+                    collectionId: "col-1",
+                    updatedAt: "2026-03-03T00:00:00.000Z",
+                    publishedAt: "2026-03-03T00:00:00.000Z",
+                    urlId: "postmortem",
+                  },
+                  ranking: 0.95,
+                  context: "Contains OPS-77 context",
+                },
+                {
+                  document: {
+                    id: "doc-a",
+                    title: "Incident Notes",
+                    collectionId: "col-1",
+                    updatedAt: "2026-03-04T00:00:00.000Z",
+                    publishedAt: "2026-03-04T00:00:00.000Z",
+                    urlId: "incident-notes",
+                  },
+                  ranking: 0.7,
+                  context: "See ABC-9 context",
+                },
+              ],
+            },
+          };
+        }
+
+        if (method === "documents.info") {
+          if (body.id === "doc-a") {
+            return {
+              body: {
+                data: {
+                  id: "doc-a",
+                  title: "Incident Notes",
+                  text: "Link https://jira.example.com/browse/ABC-9 and plain ABC-8",
+                },
+              },
+            };
+          }
+          if (body.id === "doc-b") {
+            return {
+              body: {
+                data: {
+                  id: "doc-b",
+                  title: "Runbook",
+                  text: "No issue references here",
+                },
+              },
+            };
+          }
+          if (body.id === "doc-c") {
+            return {
+              body: {
+                data: {
+                  id: "doc-c",
+                  title: "Postmortem",
+                  text:
+                    "Track https://jira.example.com/browse/OPS-77 and ignore https://example.com/not-issue",
+                },
+              },
+            };
+          }
+          throw new Error(`Unexpected document id: ${body.id}`);
+        }
+
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    query: "incident runbook",
+    collectionId: "col-1",
+    issueDomains: ["jira.example.com"],
+    keyPattern: "[A-Z]+-\\d+",
+    limit: 3,
+    view: "summary",
+    maxAttempts: 2,
+  });
+
+  assert.deepEqual(calls[0], {
+    method: "documents.search_titles",
+    body: {
+      query: "incident runbook",
+      collectionId: "col-1",
+      limit: 3,
+      offset: 0,
+    },
+    options: { maxAttempts: 2 },
+  });
+  assert.deepEqual(calls[1], {
+    method: "documents.search",
+    body: {
+      query: "incident runbook",
+      collectionId: "col-1",
+      limit: 3,
+      offset: 0,
+      snippetMinWords: 16,
+      snippetMaxWords: 24,
+    },
+    options: { maxAttempts: 2 },
+  });
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === "documents.info")
+      .map((call) => call.body.id)
+      .sort(),
+    ["doc-a", "doc-b", "doc-c"]
+  );
+
+  assert.equal(output.tool, "documents.issue_ref_report");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result.queries, ["incident runbook"]);
+  assert.equal(output.result.collectionId, "col-1");
+  assert.equal(output.result.limit, 3);
+  assert.equal(output.result.candidateCount, 3);
+  assert.deepEqual(
+    output.result.candidates.map((item) => item.id),
+    ["doc-c", "doc-a", "doc-b"]
+  );
+  assert.equal(output.result.documentCount, 3);
+  assert.equal(output.result.documentsWithRefs, 2);
+  assert.equal(output.result.refCount, 3);
+  assert.equal(output.result.keyCount, 3);
+  assert.equal(output.result.mentionCount, 3);
+  assert.deepEqual(output.result.keys, ["ABC-8", "ABC-9", "OPS-77"]);
+  assert.deepEqual(output.result.errors, []);
+  assert.equal(output.result.perQuery.length, 1);
+  assert.equal(output.result.perQuery[0].query, "incident runbook");
+  assert.equal(output.result.perQuery[0].hitCount, 3);
+  assert.deepEqual(output.result.documents.map((item) => item.document.id), ["doc-a", "doc-b", "doc-c"]);
+  assert.equal(output.result.documents[0].summary.refCount, 2);
+  assert.equal(output.result.documents[1].summary.refCount, 0);
+  assert.equal(output.result.documents[2].summary.refCount, 1);
 });
 
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {

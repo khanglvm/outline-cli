@@ -198,6 +198,12 @@ const RPC_WRAPPER_DEFS = [
   { tool: "documents.deleted", method: "documents.deleted", description: "List deleted documents." },
   { tool: "documents.archive", method: "documents.archive", description: "Archive a document.", mutating: true },
   { tool: "documents.restore", method: "documents.restore", description: "Restore a document.", mutating: true },
+  {
+    tool: "documents.permanent_delete",
+    method: "documents.permanent_delete",
+    description: "Permanently delete a document.",
+    mutating: true,
+  },
   { tool: "documents.empty_trash", method: "documents.empty_trash", description: "Empty document trash.", mutating: true },
   { tool: "webhooks.list", method: "webhooks.list", description: "List webhooks." },
   { tool: "webhooks.info", method: "webhooks.info", description: "Get webhook details." },

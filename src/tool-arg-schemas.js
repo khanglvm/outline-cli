@@ -1531,6 +1531,16 @@ export const TOOL_ARG_SCHEMAS = {
       performAction: { type: "boolean" },
     },
   },
+  "documents.permanent_delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
   "documents.empty_trash": {
     properties: {
       maxAttempts: { type: "number", min: 1 },

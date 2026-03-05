@@ -200,6 +200,78 @@ test("users lifecycle wrappers and documents.users wrapper enforce gating and de
   assert.equal(calls.length, 5);
 });
 
+test("documents.permanent_delete wrapper maps endpoint and enforces action gating", async () => {
+  const contract = EXTENDED_TOOLS["documents.permanent_delete"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+  assert.equal(contract.usageExample?.tool, "documents.permanent_delete");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        return {
+          body: {
+            success: true,
+            id: body.id,
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const deleteRes = await contract.handler(ctx, {
+    id: "doc-deleted-1",
+    performAction: true,
+  });
+  const deleteResWithPolicies = await contract.handler(ctx, {
+    id: "doc-deleted-2",
+    includePolicies: true,
+    maxAttempts: 4,
+    performAction: true,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "documents.permanent_delete",
+      body: { id: "doc-deleted-1" },
+      options: { maxAttempts: 1 },
+    },
+    {
+      method: "documents.permanent_delete",
+      body: { id: "doc-deleted-2" },
+      options: { maxAttempts: 4 },
+    },
+  ]);
+  assert.equal(deleteRes.tool, "documents.permanent_delete");
+  assert.equal(deleteRes.profile, "profile-hardening");
+  assert.deepEqual(deleteRes.result, {
+    success: true,
+    id: "doc-deleted-1",
+  });
+  assert.deepEqual(deleteResWithPolicies.result, {
+    success: true,
+    id: "doc-deleted-2",
+    policies: [{ id: "policy-1" }],
+  });
+
+  await assert.rejects(
+    () =>
+      contract.handler(ctx, {
+        id: "doc-deleted-3",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+  assert.equal(calls.length, 2);
+});
+
 test("data_attributes wrappers map to dataAttributes RPC methods with action gating", async () => {
   const methods = [
     "data_attributes.list",
@@ -555,6 +627,43 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+});
+
+test("documents.permanent_delete schema enforces id and action-gate compatible fields", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.permanent_delete", {
+      id: "doc-deleted-1",
+      performAction: true,
+      maxAttempts: 2,
+      view: "summary",
+      includePolicies: true,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.permanent_delete", {
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.permanent_delete", {
+        id: "doc-deleted-1",
+        performAction: "yes",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.performAction"));
       return true;
     }
   );

@@ -397,6 +397,100 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): store long markdown in args file and pass `--args-file`.
 
+## `documents.import`
+
+- Signature: `documents.import(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.import",
+  "args": {
+    "collectionId": "collection-id",
+    "publish": false,
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): this tool is action-gated; keep `performAction=true` only on explicit operator-approved migration runs.
+- Best practice (AI): treat provider-specific payload requirements as deployment-dependent and prefer dry verification (search/list/info) after each import batch.
+
+## `documents.import_file`
+
+- Signature: `documents.import_file(args: { filePath: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; view?: 'summary'|'full'; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.import_file",
+  "args": {
+    "filePath": "./fixtures/legacy-wiki-page.md",
+    "collectionId": "collection-id",
+    "publish": false,
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use suite-owned fixture files and deterministic markers in import payloads so post-import verification and cleanup are scoped and auditable.
+- Best practice (AI): run `file_operations.list/info` after import submission to track async status before downstream remediation.
+
+## `file_operations.list`
+
+- Signature: `file_operations.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "file_operations.list",
+  "args": {
+    "type": "import",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): filter to `type: "import"` and keep payloads compact (`view: "summary"`) when polling migration status loops.
+
+## `file_operations.info`
+
+- Signature: `file_operations.info(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "file_operations.info",
+  "args": {
+    "id": "file-operation-id",
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): hydrate specific operation IDs from `documents.import_file` or `file_operations.list` responses; avoid broad polling when operation IDs are known.
+
+## `file_operations.delete`
+
+- Signature: `file_operations.delete(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "file_operations.delete",
+  "args": {
+    "id": "file-operation-id",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): only delete operation records created by the current controlled migration run; avoid mutating unrelated workspace operation history.
+- Best practice (AI): this tool is action-gated; set `performAction=true` only after confirming the operation record is safe to remove.
+
 ## `documents.update`
 
 - Signature: `documents.update(args: { id: string; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend'; publish?: boolean; collectionId?: string; templateId?: string; fullWidth?: boolean; insightsEnabled?: boolean; view?: 'summary'|'full'; performAction?: boolean })`

@@ -566,7 +566,46 @@ npx ./bin/outline-cli.js invoke documents.info \
 
 Use `strictPlaceholders=true` when unresolved tokens must fail the pipeline instead of creating incomplete documents.
 
-### 15. Capability mapping and test cleanup
+### 15. UC-12: legacy wiki migration playbook (import -> track -> verify -> cleanup)
+
+```bash
+# 1) Confirm import mutation calls are action-gated
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"documents.import","body":{}}'
+# expected: CliError with code ACTION_GATED (performAction required)
+
+# 2) Run endpoint-native import (wrapper shape follows deployment endpoint args)
+npx ./bin/outline-cli.js invoke documents.import \
+  --args '{"collectionId":"<collection-id>","publish":false,"performAction":true,"view":"summary"}'
+
+# 3) Run local file-based import
+npx ./bin/outline-cli.js invoke documents.import_file \
+  --args '{"filePath":"./fixtures/legacy-wiki-page.md","collectionId":"<collection-id>","publish":false,"performAction":true,"view":"summary"}'
+
+# 4) Track async import operation status
+npx ./bin/outline-cli.js invoke file_operations.list \
+  --args '{"type":"import","limit":20,"view":"summary"}'
+npx ./bin/outline-cli.js invoke file_operations.info \
+  --args '{"id":"<file-operation-id>","view":"summary"}'
+
+# 5) Verify imported content with deterministic marker queries
+npx ./bin/outline-cli.js invoke documents.search \
+  --args '{"query":"<migration-marker>","mode":"titles","limit":20,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"ids":["<imported-doc-id-1>","<imported-doc-id-2>"],"view":"summary","concurrency":2}'
+
+# 6) Cleanup suite-owned operation metadata + imported docs
+npx ./bin/outline-cli.js invoke file_operations.delete \
+  --args '{"id":"<file-operation-id>","performAction":true}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"<imported-doc-id>","view":"summary","armDelete":true}'
+npx ./bin/outline-cli.js invoke documents.delete \
+  --args '{"id":"<imported-doc-id>","readToken":"<deleteReadReceipt.token>","performAction":true}'
+```
+
+If wrappers are unavailable in your deployment, use `api.call` with `method` set to the same endpoint and keep the same action-gate discipline (`performAction: true` on mutating calls).
+
+### 16. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -591,6 +630,8 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `documents.list`
 - `documents.info`
 - `documents.create`
+- `documents.import`
+- `documents.import_file`
 - `documents.create_from_template`
 - `documents.update`
 - `documents.safe_update`
@@ -634,6 +675,9 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `comments.update`
 - `comments.delete`
 - `events.list`
+- `file_operations.list`
+- `file_operations.info`
+- `file_operations.delete`
 - `users.list`
 - `users.info`
 - `groups.list`

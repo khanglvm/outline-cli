@@ -336,6 +336,130 @@ function isSkippableTemplateLifecycleError(envelope) {
   return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|template|placeholder/i.test(text);
 }
 
+function isSkippableImportLifecycleError(envelope) {
+  const err = envelope?.error;
+  if (!err || (err.type !== "ApiError" && err.type !== "CliError")) {
+    return false;
+  }
+
+  if (err.type === "CliError" && err.code === "ARG_VALIDATION_FAILED") {
+    return true;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 415, 422, 429, 500, 501, 503].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|import|multipart|file|upload|confluence|provider|validation|unavailable/i.test(text);
+}
+
+function isSkippableFileOperationLifecycleError(envelope) {
+  const err = envelope?.error;
+  if (!err || (err.type !== "ApiError" && err.type !== "CliError")) {
+    return false;
+  }
+
+  if (err.type === "CliError" && err.code === "ARG_VALIDATION_FAILED") {
+    return true;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 422, 501].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|file operation|import|export|unavailable/i.test(text);
+}
+
+function extractFileOperationId(result) {
+  const row = extractResultObject(result);
+  return pickStringId(
+    row?.fileOperationId,
+    row?.operationId,
+    row?.id,
+    result?.fileOperationId,
+    result?.operationId,
+    result?.id,
+    result?.data?.fileOperationId,
+    result?.data?.operationId,
+    result?.data?.id,
+    result?.item?.fileOperationId,
+    result?.item?.operationId,
+    result?.item?.id
+  );
+}
+
+function extractImportedDocumentIds(result) {
+  const ids = new Set();
+
+  const addId = (value) => {
+    if (typeof value === "string" && value.length > 0) {
+      ids.add(value);
+    }
+  };
+
+  const addDocumentNode = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    addId(node.documentId);
+    if (node.document && typeof node.document === "object") {
+      addId(node.document.id);
+    }
+  };
+
+  const directCandidates = [
+    result?.documentId,
+    result?.docId,
+    result?.data?.documentId,
+    result?.data?.docId,
+    result?.item?.documentId,
+    result?.item?.docId,
+    result?.document?.id,
+    result?.data?.document?.id,
+    result?.item?.document?.id,
+  ];
+  for (const candidate of directCandidates) {
+    addId(candidate);
+  }
+
+  const row = extractResultObject(result);
+  addDocumentNode(row);
+  addDocumentNode(row?.data);
+
+  const arrayCandidates = [
+    result?.documentIds,
+    result?.data?.documentIds,
+    result?.item?.documentIds,
+    row?.documentIds,
+    row?.data?.documentIds,
+    result?.documents,
+    result?.data?.documents,
+    result?.item?.documents,
+    row?.documents,
+    row?.data?.documents,
+    extractResultRows(result),
+  ];
+
+  for (const candidate of arrayCandidates) {
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+    for (const item of candidate) {
+      if (typeof item === "string") {
+        addId(item);
+      } else {
+        addDocumentNode(item);
+      }
+    }
+  }
+
+  return Array.from(ids);
+}
+
 function extractPlaceholderKeys(result) {
   const values = [];
 
@@ -595,6 +719,8 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     uc05ShareId: null,
     uc05ShareRevoked: false,
     uc10DocumentIds: [],
+    uc12ImportedDocumentIds: [],
+    uc12FileOperationId: null,
     faqResetCode: null,
     faqOwner: null,
     faqNoHitToken: null,
@@ -3590,6 +3716,218 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       });
     });
 
+    await t.test("UC-12 legacy wiki migration primitives", async (t) => {
+      assert.ok(state.marker, "created test marker is required");
+
+      const importFixturePath = path.join(tmpDir, `${state.marker}-uc12-import.md`);
+      await fs.writeFile(
+        importFixturePath,
+        `# ${state.marker} UC-12 import fixture\n\n` +
+          "Suite-owned legacy wiki migration smoke fixture.\n\n" +
+          `- marker: ${state.marker}\n` +
+          `- generated_at: ${new Date().toISOString()}\n`,
+        "utf8"
+      );
+
+      await t.test("api.call import mutation path is action-gated", async () => {
+        const actionGateErr = runCli([
+          "invoke",
+          "api.call",
+          "--config",
+          configPath,
+          "--result-mode",
+          "inline",
+          "--args",
+          JSON.stringify({
+            method: "documents.import",
+            body: {},
+          }),
+        ], { expectCode: 1, parseJson: false });
+
+        const parsedActionGateErr = JSON.parse(actionGateErr.stderr);
+        assert.equal(parsedActionGateErr.ok, false);
+        assert.equal(parsedActionGateErr.error?.type, "CliError");
+        assert.equal(parsedActionGateErr.error?.code, "ACTION_GATED");
+      });
+
+      await t.test("documents.import_file skip-safe smoke", async (t) => {
+        if (!hasToolContract("documents.import_file")) {
+          t.skip("documents.import_file contract unavailable");
+          return;
+        }
+        if (!state.firstCollectionId) {
+          t.skip("No collection id available for documents.import_file target");
+          return;
+        }
+
+        const importRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.import_file", {
+          filePath: importFixturePath,
+          collectionId: state.firstCollectionId,
+          publish: false,
+          view: "summary",
+          performAction: true,
+        });
+
+        if (importRun.status !== 0) {
+          if (
+            hasCliValidationIssue(importRun.stderrJson, "args.filePath") ||
+            isSkippableImportLifecycleError(importRun.stderrJson)
+          ) {
+            t.diagnostic(`documents.import_file skipped payload: ${importRun.stderr || "<empty stderr>"}`);
+            t.skip("documents.import_file unavailable or unsupported in this deployment");
+            return;
+          }
+          assert.fail(
+            `documents.import_file expected success, got status=${importRun.status}, stderr=${importRun.stderr || "<empty>"}`
+          );
+        }
+
+        const payload = importRun.stdoutJson;
+        assert.ok(payload, `documents.import_file stdout must be valid JSON: ${importRun.stdout}`);
+        assert.equal(payload.tool, "documents.import_file");
+
+        if (payload.result?.success === false) {
+          t.diagnostic(`documents.import_file returned success=false: ${JSON.stringify(payload.result)}`);
+          t.skip("documents.import_file action unavailable in this deployment");
+          return;
+        }
+
+        const fileOperationId = extractFileOperationId(payload.result);
+        if (fileOperationId) {
+          state.uc12FileOperationId = fileOperationId;
+        } else {
+          t.diagnostic(`documents.import_file did not expose file operation id: ${JSON.stringify(payload.result)}`);
+        }
+
+        const importedDocIds = extractImportedDocumentIds(payload.result);
+        if (importedDocIds.length === 0) {
+          t.diagnostic(`documents.import_file did not expose imported document ids: ${JSON.stringify(payload.result)}`);
+        } else {
+          const known = new Set(state.uc12ImportedDocumentIds);
+          for (const docId of importedDocIds) {
+            if (!known.has(docId)) {
+              known.add(docId);
+              state.uc12ImportedDocumentIds.push(docId);
+            }
+          }
+        }
+      });
+
+      await t.test("file_operations list/info/delete skip-safe lifecycle", async (t) => {
+        const hasList = hasToolContract("file_operations.list");
+        const hasInfo = hasToolContract("file_operations.info");
+        const hasDelete = hasToolContract("file_operations.delete");
+
+        if (!hasList && !hasInfo && !hasDelete) {
+          t.skip("file_operations.list/info/delete contracts unavailable");
+          return;
+        }
+
+        let operationId = state.uc12FileOperationId;
+
+        if (hasList) {
+          const listRun = await invokeToolAnyStatus(tmpDir, configPath, "file_operations.list", {
+            type: "import",
+            limit: 20,
+            view: "summary",
+          });
+
+          if (listRun.status !== 0) {
+            if (isSkippableFileOperationLifecycleError(listRun.stderrJson)) {
+              t.diagnostic(`file_operations.list skipped payload: ${listRun.stderr || "<empty stderr>"}`);
+              t.skip("file_operations.list unavailable or unsupported in this deployment");
+              return;
+            }
+            assert.fail(
+              `file_operations.list expected success, got status=${listRun.status}, stderr=${listRun.stderr || "<empty>"}`
+            );
+          }
+
+          const listPayload = listRun.stdoutJson;
+          assert.ok(listPayload, `file_operations.list stdout must be valid JSON: ${listRun.stdout}`);
+          assert.equal(listPayload.tool, "file_operations.list");
+
+          const rows = listPayload.result?.data?.operations ??
+            listPayload.result?.operations ??
+            extractResultRows(listPayload.result) ??
+            [];
+          assert.ok(Array.isArray(rows), "file_operations.list should expose an array payload");
+
+          if (!operationId) {
+            for (const row of rows) {
+              operationId = extractFileOperationId(row);
+              if (operationId) {
+                break;
+              }
+            }
+          }
+        } else {
+          t.diagnostic("file_operations.list contract unavailable; relying on import_file operation id if present");
+        }
+
+        if (hasInfo) {
+          if (!operationId) {
+            t.skip("file_operations.info requires an operation id from documents.import_file or file_operations.list");
+            return;
+          }
+
+          const infoRun = await invokeToolAnyStatus(tmpDir, configPath, "file_operations.info", {
+            id: operationId,
+            view: "summary",
+          });
+
+          if (infoRun.status !== 0) {
+            if (isSkippableFileOperationLifecycleError(infoRun.stderrJson)) {
+              t.diagnostic(`file_operations.info skipped payload: ${infoRun.stderr || "<empty stderr>"}`);
+              t.skip("file_operations.info unavailable or unsupported in this deployment");
+              return;
+            }
+            assert.fail(
+              `file_operations.info expected success, got status=${infoRun.status}, stderr=${infoRun.stderr || "<empty>"}`
+            );
+          }
+
+          const infoPayload = infoRun.stdoutJson;
+          assert.ok(infoPayload, `file_operations.info stdout must be valid JSON: ${infoRun.stdout}`);
+          assert.equal(infoPayload.tool, "file_operations.info");
+          assert.ok(infoPayload.result && typeof infoPayload.result === "object");
+        } else {
+          t.diagnostic("file_operations.info contract unavailable");
+        }
+
+        if (!hasDelete) {
+          t.skip("file_operations.delete contract unavailable");
+          return;
+        }
+        if (!state.uc12FileOperationId) {
+          t.skip("file_operations.delete only runs on suite-created import operation ids");
+          return;
+        }
+
+        const deleteRun = await invokeToolAnyStatus(tmpDir, configPath, "file_operations.delete", {
+          id: state.uc12FileOperationId,
+          performAction: true,
+        });
+
+        if (deleteRun.status !== 0) {
+          if (isSkippableFileOperationLifecycleError(deleteRun.stderrJson)) {
+            t.diagnostic(`file_operations.delete skipped payload: ${deleteRun.stderr || "<empty stderr>"}`);
+            t.skip("file_operations.delete unavailable or unsupported in this deployment");
+            return;
+          }
+          assert.fail(
+            `file_operations.delete expected success, got status=${deleteRun.status}, stderr=${deleteRun.stderr || "<empty>"}`
+          );
+        }
+
+        const deletePayload = deleteRun.stdoutJson;
+        assert.ok(deletePayload, `file_operations.delete stdout must be valid JSON: ${deleteRun.stdout}`);
+        assert.equal(deletePayload.tool, "file_operations.delete");
+        assert.notEqual(deletePayload.result?.success, false, "file_operations.delete should not return success=false");
+        state.uc12FileOperationId = null;
+      });
+    });
+
     await t.test("delete isolated test document", async () => {
       assert.ok(state.createdDocumentId, "created test document id is required");
       const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
@@ -3650,6 +3988,12 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     if (Array.isArray(state.uc11TemplateIds)) {
       for (const templateId of state.uc11TemplateIds) {
         await bestEffortDeleteTemplate(templateId);
+      }
+    }
+
+    if (Array.isArray(state.uc12ImportedDocumentIds)) {
+      for (const docId of state.uc12ImportedDocumentIds) {
+        await bestEffortDeleteDocument(docId);
       }
     }
 

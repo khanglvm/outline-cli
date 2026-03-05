@@ -18,13 +18,21 @@ Prerequisites:
 - An Outline workspace URL
 - An Outline API key (recommended auth mode)
 
-Run from npm without installing:
+Install globally (recommended):
+
+```bash
+npm i -g @khanglvm/outline-cli
+outline-cli --help
+outline-agent --help
+```
+
+Alternative (no global install):
 
 ```bash
 npx @khanglvm/outline-cli --help
 ```
 
-Or install locally in this repo:
+Local development in this repo:
 
 ```bash
 npm install
@@ -34,7 +42,7 @@ node ./bin/outline-cli.js --help
 Set up a profile (API key mode):
 
 ```bash
-npx @khanglvm/outline-cli profile add prod \
+outline-cli profile add prod \
   --base-url https://app.getoutline.com \
   --api-key "$OUTLINE_API_KEY" \
   --set-default
@@ -43,13 +51,13 @@ npx @khanglvm/outline-cli profile add prod \
 Verify auth:
 
 ```bash
-npx @khanglvm/outline-cli profile test prod --pretty
+outline-cli profile test prod --pretty
 ```
 
 Run your first search:
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.search \
+outline-cli invoke documents.search \
   --args '{"query":"oncall runbook","mode":"semantic","limit":5,"view":"summary"}' \
   --pretty
 ```
@@ -59,36 +67,36 @@ npx @khanglvm/outline-cli invoke documents.search \
 Discover tools and contracts:
 
 ```bash
-npx @khanglvm/outline-cli tools list
-npx @khanglvm/outline-cli tools contract documents.search --pretty
-npx @khanglvm/outline-cli tools contract all --result-mode inline
+outline-cli tools list
+outline-cli tools contract documents.search --pretty
+outline-cli tools contract all --result-mode inline
 ```
 
 Read document metadata by id:
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.info \
+outline-cli invoke documents.info \
   --args '{"id":"<document-id>","view":"summary"}'
 ```
 
 Create a document:
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.create \
+outline-cli invoke documents.create \
   --args '{"title":"Release Notes","text":"# Release Notes","publish":false,"view":"summary"}'
 ```
 
 Update a document (mutation requires `performAction: true`):
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.update \
+outline-cli invoke documents.update \
   --args '{"id":"<document-id>","text":"\n\nUpdated by automation.","editMode":"append","performAction":true,"view":"summary"}'
 ```
 
 Batch multiple calls:
 
 ```bash
-npx @khanglvm/outline-cli batch --ops '[
+outline-cli batch --ops '[
   {"tool":"collections.list","args":{"limit":5,"view":"summary"}},
   {"tool":"documents.search","args":{"query":"incident","limit":5,"view":"ids"}}
 ]'
@@ -101,14 +109,14 @@ Delete is guarded by read-token confirmation.
 1. Arm-delete read:
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.info \
+outline-cli invoke documents.info \
   --args '{"id":"<document-id>","armDelete":true,"view":"summary"}'
 ```
 
 2. Copy the returned `deleteReadReceipt.token`, then delete:
 
 ```bash
-npx @khanglvm/outline-cli invoke documents.delete \
+outline-cli invoke documents.delete \
   --args '{"id":"<document-id>","readToken":"<token>","performAction":true}'
 ```
 
@@ -128,9 +136,9 @@ Result mode:
 Temp-file management:
 
 ```bash
-npx @khanglvm/outline-cli tmp list
-npx @khanglvm/outline-cli tmp cat /absolute/path/from/result.json
-npx @khanglvm/outline-cli tmp gc --older-than-hours 24
+outline-cli tmp list
+outline-cli tmp cat /absolute/path/from/result.json
+outline-cli tmp gc --older-than-hours 24
 ```
 
 ## Profile Management
@@ -138,7 +146,7 @@ npx @khanglvm/outline-cli tmp gc --older-than-hours 24
 Add password-mode profile:
 
 ```bash
-npx @khanglvm/outline-cli profile add internal \
+outline-cli profile add internal \
   --base-url https://outline.company.com \
   --auth-type password \
   --username agent@company.com \
@@ -148,17 +156,17 @@ npx @khanglvm/outline-cli profile add internal \
 Select default profile:
 
 ```bash
-npx @khanglvm/outline-cli profile use prod
+outline-cli profile use prod
 ```
 
 Improve AI profile routing metadata:
 
 ```bash
-npx @khanglvm/outline-cli profile annotate prod \
+outline-cli profile annotate prod \
   --description "Production knowledge base" \
   --append-keywords "prod,runbook,incident"
 
-npx @khanglvm/outline-cli profile enrich prod \
+outline-cli profile enrich prod \
   --query "incident escalation process" \
   --titles "Incident Playbook,Escalation Matrix"
 ```
@@ -177,8 +185,8 @@ Use this short operating pattern when an AI agent drives the CLI:
 For structured AI playbooks and scenario guides:
 
 ```bash
-npx @khanglvm/outline-cli tools help ai-skills --view summary
-npx @khanglvm/outline-cli tools help ai-skills --scenario UC-12
+outline-cli tools help ai-skills --view summary
+outline-cli tools help ai-skills --scenario UC-12
 ```
 
 ## Testing (Live Environment)

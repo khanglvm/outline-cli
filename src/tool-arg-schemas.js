@@ -770,6 +770,18 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "templates.extract_placeholders": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
   "templates.create": {
     required: ["title", "data"],
     properties: {
@@ -841,6 +853,48 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
+    },
+  },
+  "documents.create_from_template": {
+    required: ["templateId"],
+    properties: {
+      templateId: { type: "string" },
+      title: { type: "string" },
+      collectionId: { type: "string" },
+      parentDocumentId: { type: "string" },
+      publish: { type: "boolean" },
+      placeholderValues: { type: "object" },
+      strictPlaceholders: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.templateId === "string" && args.templateId.trim().length === 0) {
+        issues.push({ path: "args.templateId", message: "must be a non-empty string" });
+      }
+
+      for (const key of ["title", "collectionId", "parentDocumentId"]) {
+        if (typeof args[key] === "string" && args[key].trim().length === 0) {
+          issues.push({ path: `args.${key}`, message: "must be a non-empty string when provided" });
+        }
+      }
+
+      if (args.placeholderValues && typeof args.placeholderValues === "object" && !Array.isArray(args.placeholderValues)) {
+        for (const [rawKey, rawValue] of Object.entries(args.placeholderValues)) {
+          if (String(rawKey || "").trim().length === 0) {
+            issues.push({
+              path: "args.placeholderValues",
+              message: "must not contain empty keys",
+            });
+          }
+          if (typeof rawValue !== "string") {
+            const keyPath = rawKey ? `args.placeholderValues.${rawKey}` : "args.placeholderValues";
+            issues.push({ path: keyPath, message: "must be a string" });
+          }
+        }
+      }
     },
   },
   "comments.list": {

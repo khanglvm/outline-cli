@@ -321,6 +321,149 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
   };
 }
 
+const PLACEHOLDER_TOKEN_PATTERN = /\{\{\s*([A-Za-z0-9._-]+)\s*\}\}/g;
+
+function normalizePlaceholderValues(value = {}) {
+  if (value === undefined || value === null) {
+    return {};
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CliError("placeholderValues must be an object with string values");
+  }
+
+  const entries = [];
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = String(rawKey || "").trim();
+    if (!key) {
+      throw new CliError("placeholderValues keys must be non-empty strings");
+    }
+    if (typeof rawValue !== "string") {
+      throw new CliError(`placeholderValues.${key} must be a string`);
+    }
+    entries.push([key, rawValue]);
+  }
+
+  entries.sort(([a], [b]) => compareIdAsc(a, b));
+  return Object.fromEntries(entries);
+}
+
+function collectTemplateTextNodes(root, output = [], path = "$") {
+  if (Array.isArray(root)) {
+    for (let i = 0; i < root.length; i += 1) {
+      collectTemplateTextNodes(root[i], output, `${path}[${i}]`);
+    }
+    return output;
+  }
+
+  if (!root || typeof root !== "object") {
+    return output;
+  }
+
+  if (root.type === "text" && typeof root.text === "string") {
+    output.push({
+      path,
+      text: root.text,
+    });
+  }
+
+  for (const key of Object.keys(root).sort((a, b) => a.localeCompare(b))) {
+    if (key === "text") {
+      continue;
+    }
+    collectTemplateTextNodes(root[key], output, `${path}.${key}`);
+  }
+
+  return output;
+}
+
+function sortPlaceholderCountRows(countMap) {
+  return Array.from(countMap.entries())
+    .map(([key, count]) => ({
+      key,
+      count,
+    }))
+    .sort((a, b) => compareIdAsc(a.key, b.key));
+}
+
+function collectPlaceholderStatsFromTexts(texts = []) {
+  const counts = new Map();
+  let tokenCount = 0;
+  let textNodeCount = 0;
+  let scannedCharacterCount = 0;
+
+  for (const rawText of texts) {
+    const text = String(rawText ?? "");
+    textNodeCount += 1;
+    scannedCharacterCount += text.length;
+
+    const pattern = new RegExp(PLACEHOLDER_TOKEN_PATTERN.source, "g");
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const key = String(match[1] || "").trim();
+      if (!key) {
+        continue;
+      }
+      counts.set(key, (counts.get(key) || 0) + 1);
+      tokenCount += 1;
+    }
+  }
+
+  const countsByPlaceholder = sortPlaceholderCountRows(counts);
+  const placeholders = countsByPlaceholder.map((item) => item.key);
+
+  return {
+    placeholders,
+    countsByPlaceholder,
+    tokenCount,
+    textNodeCount,
+    scannedCharacterCount,
+    uniquePlaceholderCount: placeholders.length,
+  };
+}
+
+function replacePlaceholdersInText(text, placeholderValues = {}) {
+  const source = String(text ?? "");
+  const replacedCounts = new Map();
+  const pattern = new RegExp(PLACEHOLDER_TOKEN_PATTERN.source, "g");
+
+  const replacedText = source.replace(pattern, (token, keyRaw) => {
+    const key = String(keyRaw || "").trim();
+    if (!Object.prototype.hasOwnProperty.call(placeholderValues, key)) {
+      return token;
+    }
+    replacedCounts.set(key, (replacedCounts.get(key) || 0) + 1);
+    return placeholderValues[key];
+  });
+
+  const replacedByPlaceholder = sortPlaceholderCountRows(replacedCounts);
+  return {
+    text: replacedText,
+    replacedByPlaceholder,
+    replacedTokenCount: replacedByPlaceholder.reduce((sum, item) => sum + item.count, 0),
+  };
+}
+
+function normalizeTemplatePipelineView(view) {
+  return view === "full" ? "full" : "summary";
+}
+
+function normalizeTemplatePipelineDocument(doc, view = "summary") {
+  if (view === "full") {
+    return doc;
+  }
+
+  return {
+    id: doc?.id ? String(doc.id) : "",
+    title: doc?.title ? String(doc.title) : "",
+    collectionId: doc?.collectionId ? String(doc.collectionId) : "",
+    parentDocumentId: doc?.parentDocumentId ? String(doc.parentDocumentId) : "",
+    updatedAt: doc?.updatedAt ? String(doc.updatedAt) : "",
+    publishedAt: doc?.publishedAt ? String(doc.publishedAt) : "",
+    urlId: doc?.urlId ? String(doc.urlId) : "",
+    emoji: doc?.emoji ? String(doc.emoji) : "",
+  };
+}
+
 function stableObject(value) {
   if (Array.isArray(value)) {
     return value.map((item) => stableObject(item));
@@ -996,6 +1139,203 @@ async function documentsGraphReportTool(ctx, args = {}) {
       nodes,
       edges,
       errors: sortGraphErrors(errors),
+    },
+  };
+}
+
+async function templatesExtractPlaceholdersTool(ctx, args = {}) {
+  const id = String(args.id || "").trim();
+  if (!id) {
+    throw new CliError("templates.extract_placeholders requires args.id");
+  }
+
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const templateRes = await ctx.client.call("templates.info", { id }, { maxAttempts });
+  const template = templateRes.body?.data || {};
+  const textNodes = collectTemplateTextNodes(template?.data || {});
+  const stats = collectPlaceholderStatsFromTexts(textNodes.map((node) => node.text));
+
+  return {
+    tool: "templates.extract_placeholders",
+    profile: ctx.profile.id,
+    result: {
+      id: template?.id ? String(template.id) : id,
+      title: template?.title ? String(template.title) : "",
+      placeholders: stats.placeholders,
+      counts: stats.countsByPlaceholder,
+      meta: {
+        placeholderTokenCount: stats.tokenCount,
+        uniquePlaceholderCount: stats.uniquePlaceholderCount,
+        textNodeCount: stats.textNodeCount,
+        scannedCharacterCount: stats.scannedCharacterCount,
+      },
+    },
+  };
+}
+
+async function documentsCreateFromTemplateTool(ctx, args = {}) {
+  const templateId = String(args.templateId || "").trim();
+  if (!templateId) {
+    throw new CliError("documents.create_from_template requires args.templateId");
+  }
+
+  assertPerformAction(args, {
+    tool: "documents.create_from_template",
+    action: "create and optionally update a document from template",
+  });
+
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 1));
+  const view = normalizeTemplatePipelineView(args.view);
+  const strictPlaceholders = args.strictPlaceholders === true;
+  const publishRequested = args.publish === true;
+  const placeholderValues = normalizePlaceholderValues(args.placeholderValues);
+  const providedPlaceholderKeys = Object.keys(placeholderValues).sort(compareIdAsc);
+  const requiresPlaceholderPass = strictPlaceholders || providedPlaceholderKeys.length > 0;
+  const createBody = compactValue({
+    templateId,
+    title: args.title,
+    collectionId: args.collectionId,
+    parentDocumentId: args.parentDocumentId,
+    publish: requiresPlaceholderPass ? false : publishRequested,
+  }) || {};
+
+  const createRes = await ctx.client.call("documents.create", createBody, { maxAttempts });
+  const createPayload = maybeDropPolicies(createRes.body, !!args.includePolicies);
+  let finalPayload = createPayload;
+  const createdDoc = createRes.body?.data || {};
+  const documentId = createdDoc?.id ? String(createdDoc.id) : "";
+  if (!documentId) {
+    throw new CliError("documents.create_from_template could not resolve created document id");
+  }
+
+  if (!requiresPlaceholderPass) {
+    return {
+      tool: "documents.create_from_template",
+      profile: ctx.profile.id,
+      result: {
+        success: true,
+        strictPlaceholders,
+        publishRequested,
+        published: publishRequested,
+        document: normalizeTemplatePipelineDocument(finalPayload?.data || createdDoc, view),
+        placeholders: {
+          providedKeys: [],
+          unresolved: [],
+          unresolvedCount: 0,
+          totalBefore: 0,
+          totalAfter: 0,
+          replacedByPlaceholder: [],
+        },
+        actions: {
+          create: true,
+          updateText: false,
+          publish: false,
+        },
+      },
+    };
+  }
+
+  let workingDoc = createdDoc;
+  if (typeof workingDoc.text !== "string") {
+    const infoRes = await ctx.client.call("documents.info", { id: documentId }, { maxAttempts });
+    workingDoc = infoRes.body?.data || workingDoc;
+  }
+
+  const sourceText = String(workingDoc?.text ?? "");
+  const before = collectPlaceholderStatsFromTexts([sourceText]);
+  const replaced = replacePlaceholdersInText(sourceText, placeholderValues);
+  const after = collectPlaceholderStatsFromTexts([replaced.text]);
+  const unresolved = [...after.placeholders];
+  const hasUnresolved = unresolved.length > 0;
+
+  let updatedDoc = workingDoc;
+  let textUpdated = false;
+  if (replaced.text !== sourceText) {
+    const updateTextRes = await ctx.client.call(
+      "documents.update",
+      {
+        id: documentId,
+        text: replaced.text,
+        publish: false,
+      },
+      { maxAttempts }
+    );
+    finalPayload = maybeDropPolicies(updateTextRes.body, !!args.includePolicies);
+    updatedDoc = updateTextRes.body?.data || updatedDoc;
+    textUpdated = true;
+  }
+
+  if (strictPlaceholders && hasUnresolved) {
+    return {
+      tool: "documents.create_from_template",
+      profile: ctx.profile.id,
+      result: {
+        success: false,
+        code: "STRICT_PLACEHOLDERS_UNRESOLVED",
+        message: "strictPlaceholders=true and unresolved placeholders remain; document left unpublished",
+        strictPlaceholders: true,
+        publishRequested,
+        published: false,
+        safeBehavior: "left_unpublished_draft",
+        document: normalizeTemplatePipelineDocument(updatedDoc, view),
+        placeholders: {
+          providedKeys: providedPlaceholderKeys,
+          unresolved,
+          unresolvedCount: unresolved.length,
+          totalBefore: before.tokenCount,
+          totalAfter: after.tokenCount,
+          replacedByPlaceholder: replaced.replacedByPlaceholder,
+          beforeCounts: before.countsByPlaceholder,
+          afterCounts: after.countsByPlaceholder,
+        },
+        actions: {
+          create: true,
+          updateText: textUpdated,
+          publish: false,
+        },
+      },
+    };
+  }
+
+  let published = false;
+  let publishApplied = false;
+  if (publishRequested) {
+    const publishRes = await ctx.client.call(
+      "documents.update",
+      {
+        id: documentId,
+        publish: true,
+      },
+      { maxAttempts }
+    );
+    finalPayload = maybeDropPolicies(publishRes.body, !!args.includePolicies);
+    updatedDoc = publishRes.body?.data || updatedDoc;
+    published = true;
+    publishApplied = true;
+  }
+
+  return {
+    tool: "documents.create_from_template",
+    profile: ctx.profile.id,
+    result: {
+      success: true,
+      strictPlaceholders,
+      publishRequested,
+      published,
+      document: normalizeTemplatePipelineDocument(finalPayload?.data || updatedDoc, view),
+      placeholders: {
+        providedKeys: providedPlaceholderKeys,
+        unresolved,
+        unresolvedCount: unresolved.length,
+        totalBefore: before.tokenCount,
+        totalAfter: after.tokenCount,
+        replacedByPlaceholder: replaced.replacedByPlaceholder,
+      },
+      actions: {
+        create: true,
+        updateText: textUpdated,
+        publish: publishApplied,
+      },
     },
   };
 }
@@ -1873,6 +2213,47 @@ export const EXTENDED_TOOLS = {
       "Prefer view=ids for graph planning and fetch full nodes only for selected IDs.",
     ],
     handler: documentsGraphReportTool,
+  },
+  "templates.extract_placeholders": {
+    signature: "templates.extract_placeholders(args: { id: string; maxAttempts?: number })",
+    description: "Extract sorted unique placeholder keys ({{key}}) from template text nodes.",
+    usageExample: {
+      tool: "templates.extract_placeholders",
+      args: {
+        id: "template-id",
+      },
+    },
+    bestPractices: [
+      "Run this before document creation to validate required placeholder keys.",
+      "Use counts to catch repeated placeholders for deterministic pipeline checks.",
+    ],
+    handler: templatesExtractPlaceholdersTool,
+  },
+  "documents.create_from_template": {
+    signature:
+      "documents.create_from_template(args: { templateId: string; title?: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; placeholderValues?: Record<string,string>; strictPlaceholders?: boolean; view?: 'summary'|'full'; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })",
+    description:
+      "Create from template, optionally inject placeholder values, and enforce strict unresolved-placeholder safety.",
+    usageExample: {
+      tool: "documents.create_from_template",
+      args: {
+        templateId: "template-id",
+        title: "Service A - Incident Postmortem",
+        placeholderValues: {
+          service_name: "Service A",
+          owner: "SRE Team",
+        },
+        strictPlaceholders: true,
+        publish: true,
+        performAction: true,
+      },
+    },
+    bestPractices: [
+      "Keep strictPlaceholders=true in automation to prevent publishing unresolved template tokens.",
+      "Provide placeholderValues as exact key-value strings and inspect unresolvedCount on every run.",
+      "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
+    ],
+    handler: documentsCreateFromTemplateTool,
   },
   "comments.review_queue": {
     signature:

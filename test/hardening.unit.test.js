@@ -298,6 +298,256 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
   );
 });
 
+test("templates.extract_placeholders returns deterministic sorted placeholders and counts", async () => {
+  const contract = EXTENDED_TOOLS["templates.extract_placeholders"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        assert.equal(method, "templates.info");
+        return {
+          body: {
+            data: {
+              id: "template-1",
+              title: "Incident Template",
+              data: {
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Owner {{owner}} handles {{service_name}}" }],
+                  },
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "Escalate {{owner}} by {{target_date}}" }],
+                  },
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "No placeholder here" }],
+                  },
+                ],
+              },
+            },
+          },
+        };
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, { id: "template-1" });
+
+  assert.deepEqual(calls, [
+    {
+      method: "templates.info",
+      body: { id: "template-1" },
+      options: { maxAttempts: 2 },
+    },
+  ]);
+  assert.equal(output.tool, "templates.extract_placeholders");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result.id, "template-1");
+  assert.deepEqual(output.result.placeholders, ["owner", "service_name", "target_date"]);
+  assert.deepEqual(output.result.counts, [
+    { key: "owner", count: 2 },
+    { key: "service_name", count: 1 },
+    { key: "target_date", count: 1 },
+  ]);
+  assert.equal(output.result.meta.placeholderTokenCount, 4);
+  assert.equal(output.result.meta.uniquePlaceholderCount, 3);
+  assert.equal(output.result.meta.textNodeCount, 3);
+  assert.equal(typeof output.result.meta.scannedCharacterCount, "number");
+  assert.ok(output.result.meta.scannedCharacterCount > 0);
+});
+
+test("documents.create_from_template enforces strict unresolved placeholders without publishing", async () => {
+  const contract = EXTENDED_TOOLS["documents.create_from_template"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.create") {
+          return {
+            body: {
+              data: {
+                id: "doc-from-template-1",
+                title: "Incident Runbook",
+                collectionId: "collection-1",
+                parentDocumentId: "",
+                updatedAt: "2026-03-05T00:00:00.000Z",
+                publishedAt: "",
+                urlId: "incident-runbook",
+                emoji: ":memo:",
+                text: "Owner {{owner}} handles {{service_name}} by {{target_date}}",
+              },
+            },
+          };
+        }
+
+        if (method === "documents.update") {
+          assert.deepEqual(body, {
+            id: "doc-from-template-1",
+            text: "Owner Alice handles {{service_name}} by {{target_date}}",
+            publish: false,
+          });
+          return {
+            body: {
+              data: {
+                id: "doc-from-template-1",
+                title: "Incident Runbook",
+                collectionId: "collection-1",
+                parentDocumentId: "",
+                updatedAt: "2026-03-05T00:01:00.000Z",
+                publishedAt: "",
+                urlId: "incident-runbook",
+                emoji: ":memo:",
+                text: "Owner Alice handles {{service_name}} by {{target_date}}",
+              },
+            },
+          };
+        }
+
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    templateId: "template-1",
+    title: "Incident Runbook",
+    collectionId: "collection-1",
+    publish: true,
+    placeholderValues: {
+      owner: "Alice",
+    },
+    strictPlaceholders: true,
+    performAction: true,
+    view: "summary",
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "documents.create",
+      body: {
+        templateId: "template-1",
+        title: "Incident Runbook",
+        collectionId: "collection-1",
+        publish: false,
+      },
+      options: { maxAttempts: 1 },
+    },
+    {
+      method: "documents.update",
+      body: {
+        id: "doc-from-template-1",
+        text: "Owner Alice handles {{service_name}} by {{target_date}}",
+        publish: false,
+      },
+      options: { maxAttempts: 1 },
+    },
+  ]);
+  assert.equal(output.tool, "documents.create_from_template");
+  assert.equal(output.profile, "profile-hardening");
+  assert.equal(output.result.success, false);
+  assert.equal(output.result.code, "STRICT_PLACEHOLDERS_UNRESOLVED");
+  assert.equal(output.result.publishRequested, true);
+  assert.equal(output.result.published, false);
+  assert.equal(output.result.safeBehavior, "left_unpublished_draft");
+  assert.deepEqual(output.result.placeholders.providedKeys, ["owner"]);
+  assert.deepEqual(output.result.placeholders.unresolved, ["service_name", "target_date"]);
+  assert.equal(output.result.placeholders.unresolvedCount, 2);
+  assert.deepEqual(output.result.placeholders.replacedByPlaceholder, [{ key: "owner", count: 1 }]);
+  assert.deepEqual(output.result.actions, {
+    create: true,
+    updateText: true,
+    publish: false,
+  });
+});
+
+test("template pipeline schemas enforce strict id and placeholderValues validation", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("templates.extract_placeholders", {
+      id: "template-1",
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.create_from_template", {
+      templateId: "template-1",
+      title: "Incident Runbook",
+      publish: true,
+      placeholderValues: {
+        owner: "Alice",
+        service_name: "Payments API",
+      },
+      strictPlaceholders: true,
+      view: "summary",
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("templates.extract_placeholders", { id: " " }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.create_from_template", {
+        templateId: "",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.templateId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.create_from_template", {
+        templateId: "template-1",
+        placeholderValues: {
+          owner: 42,
+        },
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.placeholderValues.owner"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.create_from_template", {
+        templateId: "template-1",
+        view: "ids",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.view"));
+      return true;
+    }
+  );
+});
+
 test("data_attributes schemas and document dataAttributes alignment validate valid and invalid inputs", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("data_attributes.list", {

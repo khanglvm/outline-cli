@@ -49,6 +49,97 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): call once at session start to confirm identity/workspace.
 
+## `users.list`
+
+- Signature: `users.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "users.list",
+  "args": {
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use `view: "summary"` for roster discovery, then hydrate only selected users with `users.info`.
+- Best practice (AI): apply pagination (`limit`/`offset`) for deterministic audits on larger workspaces.
+
+## `users.info`
+
+- Signature: `users.info(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "users.info",
+  "args": {
+    "id": "user-id",
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): prefer a specific `id` to keep hydration deterministic and cheap.
+- Best practice (AI): use `ids[]` + `concurrency` when hydrating multiple principals.
+
+## `groups.list`
+
+- Signature: `groups.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "groups.list",
+  "args": {
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): discover candidate department/security groups with compact views before membership reads.
+- Best practice (AI): persist resolved group IDs for downstream `groups.info` and permission checks.
+
+## `groups.info`
+
+- Signature: `groups.info(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "groups.info",
+  "args": {
+    "id": "group-id",
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use this as the authoritative group metadata read before grant/revoke steps.
+- Best practice (AI): hydrate multiple IDs in one call when running scheduled audits.
+
+## `groups.memberships` (optional wrapper)
+
+- Signature: `groups.memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "groups.memberships",
+  "args": {
+    "id": "group-id",
+    "limit": 50,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): if this wrapper is unavailable in your build, use `api.call` with `method: "groups.memberships"` as a read-only fallback.
+- Best practice (AI): treat `401/403/404/405` as deployment/permission-dependent and skip gracefully in live smoke checks.
+
 ## `documents.search`
 
 - Signature: `documents.search(args: { query?: string; queries?: string[]; mode?: 'semantic' | 'titles'; limit?: number; offset?: number; collectionId?: string; documentId?: string; userId?: string; statusFilter?: string[]; dateFilter?: 'day'|'week'|'month'|'year'; snippetMinWords?: number; snippetMaxWords?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'summary'|'ids'|'full'; includePolicies?: boolean; merge?: boolean; concurrency?: number; })`
@@ -168,6 +259,25 @@ outline-cli tools contract all --pretty
 - Best practice (AI): use for read-path visibility debugging before requesting permission mutations.
 - Best practice (AI): keep `view` compact unless full user attributes are required.
 
+## `documents.group_memberships`
+
+- Signature: `documents.group_memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.group_memberships",
+  "args": {
+    "id": "doc-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use for department-space exception checks at document scope.
+- Best practice (AI): pair with `documents.memberships` to audit direct-user and group grants together.
+
 ## `collections.memberships`
 
 - Signature: `collections.memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
@@ -186,6 +296,25 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): use collection membership checks when FAQ answers appear missing due to collection-level access.
 - Best practice (AI): page through membership lists with `limit/offset` for deterministic audit loops.
+
+## `collections.group_memberships`
+
+- Signature: `collections.group_memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "collections.group_memberships",
+  "args": {
+    "id": "collection-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use this read path immediately after `collections.add_group` / `collections.remove_group` to verify effective visibility changes.
+- Best practice (AI): keep reads paginated for large department collections.
 
 ## `documents.create`
 

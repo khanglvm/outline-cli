@@ -320,7 +320,52 @@ npx ./bin/outline-cli.js invoke documents.info \
 # expected: API error (forbidden/not_found) after revoke propagation
 ```
 
-### 9. Safe mutation and revision workflows
+### 9. Department-space visibility playbook (UC-06)
+
+Deterministic operator flow for role-based department spaces: `discover -> grant/check -> audit`.
+
+```bash
+# 1) Discover users, groups, and department collection targets
+npx ./bin/outline-cli.js invoke users.list \
+  --args '{"limit":20,"view":"summary"}'
+npx ./bin/outline-cli.js invoke users.info \
+  --args '{"id":"<user-id>","view":"summary"}'
+npx ./bin/outline-cli.js invoke groups.list \
+  --args '{"limit":20,"view":"summary"}'
+npx ./bin/outline-cli.js invoke groups.info \
+  --args '{"id":"<group-id>","view":"summary"}'
+npx ./bin/outline-cli.js invoke collections.list \
+  --args '{"query":"department","limit":20,"view":"summary"}'
+
+# 2) Grant access and verify read-path visibility
+npx ./bin/outline-cli.js invoke groups.add_user \
+  --args '{"id":"<group-id>","userId":"<user-id>","performAction":true}'
+npx ./bin/outline-cli.js invoke collections.add_group \
+  --args '{"id":"<collection-id>","groupId":"<group-id>","performAction":true}'
+npx ./bin/outline-cli.js invoke collections.group_memberships \
+  --args '{"id":"<collection-id>","limit":50,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.group_memberships \
+  --args '{"id":"<doc-id>","limit":50,"view":"summary"}'
+
+# Optional (depends on build): group member listing wrapper
+npx ./bin/outline-cli.js invoke groups.memberships \
+  --args '{"id":"<group-id>","limit":50,"view":"summary"}'
+# Fallback when wrapper is unavailable:
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"groups.memberships","body":{"id":"<group-id>","limit":50,"offset":0}}'
+
+# 3) Audit and revoke when access should be removed
+npx ./bin/outline-cli.js invoke collections.memberships \
+  --args '{"id":"<collection-id>","limit":50,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.memberships \
+  --args '{"id":"<doc-id>","limit":50,"view":"summary"}'
+npx ./bin/outline-cli.js invoke collections.remove_group \
+  --args '{"id":"<collection-id>","groupId":"<group-id>","performAction":true}'
+npx ./bin/outline-cli.js invoke groups.remove_user \
+  --args '{"id":"<group-id>","userId":"<user-id>","performAction":true}'
+```
+
+### 10. Safe mutation and revision workflows
 
 ```bash
 npx ./bin/outline-cli.js invoke documents.safe_update \
@@ -361,7 +406,7 @@ npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","l
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
 
-### 10. UC-03: meeting notes + decision logs
+### 11. UC-03: meeting notes + decision logs
 
 ```bash
 # 1) Turn a canonical meeting-note document into a reusable template
@@ -399,7 +444,7 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 11. Capability mapping and test cleanup
+### 12. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -437,6 +482,12 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `collections.tree`
 - `collections.create`
 - `collections.update`
+- `collections.memberships`
+- `collections.group_memberships`
+- `collections.add_user`
+- `collections.remove_user`
+- `collections.add_group`
+- `collections.remove_group`
 - `revisions.list`
 - `revisions.info`
 - `revisions.restore`
@@ -458,6 +509,21 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `comments.create`
 - `comments.update`
 - `comments.delete`
+- `users.list`
+- `users.info`
+- `groups.list`
+- `groups.info`
+- `groups.create`
+- `groups.update`
+- `groups.delete`
+- `groups.add_user`
+- `groups.remove_user`
+- `documents.memberships`
+- `documents.group_memberships`
+- `documents.add_user`
+- `documents.remove_user`
+- `documents.add_group`
+- `documents.remove_group`
 - `search.expand`
 - `capabilities.map`
 - `documents.cleanup_test`

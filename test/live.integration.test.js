@@ -263,6 +263,21 @@ function isSkippableMembershipError(envelope) {
   return err?.type === "ApiError" && [401, 403, 404, 405].includes(Number(err.status));
 }
 
+function isSkippableDirectoryReadError(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 501].includes(Number(status))) {
+    return true;
+  }
+
+  const text = `${err.message || ""} ${err.body?.error || ""}`.toLowerCase();
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed/i.test(text);
+}
+
 function getApiErrorStatus(envelope) {
   const err = envelope?.error;
   const status = Number(err?.status ?? err?.details?.status);
@@ -373,6 +388,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
   const configPath = path.join(tmpDir, "config.json");
 
   const state = {
+    authUserId: null,
     createdDocumentId: null,
     deletedInTest: false,
     marker: null,
@@ -455,10 +471,12 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       assert.equal(testRes.ok, true);
       assert.ok(testRes.user?.id, "Expected authenticated user id");
       assert.ok(testRes.team?.id, "Expected team id");
+      state.authUserId = testRes.user?.id || null;
 
       const authInfo = await invokeTool(tmpDir, configPath, "auth.info", { view: "summary" });
       assert.equal(authInfo.tool, "auth.info");
       assert.ok(authInfo.result?.data?.user?.id, "auth.info should return user");
+      state.authUserId = state.authUserId || authInfo.result?.data?.user?.id || null;
 
       const capabilities = await invokeTool(tmpDir, configPath, "capabilities.map", {
         includePolicies: true,
@@ -635,6 +653,277 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
       state.createdDocumentId = createDoc?.result?.data?.id;
       assert.ok(state.createdDocumentId, "documents.create must return id");
+    });
+
+    await t.test("UC-06 department spaces read-path visibility checks", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+
+      const hasUsersList = hasToolContract("users.list");
+      const hasUsersInfo = hasToolContract("users.info");
+      const hasGroupsList = hasToolContract("groups.list");
+      const hasGroupsInfo = hasToolContract("groups.info");
+      const hasGroupMemberships = hasToolContract("groups.memberships");
+      const hasCollectionGroupMemberships = hasToolContract("collections.group_memberships");
+      const hasDocumentGroupMemberships = hasToolContract("documents.group_memberships");
+
+      let discoveredUserId = state.authUserId || null;
+      let discoveredGroupId = null;
+
+      await t.test("users.list read checks", async (t) => {
+        if (!hasUsersList) {
+          t.skip("users.list contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "users.list", {
+          limit: 10,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`users.list skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("users.list unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`users.list expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `users.list stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "users.list");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const rows = extractResultRows(payload.result) || [];
+        assert.ok(Array.isArray(rows), "users.list should expose data rows array");
+
+        const firstUser = rows.find((row) => row && typeof row === "object");
+        const userId = pickStringId(firstUser?.id, firstUser?.userId);
+        if (userId) {
+          discoveredUserId = userId;
+        }
+      });
+
+      await t.test("users.info read checks", async (t) => {
+        if (!hasUsersInfo) {
+          t.skip("users.info contract unavailable");
+          return;
+        }
+
+        const targetUserId = discoveredUserId || state.authUserId;
+        if (!targetUserId) {
+          t.skip("No user id available for users.info check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "users.info", {
+          id: targetUserId,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`users.info skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("users.info unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`users.info expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `users.info stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "users.info");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+      });
+
+      await t.test("groups.list read checks", async (t) => {
+        if (!hasGroupsList) {
+          t.skip("groups.list contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "groups.list", {
+          limit: 10,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`groups.list skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("groups.list unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`groups.list expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `groups.list stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "groups.list");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const rows = extractResultRows(payload.result) || [];
+        assert.ok(Array.isArray(rows), "groups.list should expose data rows array");
+
+        const firstGroup = rows.find((row) => row && typeof row === "object");
+        const groupId = pickStringId(firstGroup?.id, firstGroup?.groupId);
+        if (groupId) {
+          discoveredGroupId = groupId;
+        }
+      });
+
+      await t.test("groups.info read checks", async (t) => {
+        if (!hasGroupsInfo) {
+          t.skip("groups.info contract unavailable");
+          return;
+        }
+        if (!discoveredGroupId) {
+          t.skip("No group id available for groups.info check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "groups.info", {
+          id: discoveredGroupId,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`groups.info skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("groups.info unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`groups.info expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `groups.info stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "groups.info");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+      });
+
+      await t.test("groups.memberships read checks", async (t) => {
+        if (!hasGroupMemberships) {
+          t.skip("groups.memberships contract unavailable");
+          return;
+        }
+        if (!discoveredGroupId) {
+          t.skip("No group id available for groups.memberships check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "groups.memberships", {
+          id: discoveredGroupId,
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson) || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`groups.memberships skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("groups.memberships unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`groups.memberships expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `groups.memberships stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "groups.memberships");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const memberships =
+          payload.result?.data?.memberships ??
+          payload.result?.memberships ??
+          extractResultRows(payload.result) ??
+          [];
+        assert.ok(Array.isArray(memberships), "groups.memberships should expose memberships array");
+      });
+
+      await t.test("collections.group_memberships read checks", async (t) => {
+        if (!hasCollectionGroupMemberships) {
+          t.skip("collections.group_memberships contract unavailable");
+          return;
+        }
+        if (!state.firstCollectionId) {
+          t.skip("No collection id available for collections.group_memberships check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "collections.group_memberships", {
+          id: state.firstCollectionId,
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson)) {
+            t.diagnostic(`collections.group_memberships skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("collections.group_memberships unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`collections.group_memberships expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `collections.group_memberships stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "collections.group_memberships");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const memberships =
+          payload.result?.data?.memberships ??
+          payload.result?.memberships ??
+          extractResultRows(payload.result) ??
+          [];
+        assert.ok(Array.isArray(memberships), "collections.group_memberships should expose memberships array");
+      });
+
+      await t.test("documents.group_memberships read checks", async (t) => {
+        if (!hasDocumentGroupMemberships) {
+          t.skip("documents.group_memberships contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.group_memberships", {
+          id: state.createdDocumentId,
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson)) {
+            t.diagnostic(`documents.group_memberships skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.group_memberships unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`documents.group_memberships expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.group_memberships stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.group_memberships");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const memberships =
+          payload.result?.data?.memberships ??
+          payload.result?.memberships ??
+          extractResultRows(payload.result) ??
+          [];
+        assert.ok(Array.isArray(memberships), "documents.group_memberships should expose memberships array");
+      });
     });
 
     await t.test("UC-05 public help docs sharing lifecycle", async (t) => {

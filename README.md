@@ -8,39 +8,24 @@
 - Safe mutation gates (`performAction: true`)
 - Automatic large-result offload to temp files
 
-## Quick Start (Copy for AI Agent)
+## Quick Start
 
-Copy and paste this into your AI agent:
+Install globally:
+
+```bash
+npm i -g @khanglvm/outline-cli
+```
+
+Then run built-in AI onboarding guidance:
+
+```bash
+outline-cli tools help quick-start-agent --view full
+```
+
+Copy this one-liner to your AI agent:
 
 ```text
-You are my setup assistant for outline-cli. I am a non-experienced user.
-
-Do this in order:
-1. Check Node.js version first and confirm it is >= 18.17.
-2. Install outline-cli globally:
-   npm i -g @khanglvm/outline-cli
-3. Run these commands to understand usage and required setup:
-   outline-cli --help
-   outline-cli profile --help
-   outline-cli tools --help
-   outline-cli invoke --help
-4. Explain in simple language what must be configured first.
-5. Ask me follow-up questions for missing values:
-   - Outline base URL
-   - Outline API key
-   - Profile ID (default to `prod` if I do not care)
-6. Guide me to create a default profile:
-   outline-cli profile add <profile-id> --base-url <base-url> --api-key "<api-key>" --set-default
-7. Verify setup:
-   outline-cli profile test <profile-id> --pretty
-8. After setup succeeds, show 2 example use cases in natural language, then run one command for each example.
-   Use `outline-cli invoke ...` examples and explain output in plain language.
-
-Interaction rules:
-- Use short, clear instructions for a beginner.
-- Ask one question at a time when information is missing.
-- If a command fails, explain why and give the exact next command to fix it.
-- Confirm completion of each step before moving on.
+Install outline-cli globally, then run `outline-cli tools help quick-start-agent --view full` and follow that playbook with me step by step.
 ```
 
 ## Day-to-Day Usage
@@ -166,6 +151,7 @@ Use this short operating pattern when an AI agent drives the CLI:
 For structured AI playbooks and scenario guides:
 
 ```bash
+outline-cli tools help quick-start-agent --view full
 outline-cli tools help ai-skills --view summary
 outline-cli tools help ai-skills --scenario UC-12
 ```

@@ -2,6 +2,67 @@ import { CliError } from "./errors.js";
 
 const AI_SKILL_DATA_VERSION = "2026-03-05.1";
 const AI_HELP_SECTION_ID = "ai-skills";
+const QUICK_START_HELP_SECTION_ID = "quick-start-agent";
+const QUICK_START_HELP_VERSION = "2026-03-05.1";
+
+const QUICK_START_AGENT_PLAYBOOK = {
+  title: "outline-cli onboarding for non-expert users",
+  audience: "AI agents assisting non-expert users in terminal setup and first usage.",
+  objective:
+    "Install outline-cli globally, discover required setup commands, guide profile creation with follow-up questions, then demonstrate example use cases in natural language.",
+  steps: [
+    {
+      step: 1,
+      title: "Install outline-cli globally",
+      command: "npm i -g @khanglvm/outline-cli",
+      successCheck: "outline-cli --help",
+    },
+    {
+      step: 2,
+      title: "Inspect command surfaces before asking the user for inputs",
+      commands: [
+        "outline-cli --help",
+        "outline-cli profile --help",
+        "outline-cli tools --help",
+        "outline-cli invoke --help",
+      ],
+    },
+    {
+      step: 3,
+      title: "Ask follow-up questions for missing setup values",
+      questions: [
+        "What is your Outline base URL?",
+        "What is your Outline API key?",
+        "What profile id do you want? (default to prod if user has no preference)",
+      ],
+    },
+    {
+      step: 4,
+      title: "Guide profile setup and set it as default",
+      command:
+        'outline-cli profile add <profile-id> --base-url <base-url> --api-key "<api-key>" --set-default',
+    },
+    {
+      step: 5,
+      title: "Verify profile authentication",
+      command: "outline-cli profile test <profile-id> --pretty",
+    },
+    {
+      step: 6,
+      title: "Show example use cases in plain language and run one command per example",
+      commandTemplates: [
+        'outline-cli invoke documents.search --args \'{"query":"onboarding checklist","mode":"semantic","limit":5,"view":"summary"}\' --pretty',
+        'outline-cli invoke documents.info --args \'{"id":"<document-id>","view":"summary"}\' --pretty',
+      ],
+    },
+  ],
+  interactionRules: [
+    "Use short and clear explanations for beginners.",
+    "Ask one question at a time when required information is missing.",
+    "If a command fails, explain the cause and provide the exact next command.",
+    "Confirm each step completion before moving to the next step.",
+  ],
+};
 
 const AI_GLOBAL_GUIDANCE = {
   principles: [
@@ -630,6 +691,32 @@ function normalizeView(view = "summary") {
   return normalized;
 }
 
+function normalizeQuickStartView(view = "summary") {
+  const normalized = String(view || "summary").toLowerCase();
+  if (normalized !== "summary" && normalized !== "full") {
+    throw new CliError("Invalid view for quick-start-agent help. Expected summary or full.", {
+      code: "QUICK_START_HELP_INVALID_VIEW",
+      view,
+    });
+  }
+  return normalized;
+}
+
+function summarizeQuickStartPlaybook() {
+  return {
+    title: QUICK_START_AGENT_PLAYBOOK.title,
+    audience: QUICK_START_AGENT_PLAYBOOK.audience,
+    objective: QUICK_START_AGENT_PLAYBOOK.objective,
+    steps: QUICK_START_AGENT_PLAYBOOK.steps.map((row) => ({
+      step: row.step,
+      title: row.title,
+      command: row.command || null,
+    })),
+    interactionRules: QUICK_START_AGENT_PLAYBOOK.interactionRules,
+    nextCommand: "outline-cli tools help quick-start-agent --view full",
+  };
+}
+
 function normalizeScenario(input) {
   if (!input) {
     return null;
@@ -747,8 +834,25 @@ export function getAgentSkillHelp(options = {}) {
   };
 }
 
+export function getQuickStartAgentHelp(options = {}) {
+  const view = normalizeQuickStartView(options.view || "summary");
+  return {
+    section: QUICK_START_HELP_SECTION_ID,
+    version: QUICK_START_HELP_VERSION,
+    view,
+    ...(view === "full" ? QUICK_START_AGENT_PLAYBOOK : summarizeQuickStartPlaybook()),
+  };
+}
+
 export function listHelpSections() {
   return [
+    {
+      id: QUICK_START_HELP_SECTION_ID,
+      title: "AI setup onboarding",
+      description:
+        "Copy-ready AI onboarding instructions to install outline-cli, guide profile setup, and demonstrate first use cases.",
+      commandExample: "outline-cli tools help quick-start-agent --view full",
+    },
     {
       id: AI_HELP_SECTION_ID,
       title: "AI instruction skills",

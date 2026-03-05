@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import path from "node:path";
-import { getAgentSkillHelp, listHelpSections } from "./agent-skills.js";
+import { getAgentSkillHelp, getQuickStartAgentHelp, listHelpSections } from "./agent-skills.js";
 import {
   buildProfile,
   defaultConfigPath,
@@ -780,6 +780,29 @@ export async function run(argv = process.argv) {
           merged,
           {
             label: "tools-help-ai-skills",
+            mode: merged.resultMode,
+          }
+        );
+        return;
+      }
+
+      if (
+        sectionName === "quick-start-agent" ||
+        sectionName === "quickstart-agent" ||
+        sectionName === "quickstart" ||
+        sectionName === "setup"
+      ) {
+        await emitOutput(
+          store,
+          {
+            ok: true,
+            ...getQuickStartAgentHelp({
+              view: merged.view,
+            }),
+          },
+          merged,
+          {
+            label: "tools-help-quick-start-agent",
             mode: merged.resultMode,
           }
         );

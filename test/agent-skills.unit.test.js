@@ -1,13 +1,42 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getAgentSkillHelp, listHelpSections } from "../src/agent-skills.js";
+import { getAgentSkillHelp, getQuickStartAgentHelp, listHelpSections } from "../src/agent-skills.js";
 import { CliError } from "../src/errors.js";
 
 test("listHelpSections exposes ai-skills section", () => {
   const sections = listHelpSections();
   assert.ok(Array.isArray(sections));
+  assert.ok(sections.some((section) => section.id === "quick-start-agent"));
   assert.ok(sections.some((section) => section.id === "ai-skills"));
+});
+
+test("getQuickStartAgentHelp returns summary by default", () => {
+  const payload = getQuickStartAgentHelp();
+
+  assert.equal(payload.section, "quick-start-agent");
+  assert.equal(payload.view, "summary");
+  assert.ok(Array.isArray(payload.steps));
+  assert.ok(payload.steps.length >= 4);
+  assert.equal(payload.nextCommand, "outline-cli tools help quick-start-agent --view full");
+});
+
+test("getQuickStartAgentHelp returns full payload and validates view", () => {
+  const payload = getQuickStartAgentHelp({ view: "full" });
+  assert.equal(payload.section, "quick-start-agent");
+  assert.equal(payload.view, "full");
+  assert.ok(Array.isArray(payload.steps));
+  assert.ok(payload.steps.some((row) => row.command === "npm i -g @khanglvm/outline-cli"));
+  assert.ok(Array.isArray(payload.interactionRules));
+
+  assert.throws(
+    () => getQuickStartAgentHelp({ view: "compact" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "QUICK_START_HELP_INVALID_VIEW");
+      return true;
+    }
+  );
 });
 
 test("getAgentSkillHelp returns summary guidance by default", () => {

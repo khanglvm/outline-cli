@@ -40,6 +40,25 @@ function defaultUsageArgs(def) {
   if (def.tool === "documents.empty_trash") {
     return def.mutating ? { performAction: true } : {};
   }
+  if (def.tool === "shares.create") {
+    return {
+      documentId: "document-id",
+      performAction: true,
+    };
+  }
+  if (def.tool === "shares.update") {
+    return {
+      id: "share-id",
+      published: true,
+      performAction: true,
+    };
+  }
+  if (def.tool === "shares.revoke") {
+    return {
+      id: "share-id",
+      performAction: true,
+    };
+  }
   if (
     def.tool.endsWith(".list") ||
     def.tool.endsWith(".archived") ||

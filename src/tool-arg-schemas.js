@@ -569,6 +569,9 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.id && !args.documentId) {
         issues.push({ path: "args.id", message: "or args.documentId is required" });
       }
+      if (args.id && args.documentId) {
+        issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+      }
     },
   },
   "shares.create": {
@@ -584,7 +587,7 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "shares.update": {
-    required: ["id"],
+    required: ["id", "published"],
     properties: {
       id: { type: "string" },
       includeChildDocuments: { type: "boolean" },

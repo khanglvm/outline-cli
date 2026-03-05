@@ -158,6 +158,108 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
   );
 });
 
+test("shares lifecycle schemas enforce deterministic selectors and update requirements", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("shares.list", {
+      query: "help docs",
+      limit: 10,
+      offset: 0,
+      sort: "updatedAt",
+      direction: "DESC",
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
+  assert.doesNotThrow(() => validateToolArgs("shares.info", { documentId: "doc-1" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("shares.create", {
+      documentId: "doc-1",
+      published: true,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("shares.update", {
+      id: "share-1",
+      published: false,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("shares.revoke", { id: "share-1", performAction: true }));
+
+  assert.throws(
+    () => validateToolArgs("shares.list", { limit: 0 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.limit"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.info", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.info", { id: "share-1", documentId: "doc-1" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.create", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.update", { id: "share-1" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.published"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.update", { id: "share-1", published: "true" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.published"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.revoke", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.revoke", { id: "share-1", performAction: "yes" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.performAction"));
+      return true;
+    }
+  );
+});
+
 test("documents.apply_patch accepts optional expectedRevision and validates bounds", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("documents.apply_patch", {

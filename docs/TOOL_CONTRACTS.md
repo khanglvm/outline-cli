@@ -854,6 +854,27 @@ outline-cli tools contract all --pretty
 - Best practice (AI): pass `expectedRevision` to make patch application concurrency-safe; stale revisions deterministically return `code: "revision_conflict"` and skip mutation.
 - Best practice (AI): use unified patches for minimal edits; fallback to replace mode only when full rewrite is intended.
 
+## `documents.apply_patch_safe` (optional wrapper)
+
+- Availability: optional UC-09 helper; contract may be unavailable in older deployments/builds.
+- Signature: `documents.apply_patch_safe(args: { id: string; patch: string; expectedRevision: number; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.apply_patch_safe",
+  "args": {
+    "id": "doc-id",
+    "expectedRevision": 12,
+    "mode": "replace",
+    "patch": "# Title\n\nUpdated body safely"
+  }
+}
+```
+
+- Best practice (AI): read revision from `documents.info` immediately before patching and pass it as `expectedRevision`.
+- Best practice (AI): on `code: "revision_conflict"`, re-read and regenerate patch intentionally instead of auto-retrying stale payloads.
+
 ## `documents.batch_update`
 
 - Signature: `documents.batch_update(args: { updates: Array<{ id: string; expectedRevision?: number; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend' }>; concurrency?: number; continueOnError?: boolean; performAction?: boolean })`

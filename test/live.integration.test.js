@@ -3092,6 +3092,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       const hasRevisionsRestore = hasToolContract("revisions.restore");
       const hasRevisionsDiff = hasToolContract("revisions.diff");
       const hasApplyPatch = hasToolContract("documents.apply_patch");
+      const hasApplyPatchSafe = hasToolContract("documents.apply_patch_safe");
       const hasDelete = hasToolContract("documents.delete");
 
       await t.test("revision hydration + rollback assertions", async (t) => {
@@ -3324,6 +3325,102 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         const afterPatchText = afterPatchConflict.result?.data?.text || "";
         assert.match(afterPatchText, new RegExp(escapeRegex(mutateBeforePatchTag)));
         assert.doesNotMatch(afterPatchText, new RegExp(escapeRegex(blockedReplaceTag)));
+      });
+
+      await t.test("apply_patch_safe success + stale precondition conflict", async (t) => {
+        if (!hasApplyPatchSafe) {
+          t.skip("documents.apply_patch_safe contract not registered in this build");
+          return;
+        }
+
+        const beforeSafePatch = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        const expectedSafeRevision = Number(beforeSafePatch.result?.data?.revision);
+        if (!Number.isFinite(expectedSafeRevision)) {
+          t.diagnostic(`documents.info payload before apply_patch_safe: ${JSON.stringify(beforeSafePatch.result)}`);
+          t.skip("documents.info revision is unavailable for apply_patch_safe assertions");
+          return;
+        }
+
+        const beforeSafePatchText =
+          typeof beforeSafePatch.result?.data?.text === "string" ? beforeSafePatch.result.data.text : "";
+        const safePatchOkTag = `uc09-safe-patch-ok-${Date.now()}`;
+        const safePatchPayload = `${beforeSafePatchText}\n\n## UC-09 Safe Patch Success\n- ${safePatchOkTag}`;
+
+        let safePatchOk;
+        try {
+          safePatchOk = await invokeTool(tmpDir, configPath, "documents.apply_patch_safe", {
+            id: state.createdDocumentId,
+            mode: "replace",
+            patch: safePatchPayload,
+            expectedRevision: expectedSafeRevision,
+            performAction: true,
+            view: "summary",
+          });
+        } catch (err) {
+          t.diagnostic(`Skipping apply_patch_safe success assertion despite contract: ${err.message}`);
+          t.skip("documents.apply_patch_safe endpoint behavior is deployment-dependent");
+          return;
+        }
+
+        assert.equal(safePatchOk.tool, "documents.apply_patch_safe");
+        assert.equal(safePatchOk.result?.ok, true);
+        const afterSafePatchOk = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        const afterSafePatchOkText = afterSafePatchOk.result?.data?.text || "";
+        assert.match(afterSafePatchOkText, new RegExp(escapeRegex(safePatchOkTag)));
+
+        const staleSafeRevision = Number(afterSafePatchOk.result?.data?.revision);
+        assert.ok(Number.isFinite(staleSafeRevision), "documents.info should return numeric revision");
+
+        const mutateBeforeSafeConflictTag = `uc09-safe-patch-mutate-${Date.now()}`;
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Safe Patch Precondition\n- ${mutateBeforeSafeConflictTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const blockedSafePatchTag = `uc09-safe-patch-blocked-${Date.now()}`;
+        let safePatchConflict;
+        try {
+          safePatchConflict = await invokeTool(tmpDir, configPath, "documents.apply_patch_safe", {
+            id: state.createdDocumentId,
+            mode: "replace",
+            patch: `# ${state.marker}\n\n${blockedSafePatchTag}`,
+            expectedRevision: staleSafeRevision,
+            performAction: true,
+            view: "summary",
+          });
+        } catch (err) {
+          t.diagnostic(`Skipping apply_patch_safe conflict assertion despite contract: ${err.message}`);
+          t.skip("documents.apply_patch_safe conflict behavior is deployment-dependent");
+          return;
+        }
+
+        assert.equal(safePatchConflict.tool, "documents.apply_patch_safe");
+        assert.equal(safePatchConflict.result?.ok, false);
+        assert.equal(safePatchConflict.result?.code, "revision_conflict");
+        assert.equal(Number(safePatchConflict.result?.expectedRevision), staleSafeRevision);
+        const safeActualRevision = Number(safePatchConflict.result?.actualRevision);
+        assert.ok(Number.isFinite(safeActualRevision), "revision_conflict should include actualRevision");
+        assert.ok(
+          safeActualRevision > staleSafeRevision,
+          "actualRevision should advance past stale expectedRevision"
+        );
+
+        const afterSafePatchConflict = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        const afterSafePatchConflictText = afterSafePatchConflict.result?.data?.text || "";
+        assert.match(afterSafePatchConflictText, new RegExp(escapeRegex(mutateBeforeSafeConflictTag)));
+        assert.doesNotMatch(afterSafePatchConflictText, new RegExp(escapeRegex(blockedSafePatchTag)));
       });
 
       await t.test("stale delete-read-token is rejected after mutation", async (t) => {

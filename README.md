@@ -454,6 +454,9 @@ npx ./bin/outline-cli.js invoke documents.safe_update \
 npx ./bin/outline-cli.js invoke documents.diff \
   --args '{"id":"doc-id","proposedText":"# Title\n\nUpdated body"}'
 
+npx ./bin/outline-cli.js invoke documents.apply_patch_safe \
+  --args '{"id":"doc-id","mode":"replace","patch":"# Title\n\nReplaced body safely","expectedRevision":12,"performAction":true}'
+# optional wrapper; if unavailable in your build, use documents.apply_patch with expectedRevision
 npx ./bin/outline-cli.js invoke documents.apply_patch \
   --args '{"id":"doc-id","mode":"replace","patch":"# Title\n\nReplaced body","expectedRevision":12,"performAction":true}'
 
@@ -493,7 +496,10 @@ npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisi
 npx ./bin/outline-cli.js invoke documents.info \
   --args '{"id":"postmortem-doc-id","view":"summary"}'
 
-# 2) Apply patch guarded by expectedRevision (precondition)
+# 2) Apply precondition-guarded patch (prefer safe wrapper when available)
+npx ./bin/outline-cli.js invoke documents.apply_patch_safe \
+  --args '{"id":"postmortem-doc-id","mode":"unified","patch":"@@ -1,1 +1,1 @@\n-Old\n+New","expectedRevision":12,"performAction":true,"view":"summary"}'
+# fallback if apply_patch_safe is not registered in your build:
 npx ./bin/outline-cli.js invoke documents.apply_patch \
   --args '{"id":"postmortem-doc-id","mode":"unified","patch":"@@ -1,1 +1,1 @@\n-Old\n+New","expectedRevision":12,"performAction":true,"view":"summary"}'
 
@@ -512,7 +518,7 @@ npx ./bin/outline-cli.js invoke revisions.restore \
   --args '{"id":"postmortem-doc-id","revisionId":"revision-base-id","performAction":true,"view":"summary"}'
 ```
 
-If `documents.apply_patch` receives a stale `expectedRevision`, it returns deterministic `code: "revision_conflict"` and does not mutate the document.
+If `documents.apply_patch` or `documents.apply_patch_safe` receives a stale `expectedRevision`, it returns deterministic `code: "revision_conflict"` and does not mutate the document.
 
 ### 13. UC-03: meeting notes + decision logs
 
@@ -686,6 +692,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `documents.safe_update`
 - `documents.diff`
 - `documents.apply_patch`
+- `documents.apply_patch_safe` (optional wrapper)
 - `documents.batch_update`
 - `documents.plan_batch_update`
 - `documents.apply_batch_plan`

@@ -660,7 +660,41 @@ npx ./bin/outline-cli.js invoke events.list \
 
 If optional UC-13 wrappers are unavailable in your deployment, keep the same sequence with `api.call` and explicit `performAction: true` on every mutating method.
 
-### 17. Capability mapping and test cleanup
+### 17. UC-14: secure webhook/event-driven cleanup flow references
+
+```bash
+# 1) Read webhook subscriptions with raw endpoint fallback
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"webhooks.list","body":{"limit":20}}'
+
+# 2) Preflight destructive document methods safely (without performAction)
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"documents.delete","body":{"id":"<doc-id>"}}'
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"documents.permanent_delete","body":{"id":"<doc-id>"}}'
+# expected: ACTION_GATED (no mutation)
+
+# 3) Worker stage: read latest revision + issue short-lived delete token
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"<doc-id>","view":"summary","armDelete":true}'
+
+# 4) Execute approved delete stage with explicit action gate
+npx ./bin/outline-cli.js invoke documents.delete \
+  --args '{"id":"<doc-id>","readToken":"<deleteReadReceipt.token>","performAction":true}'
+
+# 5) Execute approved permanent-delete stage (optional wrapper)
+npx ./bin/outline-cli.js invoke documents.permanent_delete \
+  --args '{"id":"<doc-id>","readToken":"<fresh-deleteReadReceipt.token>","performAction":true}'
+# fallback when wrapper is unavailable:
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"documents.permanent_delete","body":{"id":"<doc-id>"},"readToken":"<fresh-deleteReadReceipt.token>","performAction":true}'
+
+# 6) Verify audit trail for event-driven cleanup
+npx ./bin/outline-cli.js invoke events.list \
+  --args '{"documentId":"<doc-id>","limit":20,"view":"summary"}'
+```
+
+### 18. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -673,7 +707,8 @@ npx ./bin/outline-cli.js invoke documents.cleanup_test \
 `invoke` now validates tool args before calling the API and returns deterministic machine-readable errors.
 Unknown args are rejected with `ARG_VALIDATION_FAILED` to avoid silent typos in automation.
 Mutating actions are gated by default; pass `"performAction": true` explicitly to execute writes.
-Delete flows require a short-lived read receipt from `documents.info` with `"armDelete": true`.
+Delete flows (`documents.delete`, `documents.permanent_delete`) require a short-lived read receipt from `documents.info` with `"armDelete": true`.
+Read tokens are single-use and must match the same profile + document immediately before each destructive action.
 `capabilities.map` now uses live endpoint evidence + policies (not role-only heuristics) and can return tri-state mutation capabilities (`true|false|null`).
 
 ## Built-in Tools
@@ -697,6 +732,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `documents.plan_batch_update`
 - `documents.apply_batch_plan`
 - `documents.delete`
+- `documents.permanent_delete` (optional wrapper; may be unavailable in older builds)
 - `collections.list`
 - `collections.info`
 - `collections.tree`

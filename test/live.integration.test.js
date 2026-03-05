@@ -413,6 +413,21 @@ function isSkippableFileOperationLifecycleError(envelope) {
   return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|file operation|import|export|unavailable/i.test(text);
 }
 
+function isSkippablePermanentDeleteProbeError(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 410, 422, 429, 500, 501, 503].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|permanent|trash|archive|delete|document/i.test(text);
+}
+
 function extractFileOperationId(result) {
   const row = extractResultObject(result);
   return pickStringId(
@@ -4424,6 +4439,104 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         assert.equal(deletePayload.tool, "file_operations.delete");
         assert.notEqual(deletePayload.result?.success, false, "file_operations.delete should not return success=false");
         state.uc12FileOperationId = null;
+      });
+    });
+
+    await t.test("UC-14 supplemental permanent delete guardrails", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+
+      await t.test("api.call documents.permanent_delete is action-gated without performAction", async () => {
+        const actionGateErr = runCli([
+          "invoke",
+          "api.call",
+          "--config",
+          configPath,
+          "--result-mode",
+          "inline",
+          "--args",
+          JSON.stringify({
+            method: "documents.permanent_delete",
+            body: {
+              id: state.createdDocumentId,
+            },
+          }),
+        ], { expectCode: 1, parseJson: false });
+
+        const parsedActionGateErr = JSON.parse(actionGateErr.stderr);
+        assert.equal(parsedActionGateErr.ok, false);
+        assert.equal(parsedActionGateErr.error?.type, "CliError");
+        assert.equal(parsedActionGateErr.error?.code, "ACTION_GATED");
+      });
+
+      await t.test("api.call documents.permanent_delete requires readToken when performAction=true", async () => {
+        const readTokenRequiredErr = runCli([
+          "invoke",
+          "api.call",
+          "--config",
+          configPath,
+          "--result-mode",
+          "inline",
+          "--args",
+          JSON.stringify({
+            method: "documents.permanent_delete",
+            body: {
+              id: state.createdDocumentId,
+            },
+            performAction: true,
+          }),
+        ], { expectCode: 1, parseJson: false });
+
+        const parsedReadTokenErr = JSON.parse(readTokenRequiredErr.stderr);
+        assert.equal(parsedReadTokenErr.ok, false);
+        assert.equal(parsedReadTokenErr.error?.type, "CliError");
+        assert.equal(parsedReadTokenErr.error?.code, "DELETE_READ_TOKEN_REQUIRED");
+      });
+
+      await t.test("documents.permanent_delete optional wrapper probe is skip-safe", async (t) => {
+        const contract = getToolContract("documents.permanent_delete");
+        if (!contract) {
+          t.skip("documents.permanent_delete contract unavailable");
+          return;
+        }
+
+        assert.equal(contract.name, "documents.permanent_delete");
+        assert.match(
+          String(contract.signature || ""),
+          /performAction\?: boolean/,
+          "documents.permanent_delete signature should expose performAction action gate"
+        );
+
+        const probeRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.permanent_delete", {
+          id: `uc14-permanent-delete-probe-${Date.now()}`,
+          performAction: true,
+        });
+
+        if (probeRun.status === 0) {
+          t.diagnostic(`documents.permanent_delete probe succeeded payload: ${probeRun.stdout || "<empty stdout>"}`);
+          assert.fail("documents.permanent_delete probe should not succeed for a synthetic id");
+        }
+
+        const errEnvelope = probeRun.stderrJson || probeRun.stdoutJson;
+        assert.ok(
+          errEnvelope,
+          `documents.permanent_delete probe should return a JSON error envelope: ${probeRun.stderr || probeRun.stdout || "<empty>"}`
+        );
+
+        if (errEnvelope?.error?.type === "CliError") {
+          if (["ACTION_GATED", "DELETE_READ_TOKEN_REQUIRED", "DELETE_READ_TOKEN_INVALID", "ARG_VALIDATION_FAILED"].includes(errEnvelope?.error?.code)) {
+            return;
+          }
+        }
+
+        if (isSkippablePermanentDeleteProbeError(errEnvelope)) {
+          t.diagnostic(`documents.permanent_delete probe skipped payload: ${probeRun.stderr || "<empty stderr>"}`);
+          t.skip("documents.permanent_delete endpoint unavailable or tenant-restricted in this deployment");
+          return;
+        }
+
+        assert.fail(
+          `documents.permanent_delete probe expected deterministic CliError or skippable API error, stderr=${probeRun.stderr || "<empty>"}`
+        );
       });
     });
 

@@ -914,6 +914,26 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): read first with `documents.info` + `armDelete=true`, then delete with the returned read token and explicit `performAction=true`.
 
+## `documents.permanent_delete` (optional wrapper)
+
+- Signature: `documents.permanent_delete(args: { id: string; readToken: string; performAction?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.permanent_delete",
+  "args": {
+    "id": "doc-id",
+    "readToken": "<token from documents.info armDelete=true>",
+    "performAction": true
+  }
+}
+```
+
+- Availability: optional wrapper; if unavailable in your build, use `api.call` with `method: "documents.permanent_delete"` and pass `readToken` at the top-level `api.call` args.
+- Best practice (AI): treat this as irreversible destruction. Read immediately before execute (`documents.info` + `armDelete=true`) and use the token right away.
+- Best practice (AI): do not reuse read tokens across delete stages. Issue a fresh token for each explicit delete/permanent-delete action.
+
 ## `documents.plan_batch_update`
 
 - Signature: `documents.plan_batch_update(args: { id?: string; ids?: string[]; query?: string; queries?: string[]; collectionId?: string; rules?: Array<{ field?: 'title'|'text'|'both'; find: string; replace?: string; caseSensitive?: boolean; wholeWord?: boolean; all?: boolean }>; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; limitPerQuery?: number; offset?: number; maxDocuments?: number; readConcurrency?: number; includeUnchanged?: boolean; hunkLimit?: number; hunkLineLimit?: number; maxAttempts?: number; })`

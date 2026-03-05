@@ -49,6 +49,86 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): call once at session start to confirm identity/workspace.
 
+## `oauth_clients.list` (optional wrapper)
+
+- Signature: `oauth_clients.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "oauth_clients.list",
+  "args": {
+    "limit": 25,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-19 helper; contract may be unavailable in older deployments/builds.
+- Alias mapping: wrapper `oauth_clients.list` maps to raw endpoint `oauthClients.list`; fallback via `api.call` supports either `method` or `endpoint`.
+- Best practice (AI): start with `view: "summary"` for deterministic discovery, then hydrate only selected ids.
+- Best practice (AI): treat `401/403/404/405/501` as deployment-policy dependent in live compliance smoke checks and skip gracefully.
+
+## `oauth_clients.info` (optional wrapper)
+
+- Signature: `oauth_clients.info(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "oauth_clients.info",
+  "args": {
+    "id": "oauth-client-id",
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-19 helper; contract may be unavailable in older deployments/builds.
+- Alias mapping: wrapper `oauth_clients.info` maps to raw endpoint `oauthClients.info`; fallback via `api.call` supports either `method` or `endpoint`.
+- Best practice (AI): prefer explicit `id` hydration from a prior `oauth_clients.list` call for deterministic reads.
+- Best practice (AI): if no candidate ids are discoverable in a tenant, treat synthetic-id probes as non-destructive contract checks only.
+
+## `oauth_authentications.list` (optional wrapper)
+
+- Signature: `oauth_authentications.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "oauth_authentications.list",
+  "args": {
+    "limit": 25,
+    "view": "summary"
+  }
+}
+```
+
+- Availability: optional UC-19 helper; contract may be unavailable in older deployments/builds.
+- Alias mapping: wrapper `oauth_authentications.list` maps to raw endpoint `oauthAuthentications.list`; fallback via `api.call` supports either `method` or `endpoint`.
+- Best practice (AI): keep list probes read-only and token-efficient (`limit`, `view: "summary"`) for compliance automation.
+- Best practice (AI): for production tenants, avoid broad pagination during routine checks unless explicitly required.
+
+## `oauth_authentications.delete` (optional wrapper)
+
+- Signature: `oauth_authentications.delete(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "oauth_authentications.delete",
+  "args": {
+    "id": "oauth-authentication-id",
+    "performAction": true
+  }
+}
+```
+
+- Availability: optional UC-19 helper; contract may be unavailable in older deployments/builds.
+- Alias mapping: wrapper `oauth_authentications.delete` maps to raw endpoint `oauthAuthentications.delete`; fallback via `api.call` supports either `method` or `endpoint`.
+- Best practice (AI): this tool is action-gated; preflight without `performAction` in compliance tests to validate safe mutation guards.
+- Best practice (AI): in shared/live environments, only delete explicitly scoped test resources and keep synthetic-id probes non-destructive by default.
+
 ## `users.list`
 
 - Signature: `users.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`

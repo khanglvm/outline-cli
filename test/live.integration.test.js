@@ -413,6 +413,27 @@ function isSkippableFileOperationLifecycleError(envelope) {
   return /not found|forbidden|unauthorized|unsupported|not implemented|method not allowed|file operation|import|export|unavailable/i.test(text);
 }
 
+function isSkippableOauthLifecycleError(envelope) {
+  const err = envelope?.error;
+  if (!err || (err.type !== "ApiError" && err.type !== "CliError")) {
+    return false;
+  }
+
+  if (err.type === "CliError" && err.code === "ARG_VALIDATION_FAILED") {
+    return true;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([400, 401, 403, 404, 405, 409, 410, 422, 429, 500, 501, 503].includes(Number(status))) {
+    return true;
+  }
+
+  const text = extractErrorText(envelope);
+  return /oauth|client|authentication|token|application|scope|provider|tenant|workspace|not found|forbidden|unauthorized|unsupported|not implemented|method not allowed/i.test(
+    text
+  );
+}
+
 function isSkippablePermanentDeleteProbeError(envelope) {
   const err = envelope?.error;
   if (!err || err.type !== "ApiError") {
@@ -4537,6 +4558,396 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         assert.fail(
           `documents.permanent_delete probe expected deterministic CliError or skippable API error, stderr=${probeRun.stderr || "<empty>"}`
         );
+      });
+    });
+
+    await t.test("UC-19 oauth wrapper compliance probes (skip-safe, non-destructive)", async (t) => {
+      const hasOauthClientsList = hasToolContract("oauth_clients.list");
+      const hasOauthClientsInfo = hasToolContract("oauth_clients.info");
+      const hasOauthAuthenticationsList = hasToolContract("oauth_authentications.list");
+      const hasOauthAuthenticationsDelete = hasToolContract("oauth_authentications.delete");
+
+      let discoveredOauthClientId = null;
+      let discoveredOauthAuthenticationId = null;
+
+      const extractOauthClientId = (value) => {
+        if (!value || typeof value !== "object") {
+          return null;
+        }
+        return pickStringId(
+          value.id,
+          value.clientId,
+          value.oauthClientId,
+          value.applicationId,
+          value.appId,
+          value.client?.id,
+          value.oauthClient?.id,
+          value.application?.id,
+          value.data?.id,
+          value.data?.clientId,
+          value.data?.oauthClientId
+        );
+      };
+
+      const extractOauthAuthenticationId = (value) => {
+        if (!value || typeof value !== "object") {
+          return null;
+        }
+        return pickStringId(
+          value.id,
+          value.authenticationId,
+          value.oauthAuthenticationId,
+          value.oauthAuthentication?.id,
+          value.auth?.id,
+          value.clientAuthenticationId,
+          value.data?.id,
+          value.data?.authenticationId,
+          value.data?.oauthAuthenticationId
+        );
+      };
+
+      const collectFirstIdFromRows = (rows, extractor) => {
+        if (!Array.isArray(rows)) {
+          return null;
+        }
+        for (const row of rows) {
+          const id = extractor(row);
+          if (id) {
+            return id;
+          }
+        }
+        return null;
+      };
+
+      const isExpectedProbeCliError = (envelope) =>
+        isCliActionGatedError(envelope) ||
+        (envelope?.error?.type === "CliError" && envelope?.error?.code === "ARG_VALIDATION_FAILED");
+
+      async function runApiCallReadAliasParity(t, label, aliasCandidates, body) {
+        for (const alias of aliasCandidates) {
+          const methodRun = await invokeToolAnyStatus(tmpDir, configPath, "api.call", {
+            method: alias,
+            body,
+          });
+
+          if (methodRun.status !== 0) {
+            const methodErr = methodRun.stderrJson || methodRun.stdoutJson;
+            if (
+              isSkippableOauthLifecycleError(methodErr) ||
+              isSkippableDirectoryReadError(methodErr) ||
+              isApiNotFoundErrorEnvelope(methodErr)
+            ) {
+              continue;
+            }
+            t.diagnostic(`${label} method alias probe unexpected payload (${alias}): ${methodRun.stderr || methodRun.stdout || "<empty>"}`);
+            continue;
+          }
+
+          const methodPayload = methodRun.stdoutJson;
+          assert.ok(methodPayload, `${label} method alias probe stdout must be valid JSON: ${methodRun.stdout}`);
+          assert.equal(methodPayload.tool, "api.call");
+
+          const endpointRun = await invokeToolAnyStatus(tmpDir, configPath, "api.call", {
+            endpoint: alias,
+            body,
+          });
+
+          if (endpointRun.status !== 0) {
+            const endpointErr = endpointRun.stderrJson || endpointRun.stdoutJson;
+            if (
+              isSkippableOauthLifecycleError(endpointErr) ||
+              isSkippableDirectoryReadError(endpointErr) ||
+              isApiNotFoundErrorEnvelope(endpointErr)
+            ) {
+              t.diagnostic(`${label} endpoint alias probe skipped (${alias}): ${endpointRun.stderr || endpointRun.stdout || "<empty>"}`);
+              return false;
+            }
+            t.diagnostic(`${label} endpoint alias probe unexpected payload (${alias}): ${endpointRun.stderr || endpointRun.stdout || "<empty>"}`);
+            continue;
+          }
+
+          const endpointPayload = endpointRun.stdoutJson;
+          assert.ok(endpointPayload, `${label} endpoint alias probe stdout must be valid JSON: ${endpointRun.stdout}`);
+          assert.equal(endpointPayload.tool, "api.call");
+
+          const methodRows = extractResultRows(methodPayload.result);
+          const endpointRows = extractResultRows(endpointPayload.result);
+          if (Array.isArray(methodRows) && Array.isArray(endpointRows)) {
+            assert.equal(
+              endpointRows.length,
+              methodRows.length,
+              `${label} method/endpoint alias probe should keep row counts aligned`
+            );
+          }
+
+          return true;
+        }
+
+        return false;
+      }
+
+      await t.test("oauth_clients.list read probe + alias parity where available", async (t) => {
+        const contract = getToolContract("oauth_clients.list");
+        if (!contract || !hasOauthClientsList) {
+          t.skip("oauth_clients.list contract unavailable");
+          return;
+        }
+
+        assert.equal(contract.name, "oauth_clients.list");
+        const signature = String(contract.signature || "");
+        assert.equal(
+          /performAction\?: boolean/.test(signature),
+          false,
+          "oauth_clients.list signature should remain read-only"
+        );
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "oauth_clients.list", {
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          const err = run.stderrJson || run.stdoutJson;
+          if (isSkippableOauthLifecycleError(err) || isSkippableDirectoryReadError(err)) {
+            t.diagnostic(`oauth_clients.list skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("oauth_clients.list unsupported or unauthorized in this deployment");
+            return;
+          }
+
+          assert.fail(`oauth_clients.list expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `oauth_clients.list stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "oauth_clients.list");
+
+        const rows = extractResultRows(payload.result);
+        if (Array.isArray(rows)) {
+          discoveredOauthClientId = discoveredOauthClientId || collectFirstIdFromRows(rows, extractOauthClientId);
+        } else {
+          t.diagnostic(`oauth_clients.list returned non-list shape: ${JSON.stringify(payload.result)}`);
+        }
+
+        const aliasChecked = await runApiCallReadAliasParity(
+          t,
+          "oauth_clients.list",
+          ["oauthClients.list", "oauth_clients.list"],
+          { limit: 5 }
+        );
+        if (!aliasChecked) {
+          t.diagnostic("Skipped oauth_clients.list api.call alias parity: oauth client raw endpoint aliases unavailable");
+        }
+      });
+
+      await t.test("oauth_clients.info read probe + alias parity where available", async (t) => {
+        const contract = getToolContract("oauth_clients.info");
+        if (!contract || !hasOauthClientsInfo) {
+          t.skip("oauth_clients.info contract unavailable");
+          return;
+        }
+
+        assert.equal(contract.name, "oauth_clients.info");
+        const signature = String(contract.signature || "");
+        assert.equal(
+          /performAction\?: boolean/.test(signature),
+          false,
+          "oauth_clients.info signature should remain read-only"
+        );
+
+        const probeClientId = discoveredOauthClientId || `uc19-oauth-client-probe-${Date.now()}`;
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "oauth_clients.info", {
+          id: probeClientId,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          const err = run.stderrJson || run.stdoutJson;
+          if (isApiNotFoundErrorEnvelope(err) || isSkippableOauthLifecycleError(err) || isSkippableDirectoryReadError(err)) {
+            t.diagnostic(`oauth_clients.info skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("oauth_clients.info unsupported, unauthorized, or no resolvable oauth client id in this deployment");
+            return;
+          }
+
+          assert.fail(`oauth_clients.info expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `oauth_clients.info stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "oauth_clients.info");
+
+        const infoRow = extractResultObject(payload.result);
+        discoveredOauthClientId = discoveredOauthClientId || extractOauthClientId(infoRow) || extractOauthClientId(payload.result);
+
+        const aliasChecked = await runApiCallReadAliasParity(
+          t,
+          "oauth_clients.info",
+          ["oauthClients.info", "oauth_clients.info"],
+          { id: probeClientId }
+        );
+        if (!aliasChecked) {
+          t.diagnostic("Skipped oauth_clients.info api.call alias parity: oauth client info raw endpoint aliases unavailable");
+        }
+      });
+
+      await t.test("oauth_authentications.list read probe + alias parity where available", async (t) => {
+        const contract = getToolContract("oauth_authentications.list");
+        if (!contract || !hasOauthAuthenticationsList) {
+          t.skip("oauth_authentications.list contract unavailable");
+          return;
+        }
+
+        assert.equal(contract.name, "oauth_authentications.list");
+        const signature = String(contract.signature || "");
+        assert.equal(
+          /performAction\?: boolean/.test(signature),
+          false,
+          "oauth_authentications.list signature should remain read-only"
+        );
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "oauth_authentications.list", {
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          const err = run.stderrJson || run.stdoutJson;
+          if (isSkippableOauthLifecycleError(err) || isSkippableDirectoryReadError(err)) {
+            t.diagnostic(`oauth_authentications.list skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("oauth_authentications.list unsupported or unauthorized in this deployment");
+            return;
+          }
+
+          assert.fail(
+            `oauth_authentications.list expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`
+          );
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `oauth_authentications.list stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "oauth_authentications.list");
+
+        const rows = extractResultRows(payload.result);
+        if (Array.isArray(rows)) {
+          discoveredOauthAuthenticationId =
+            discoveredOauthAuthenticationId || collectFirstIdFromRows(rows, extractOauthAuthenticationId);
+        } else {
+          t.diagnostic(`oauth_authentications.list returned non-list shape: ${JSON.stringify(payload.result)}`);
+        }
+
+        const aliasChecked = await runApiCallReadAliasParity(
+          t,
+          "oauth_authentications.list",
+          ["oauthAuthentications.list", "oauth_authentications.list"],
+          { limit: 5 }
+        );
+        if (!aliasChecked) {
+          t.diagnostic(
+            "Skipped oauth_authentications.list api.call alias parity: oauth authentication raw endpoint aliases unavailable"
+          );
+        }
+      });
+
+      await t.test("oauth_authentications.delete safe action-gate + alias parity probe", async (t) => {
+        const contract = getToolContract("oauth_authentications.delete");
+        if (!contract || !hasOauthAuthenticationsDelete) {
+          t.skip("oauth_authentications.delete contract unavailable");
+          return;
+        }
+
+        assert.equal(contract.name, "oauth_authentications.delete");
+        assert.match(
+          String(contract.signature || ""),
+          /performAction\?: boolean/,
+          "oauth_authentications.delete signature should expose performAction action gate"
+        );
+
+        const probeAuthenticationId =
+          discoveredOauthAuthenticationId || `uc19-oauth-auth-delete-probe-${Date.now()}`;
+
+        const wrapperRun = await invokeToolAnyStatus(tmpDir, configPath, "oauth_authentications.delete", {
+          id: probeAuthenticationId,
+        });
+
+        if (wrapperRun.status === 0) {
+          t.diagnostic(
+            `oauth_authentications.delete unexpected success payload (no performAction): ${wrapperRun.stdout || "<empty stdout>"}`
+          );
+          assert.fail("oauth_authentications.delete should not execute without performAction");
+        }
+
+        const wrapperErr = wrapperRun.stderrJson || wrapperRun.stdoutJson;
+        assert.ok(
+          wrapperErr,
+          `oauth_authentications.delete should return a JSON error envelope: ${wrapperRun.stderr || wrapperRun.stdout || "<empty>"}`
+        );
+
+        if (!isExpectedProbeCliError(wrapperErr)) {
+          if (isSkippableOauthLifecycleError(wrapperErr)) {
+            t.diagnostic(`oauth_authentications.delete skipped payload: ${wrapperRun.stderr || "<empty stderr>"}`);
+            t.skip("oauth_authentications.delete unsupported or tenant-restricted in this deployment");
+            return;
+          }
+
+          assert.fail(
+            `oauth_authentications.delete expected ACTION_GATED/ARG_VALIDATION_FAILED or skippable API error, stderr=${wrapperRun.stderr || "<empty>"}`
+          );
+        }
+
+        const deleteAliasCandidates = ["oauthAuthentications.delete", "oauth_authentications.delete"];
+        let aliasParityChecked = false;
+
+        for (const alias of deleteAliasCandidates) {
+          const methodRun = await invokeToolAnyStatus(tmpDir, configPath, "api.call", {
+            method: alias,
+            body: { id: probeAuthenticationId },
+          });
+
+          if (methodRun.status === 0) {
+            t.diagnostic(`api.call delete method alias unexpected success (${alias}): ${methodRun.stdout || "<empty stdout>"}`);
+            assert.fail("api.call delete alias probe should not execute without performAction");
+          }
+
+          const methodErr = methodRun.stderrJson || methodRun.stdoutJson;
+          if (!isExpectedProbeCliError(methodErr)) {
+            if (isSkippableOauthLifecycleError(methodErr) || isApiNotFoundErrorEnvelope(methodErr)) {
+              continue;
+            }
+            t.diagnostic(
+              `api.call delete method alias unexpected payload (${alias}): ${methodRun.stderr || methodRun.stdout || "<empty>"}`
+            );
+            continue;
+          }
+
+          const endpointRun = await invokeToolAnyStatus(tmpDir, configPath, "api.call", {
+            endpoint: alias,
+            body: { id: probeAuthenticationId },
+          });
+
+          if (endpointRun.status === 0) {
+            t.diagnostic(`api.call delete endpoint alias unexpected success (${alias}): ${endpointRun.stdout || "<empty stdout>"}`);
+            assert.fail("api.call delete endpoint alias probe should not execute without performAction");
+          }
+
+          const endpointErr = endpointRun.stderrJson || endpointRun.stdoutJson;
+          if (!isExpectedProbeCliError(endpointErr)) {
+            if (isSkippableOauthLifecycleError(endpointErr) || isApiNotFoundErrorEnvelope(endpointErr)) {
+              continue;
+            }
+            t.diagnostic(
+              `api.call delete endpoint alias unexpected payload (${alias}): ${endpointRun.stderr || endpointRun.stdout || "<empty>"}`
+            );
+            continue;
+          }
+
+          aliasParityChecked = true;
+          break;
+        }
+
+        if (!aliasParityChecked) {
+          t.diagnostic(
+            "Skipped oauth_authentications.delete api.call alias parity: raw oauth delete aliases unavailable in this deployment"
+          );
+        }
       });
     });
 

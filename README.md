@@ -694,7 +694,39 @@ npx ./bin/outline-cli.js invoke events.list \
   --args '{"documentId":"<doc-id>","limit":20,"view":"summary"}'
 ```
 
-### 18. Capability mapping and test cleanup
+### 18. UC-19: OAuth lifecycle compliance checks (non-destructive probes)
+
+Use this together with UC-14 for a complete compliance automation path covering permanent-delete guardrails and OAuth lifecycle controls.
+
+```bash
+# 1) List OAuth clients (optional wrapper)
+npx ./bin/outline-cli.js invoke oauth_clients.list \
+  --args '{"limit":25,"view":"summary"}'
+
+# 2) Hydrate a selected OAuth client id
+npx ./bin/outline-cli.js invoke oauth_clients.info \
+  --args '{"id":"<oauth-client-id>","view":"summary"}'
+
+# 3) List OAuth authentications
+npx ./bin/outline-cli.js invoke oauth_authentications.list \
+  --args '{"limit":25,"view":"summary"}'
+
+# 4) Preflight delete guard safely (no mutation expected)
+npx ./bin/outline-cli.js invoke oauth_authentications.delete \
+  --args '{"id":"<oauth-authentication-id>"}'
+# expected: ACTION_GATED or ARG_VALIDATION_FAILED (no deletion)
+
+# 5) Raw alias parity check (method/endpoint) without performAction
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"method":"oauthAuthentications.delete","body":{"id":"<oauth-authentication-id>"}}'
+npx ./bin/outline-cli.js invoke api.call \
+  --args '{"endpoint":"oauthAuthentications.delete","body":{"id":"<oauth-authentication-id>"}}'
+# expected: ACTION_GATED or ARG_VALIDATION_FAILED (no deletion)
+```
+
+If OAuth wrappers are unavailable in your deployment, keep the same sequence with `api.call` and the raw aliases (`oauthClients.*`, `oauthAuthentications.*`).
+
+### 19. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -709,11 +741,16 @@ Unknown args are rejected with `ARG_VALIDATION_FAILED` to avoid silent typos in 
 Mutating actions are gated by default; pass `"performAction": true` explicitly to execute writes.
 Delete flows (`documents.delete`, `documents.permanent_delete`) require a short-lived read receipt from `documents.info` with `"armDelete": true`.
 Read tokens are single-use and must match the same profile + document immediately before each destructive action.
+OAuth authentication deletes are action-gated as well; keep compliance probes non-destructive unless explicit delete approval is granted.
 `capabilities.map` now uses live endpoint evidence + policies (not role-only heuristics) and can return tri-state mutation capabilities (`true|false|null`).
 
 ## Built-in Tools
 
 - `auth.info`
+- `oauth_clients.list` (optional UC-19 helper; may be unavailable in older builds)
+- `oauth_clients.info` (optional UC-19 helper; may be unavailable in older builds)
+- `oauth_authentications.list` (optional UC-19 helper; may be unavailable in older builds)
+- `oauth_authentications.delete` (optional UC-19 helper; may be unavailable in older builds)
 - `documents.search`
 - `documents.resolve`
 - `search.research`

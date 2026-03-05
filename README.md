@@ -399,7 +399,45 @@ npx ./bin/outline-cli.js invoke data_attributes.create \
   --args '{"name":"linearIssueKey","performAction":true,"view":"summary"}'
 ```
 
-### 11. Safe mutation and revision workflows
+### 11. Cross-linked knowledge graph playbook (UC-10)
+
+Deterministic loop: `seed linked docs -> backlinks -> neighbors/report -> hydrate bounded nodes`.
+
+```bash
+# 1) Seed linked graph docs (A <- B, A <- C, plus A -> B)
+npx ./bin/outline-cli.js invoke documents.create \
+  --args '{"title":"uc10-A","text":"# uc10-A","publish":false,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"<doc-a-id>","view":"full"}'
+npx ./bin/outline-cli.js invoke documents.create \
+  --args '{"title":"uc10-B","text":"# uc10-B\n\n- Link to A: [uc10-A](<doc-a-url>)","publish":false,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"<doc-b-id>","view":"full"}'
+npx ./bin/outline-cli.js invoke documents.update \
+  --args '{"id":"<doc-a-id>","text":"\n\n- Link to B: [uc10-B](<doc-b-url>)","editMode":"append","performAction":true,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.create \
+  --args '{"title":"uc10-C","text":"# uc10-C\n\n- Link to A: [uc10-A](<doc-a-url>)\n- Link to B: [uc10-B](<doc-b-url>)","publish":false,"view":"summary"}'
+
+# 2) Backlink referrers for seed doc A (preferred wrapper + fallback)
+npx ./bin/outline-cli.js invoke documents.backlinks \
+  --args '{"id":"<doc-a-id>","limit":50,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.list \
+  --args '{"backlinkDocumentId":"<doc-a-id>","limit":50,"view":"summary"}'
+
+# 3) Expand immediate graph neighbors (normalized edges)
+npx ./bin/outline-cli.js invoke documents.graph_neighbors \
+  --args '{"id":"<doc-a-id>","includeBacklinks":true,"includeSearchNeighbors":false,"limitPerSource":10,"view":"summary"}'
+
+# 4) Generate bounded traversal report for automation-safe fan-out
+npx ./bin/outline-cli.js invoke documents.graph_report \
+  --args '{"seedIds":["<doc-a-id>"],"depth":1,"maxNodes":25,"includeBacklinks":true,"includeSearchNeighbors":false}'
+
+# 5) Hydrate only bounded node ids from the report for downstream processing
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"ids":["<node-id-1>","<node-id-2>"],"view":"summary","concurrency":2}'
+```
+
+### 12. Safe mutation and revision workflows
 
 ```bash
 npx ./bin/outline-cli.js invoke documents.safe_update \
@@ -468,7 +506,7 @@ npx ./bin/outline-cli.js invoke revisions.restore \
 
 If `documents.apply_patch` receives a stale `expectedRevision`, it returns deterministic `code: "revision_conflict"` and does not mutate the document.
 
-### 12. UC-03: meeting notes + decision logs
+### 13. UC-03: meeting notes + decision logs
 
 ```bash
 # 1) Turn a canonical meeting-note document into a reusable template
@@ -506,7 +544,7 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 13. Capability mapping and test cleanup
+### 14. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \

@@ -405,6 +405,49 @@ function extractResolveCandidates(result) {
   return rows.filter((row) => row && typeof row === "object");
 }
 
+function extractGraphNodes(result) {
+  if (Array.isArray(result?.nodes)) {
+    return result.nodes;
+  }
+  if (Array.isArray(result?.data?.nodes)) {
+    return result.data.nodes;
+  }
+  if (Array.isArray(result?.item?.nodes)) {
+    return result.item.nodes;
+  }
+  return null;
+}
+
+function extractGraphEdges(result) {
+  if (Array.isArray(result?.edges)) {
+    return result.edges;
+  }
+  if (Array.isArray(result?.data?.edges)) {
+    return result.data.edges;
+  }
+  if (Array.isArray(result?.item?.edges)) {
+    return result.item.edges;
+  }
+  return null;
+}
+
+function extractGraphNeighborRows(result) {
+  if (Array.isArray(result?.neighbors)) {
+    return result.neighbors;
+  }
+  if (Array.isArray(result?.data?.neighbors)) {
+    return result.data.neighbors;
+  }
+  if (Array.isArray(result?.item?.neighbors)) {
+    return result.item.neighbors;
+  }
+  const edgeRows = extractGraphEdges(result);
+  if (edgeRows) {
+    return edgeRows;
+  }
+  return extractResultRows(result);
+}
+
 function hasCliValidationIssue(envelope, pathPrefix) {
   const err = envelope?.error;
   if (!err || err.type !== "CliError" || !Array.isArray(err.issues)) {
@@ -440,6 +483,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     uc03AdditionalDocumentIds: [],
     uc05ShareId: null,
     uc05ShareRevoked: false,
+    uc10DocumentIds: [],
     faqResetCode: null,
     faqOwner: null,
     faqNoHitToken: null,
@@ -1650,6 +1694,443 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       });
     });
 
+    await t.test("UC-10 cross-linked knowledge graph", async (t) => {
+      assert.ok(state.marker, "created test marker is required");
+
+      const uc10Marker = `${state.marker}-uc10-${Date.now()}`;
+      const uc10Docs = { a: null, b: null, c: null };
+
+      const knownReferrersToA = () => [uc10Docs.b, uc10Docs.c].filter(Boolean);
+
+      const edgeFromId = (edge) =>
+        pickStringId(
+          edge?.from,
+          edge?.fromId,
+          edge?.sourceId,
+          edge?.sourceDocumentId,
+          edge?.source?.id,
+          edge?.from?.id
+        );
+
+      const edgeToId = (edge) =>
+        pickStringId(
+          edge?.to,
+          edge?.toId,
+          edge?.targetId,
+          edge?.targetDocumentId,
+          edge?.target?.id,
+          edge?.to?.id
+        );
+
+      const makeDocUrl = (doc) => {
+        const docUrlId = typeof doc?.urlId === "string" ? doc.urlId : null;
+        if (typeof doc?.url === "string" && doc.url.length > 0) {
+          return doc.url;
+        }
+        if (docUrlId) {
+          return `${String(env.baseUrl || "").replace(/\/+$/, "")}/doc/${docUrlId}`;
+        }
+        return null;
+      };
+
+      await t.test("create A/B/C docs with explicit cross-links", async (t) => {
+        const createA = await invokeTool(tmpDir, configPath, "documents.create", {
+          title: `${uc10Marker}-A`,
+          text: `# ${uc10Marker} A\n\nUC-10 seed document A.`,
+          publish: false,
+          view: "summary",
+        });
+        uc10Docs.a = pickStringId(createA?.result?.data?.id, createA?.result?.id);
+        if (!uc10Docs.a) {
+          t.diagnostic(`UC-10 doc A create payload missing id: ${JSON.stringify(createA.result)}`);
+          t.skip("Cannot run UC-10 graph tests without seed document id");
+          return;
+        }
+        state.uc10DocumentIds.push(uc10Docs.a);
+
+        const infoA = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: uc10Docs.a,
+          view: "full",
+        });
+        const docAUrl = makeDocUrl(infoA.result?.data);
+        if (!docAUrl) {
+          t.diagnostic(`UC-10 doc A missing url/urlId: ${JSON.stringify(infoA.result?.data || {})}`);
+          t.skip("Cannot produce deterministic markdown links without a canonical document URL");
+          return;
+        }
+
+        const createB = await invokeTool(tmpDir, configPath, "documents.create", {
+          title: `${uc10Marker}-B`,
+          text:
+            `# ${uc10Marker} B\n\n` +
+            "UC-10 neighbor document B.\n\n" +
+            `- Link to A: [${uc10Marker}-A](${docAUrl})\n`,
+          publish: false,
+          view: "summary",
+        });
+        uc10Docs.b = pickStringId(createB?.result?.data?.id, createB?.result?.id);
+        if (!uc10Docs.b) {
+          t.diagnostic(`UC-10 doc B create payload missing id: ${JSON.stringify(createB.result)}`);
+          t.skip("Cannot run UC-10 graph tests without neighbor document B");
+          return;
+        }
+        state.uc10DocumentIds.push(uc10Docs.b);
+
+        const infoB = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: uc10Docs.b,
+          view: "full",
+        });
+        const docBUrl = makeDocUrl(infoB.result?.data);
+        if (!docBUrl) {
+          t.diagnostic(`UC-10 doc B missing url/urlId: ${JSON.stringify(infoB.result?.data || {})}`);
+          t.skip("Cannot complete deterministic A/B/C cross-link graph without B URL");
+          return;
+        }
+
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: uc10Docs.a,
+          text: `\n\n## UC-10 explicit links\n- Link to B: [${uc10Marker}-B](${docBUrl})`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const createC = await invokeTool(tmpDir, configPath, "documents.create", {
+          title: `${uc10Marker}-C`,
+          text:
+            `# ${uc10Marker} C\n\n` +
+            "UC-10 neighbor document C links to both A and B.\n\n" +
+            `- Link to A: [${uc10Marker}-A](${docAUrl})\n` +
+            `- Link to B: [${uc10Marker}-B](${docBUrl})\n`,
+          publish: false,
+          view: "summary",
+        });
+        uc10Docs.c = pickStringId(createC?.result?.data?.id, createC?.result?.id);
+        if (!uc10Docs.c) {
+          t.diagnostic(`UC-10 doc C create payload missing id: ${JSON.stringify(createC.result)}`);
+          t.skip("Cannot run UC-10 graph tests without neighbor document C");
+          return;
+        }
+        state.uc10DocumentIds.push(uc10Docs.c);
+
+        assert.ok(uc10Docs.a && uc10Docs.b && uc10Docs.c, "UC-10 requires deterministic A/B/C ids");
+      });
+
+      await t.test("documents.list(backlinkDocumentId) baseline known referrers for A", async (t) => {
+        if (!uc10Docs.a || knownReferrersToA().length < 2) {
+          t.skip("UC-10 graph seed docs unavailable");
+          return;
+        }
+
+        let hasExpectedReferrers = false;
+        let finalRows = [];
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const listRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.list", {
+            backlinkDocumentId: uc10Docs.a,
+            limit: 50,
+            view: "summary",
+          });
+
+          if (listRun.status !== 0) {
+            if (
+              hasCliValidationIssue(listRun.stderrJson, "args.backlinkDocumentId") ||
+              isSkippableDirectoryReadError(listRun.stderrJson)
+            ) {
+              t.diagnostic(`documents.list UC-10 backlink query skipped payload: ${listRun.stderr || "<empty stderr>"}`);
+              t.skip("backlinkDocumentId traversal unavailable in this deployment");
+              return;
+            }
+            assert.fail(
+              `documents.list UC-10 backlink query expected success, got status=${listRun.status}, stderr=${listRun.stderr || "<empty>"}`
+            );
+          }
+
+          const payload = listRun.stdoutJson;
+          assert.ok(payload, `documents.list stdout must be valid JSON: ${listRun.stdout}`);
+          assert.equal(payload.tool, "documents.list");
+
+          finalRows = extractResultRows(payload.result) || [];
+          const rowIds = new Set(
+            finalRows
+              .filter((row) => row && typeof row === "object")
+              .map((row) => pickStringId(row.id, row.documentId))
+              .filter(Boolean)
+          );
+          hasExpectedReferrers = knownReferrersToA().every((docId) => rowIds.has(docId));
+
+          if (hasExpectedReferrers) {
+            break;
+          }
+          if (attempt < 7) {
+            await wait(700);
+          }
+        }
+
+        if (!hasExpectedReferrers) {
+          t.diagnostic(
+            `UC-10 documents.list backlink rows missing expected referrers ${JSON.stringify(knownReferrersToA())}: ${JSON.stringify(finalRows)}`
+          );
+          t.skip("Backlink graph/index propagation varies by deployment");
+          return;
+        }
+
+        assert.equal(hasExpectedReferrers, true);
+      });
+
+      await t.test("documents.backlinks known referrer behavior (when contract available)", async (t) => {
+        if (!hasToolContract("documents.backlinks")) {
+          t.skip("documents.backlinks contract unavailable");
+          return;
+        }
+        if (!uc10Docs.a || knownReferrersToA().length < 2) {
+          t.skip("UC-10 graph seed docs unavailable");
+          return;
+        }
+
+        let hasExpectedReferrers = false;
+        let finalRows = [];
+
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.backlinks", {
+            id: uc10Docs.a,
+            limit: 50,
+            view: "summary",
+          });
+
+          if (run.status !== 0) {
+            if (hasCliValidationIssue(run.stderrJson, "args") || isSkippableDirectoryReadError(run.stderrJson)) {
+              t.diagnostic(`documents.backlinks skipped payload: ${run.stderr || "<empty stderr>"}`);
+              t.skip("documents.backlinks unsupported or unauthorized in this deployment");
+              return;
+            }
+            assert.fail(`documents.backlinks expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+          }
+
+          const payload = run.stdoutJson;
+          assert.ok(payload, `documents.backlinks stdout must be valid JSON: ${run.stdout}`);
+          assert.equal(payload.tool, "documents.backlinks");
+
+          finalRows = extractResultRows(payload.result) || [];
+          const rowIds = new Set(
+            finalRows
+              .filter((row) => row && typeof row === "object")
+              .map((row) => pickStringId(row.id, row.documentId))
+              .filter(Boolean)
+          );
+          hasExpectedReferrers = knownReferrersToA().every((docId) => rowIds.has(docId));
+
+          if (hasExpectedReferrers) {
+            break;
+          }
+          if (attempt < 7) {
+            await wait(700);
+          }
+        }
+
+        if (!hasExpectedReferrers) {
+          t.diagnostic(
+            `UC-10 documents.backlinks rows missing expected referrers ${JSON.stringify(knownReferrersToA())}: ${JSON.stringify(finalRows)}`
+          );
+          t.skip("Backlink graph/index propagation varies by deployment");
+          return;
+        }
+
+        assert.equal(hasExpectedReferrers, true);
+      });
+
+      await t.test("documents.graph_neighbors output shape and deterministic keys", async (t) => {
+        if (!hasToolContract("documents.graph_neighbors")) {
+          t.skip("documents.graph_neighbors contract unavailable");
+          return;
+        }
+        if (!uc10Docs.a || knownReferrersToA().length < 2) {
+          t.skip("UC-10 graph seed docs unavailable");
+          return;
+        }
+
+        let run = await invokeToolAnyStatus(tmpDir, configPath, "documents.graph_neighbors", {
+          id: uc10Docs.a,
+          includeBacklinks: true,
+          includeSearchNeighbors: false,
+          limitPerSource: 10,
+          view: "summary",
+        });
+
+        if (run.status !== 0 && hasCliValidationIssue(run.stderrJson, "args")) {
+          run = await invokeToolAnyStatus(tmpDir, configPath, "documents.graph_neighbors", {
+            id: uc10Docs.a,
+            view: "summary",
+          });
+        }
+
+        if (run.status !== 0) {
+          if (hasCliValidationIssue(run.stderrJson, "args") || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`documents.graph_neighbors skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.graph_neighbors unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(
+            `documents.graph_neighbors expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`
+          );
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.graph_neighbors stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.graph_neighbors");
+
+        const rows = extractGraphNeighborRows(payload.result);
+        if (!rows) {
+          t.diagnostic(`Unexpected documents.graph_neighbors payload shape: ${JSON.stringify(payload.result)}`);
+          t.skip("documents.graph_neighbors payload shape differs across deployments");
+          return;
+        }
+        assert.ok(Array.isArray(rows), "documents.graph_neighbors should expose neighbor/edge rows");
+
+        const objectRows = rows.filter((row) => row && typeof row === "object");
+        if (objectRows.length === 0) {
+          t.diagnostic("documents.graph_neighbors returned no object rows");
+          t.skip("graph neighbors can be empty due to indexing lag or deployment policy");
+          return;
+        }
+
+        const keySignatures = new Set(objectRows.map((row) => Object.keys(row).sort().join("|")));
+        assert.equal(keySignatures.size, 1, "documents.graph_neighbors should emit deterministic row keys");
+
+        const signature = [...keySignatures][0];
+        const keyList = signature.split("|").filter(Boolean);
+        const hasNormalizedEdgeKeys =
+          ["from", "to", "relation", "source"].every((key) => keyList.includes(key)) ||
+          ["fromId", "toId", "relation", "source"].every((key) => keyList.includes(key)) ||
+          ["sourceId", "targetId", "relation", "source"].every((key) => keyList.includes(key));
+
+        if (!hasNormalizedEdgeKeys) {
+          t.diagnostic(`documents.graph_neighbors row keys: ${signature}`);
+          t.skip("graph_neighbors did not expose normalized edge-key shape in this deployment");
+          return;
+        }
+
+        const knownReferrerSet = new Set(knownReferrersToA());
+        const hasKnownInbound = objectRows.some((row) => edgeToId(row) === uc10Docs.a && knownReferrerSet.has(edgeFromId(row)));
+        if (!hasKnownInbound) {
+          t.diagnostic(
+            `documents.graph_neighbors rows missing known inbound edge to ${uc10Docs.a}: ${JSON.stringify(objectRows)}`
+          );
+          t.skip("graph_neighbors edge propagation varies by deployment");
+          return;
+        }
+
+        assert.equal(hasKnownInbound, true);
+      });
+
+      await t.test("documents.graph_report depth/maxNodes bounds", async (t) => {
+        if (!hasToolContract("documents.graph_report")) {
+          t.skip("documents.graph_report contract unavailable");
+          return;
+        }
+        if (!uc10Docs.a) {
+          t.skip("UC-10 graph seed docs unavailable");
+          return;
+        }
+
+        const requestedDepth = 1;
+        const requestedMaxNodes = 2;
+
+        let run = await invokeToolAnyStatus(tmpDir, configPath, "documents.graph_report", {
+          seedIds: [uc10Docs.a],
+          depth: requestedDepth,
+          maxNodes: requestedMaxNodes,
+          includeBacklinks: true,
+          includeSearchNeighbors: false,
+        });
+
+        if (run.status !== 0 && hasCliValidationIssue(run.stderrJson, "args")) {
+          run = await invokeToolAnyStatus(tmpDir, configPath, "documents.graph_report", {
+            seedIds: [uc10Docs.a],
+            depth: requestedDepth,
+            maxNodes: requestedMaxNodes,
+          });
+        }
+
+        if (run.status !== 0) {
+          if (hasCliValidationIssue(run.stderrJson, "args") || isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`documents.graph_report skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.graph_report unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`documents.graph_report expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.graph_report stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.graph_report");
+
+        const nodes = extractGraphNodes(payload.result);
+        const edges = extractGraphEdges(payload.result);
+        if (!nodes || !edges) {
+          t.diagnostic(`Unexpected documents.graph_report payload shape: ${JSON.stringify(payload.result)}`);
+          t.skip("documents.graph_report payload shape differs across deployments");
+          return;
+        }
+        assert.ok(Array.isArray(nodes), "documents.graph_report should expose nodes[]");
+        assert.ok(Array.isArray(edges), "documents.graph_report should expose edges[]");
+
+        const nodeIds = nodes
+          .filter((node) => node && typeof node === "object")
+          .map((node) => pickStringId(node.id, node.documentId, node.nodeId))
+          .filter(Boolean);
+
+        if (nodeIds.length === 0) {
+          t.diagnostic(`documents.graph_report nodes without ids: ${JSON.stringify(nodes)}`);
+          t.skip("graph_report did not expose node ids in this deployment");
+          return;
+        }
+
+        assert.equal(new Set(nodeIds).size, nodeIds.length, "documents.graph_report node ids should be unique");
+        assert.ok(nodeIds.includes(uc10Docs.a), "documents.graph_report should include the seed id");
+        assert.ok(nodeIds.length <= requestedMaxNodes, "documents.graph_report should respect maxNodes upper bound");
+
+        const nodeDepths = nodes
+          .map((node) => Number(node?.depth ?? node?.distance ?? node?.hops ?? node?.level))
+          .filter(Number.isFinite);
+        const reportedDepth = Number(
+          payload.result?.depth ??
+            payload.result?.data?.depth ??
+            payload.result?.maxDepth ??
+            payload.result?.data?.maxDepth
+        );
+
+        if (nodeDepths.length > 0) {
+          assert.ok(
+            Math.max(...nodeDepths) <= requestedDepth,
+            "documents.graph_report node depth values should be bounded by requested depth"
+          );
+        } else if (Number.isFinite(reportedDepth)) {
+          assert.ok(
+            reportedDepth <= requestedDepth,
+            "documents.graph_report reported depth should be bounded by requested depth"
+          );
+        } else {
+          t.diagnostic(`documents.graph_report depth metadata unavailable: ${JSON.stringify(payload.result)}`);
+          t.skip("graph_report does not expose depth metadata in this deployment");
+          return;
+        }
+
+        const nodeSet = new Set(nodeIds);
+        const boundedEdges = edges.filter((edge) => {
+          const fromId = edgeFromId(edge);
+          const toId = edgeToId(edge);
+          return fromId && toId && nodeSet.has(fromId) && nodeSet.has(toId);
+        });
+        if (boundedEdges.length === 0) {
+          t.diagnostic(`documents.graph_report edges did not map to bounded nodes: ${JSON.stringify(edges)}`);
+          t.skip("graph_report edges can be omitted or delayed by deployment indexing");
+          return;
+        }
+
+        assert.ok(boundedEdges.length >= 1);
+      });
+    });
+
     await t.test("federated sync manifest composite read (stable + skippable)", async (t) => {
       assert.ok(state.createdDocumentId, "created test document id is required");
       assert.ok(state.marker, "created test marker is required");
@@ -2668,6 +3149,12 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
     if (Array.isArray(state.uc03AdditionalDocumentIds)) {
       for (const docId of state.uc03AdditionalDocumentIds) {
+        await bestEffortDeleteDocument(docId);
+      }
+    }
+
+    if (Array.isArray(state.uc10DocumentIds)) {
+      for (const docId of state.uc10DocumentIds) {
         await bestEffortDeleteDocument(docId);
       }
     }

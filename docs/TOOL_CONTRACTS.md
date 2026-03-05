@@ -177,7 +177,69 @@ outline-cli tools contract all --pretty
 ```
 
 - Best practice (AI): use `backlinkDocumentId` for deterministic internal graph traversal (which docs reference a known source doc).
+- Best practice (AI): `documents.backlinks` (when available) is the explicit wrapper for the same traversal intent; keep `documents.list(backlinkDocumentId=...)` as the compatibility fallback.
 - Best practice (AI): page with small limits; avoid full view unless needed.
+
+## `documents.backlinks`
+
+- Signature: `documents.backlinks(args: { id: string; limit?: number; offset?: number; view?: 'ids'|'summary'|'full' })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.backlinks",
+  "args": {
+    "id": "outline-api-NTpezNwhUP",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use this wrapper when available for explicit graph intent; it should mirror backlink traversal behavior from `documents.list(backlinkDocumentId=...)`.
+- Best practice (AI): treat unsupported/unauthorized responses as deployment-dependent and skip gracefully in live smoke tests.
+
+## `documents.graph_neighbors`
+
+- Signature: `documents.graph_neighbors(args: { id?: string; ids?: string[]; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; searchQueries?: string[]; limitPerSource?: number; view?: 'ids'|'summary' })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.graph_neighbors",
+  "args": {
+    "id": "outline-api-NTpezNwhUP",
+    "includeBacklinks": true,
+    "includeSearchNeighbors": false,
+    "limitPerSource": 10,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): request neighbor expansion with bounded limits and consume normalized edge rows for deterministic traversal.
+- Best practice (AI): start from one seed `id`, then fan out selectively by hydrating only returned document IDs.
+
+## `documents.graph_report`
+
+- Signature: `documents.graph_report(args: { seedIds: string[]; depth?: number; maxNodes?: number; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.graph_report",
+  "args": {
+    "seedIds": ["outline-api-NTpezNwhUP"],
+    "depth": 2,
+    "maxNodes": 50,
+    "includeBacklinks": true,
+    "includeSearchNeighbors": false
+  }
+}
+```
+
+- Best practice (AI): keep `depth` and `maxNodes` conservative to preserve deterministic output size for automation.
+- Best practice (AI): treat report output as bounded graph context, then call `documents.info` only on selected node IDs.
 
 ## `documents.info`
 

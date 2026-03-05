@@ -1271,6 +1271,234 @@ test("documents.apply_patch accepts optional expectedRevision and validates boun
   );
 });
 
+test("documents.apply_patch_safe requires expectedRevision and validates bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.apply_patch_safe", {
+      id: "doc-1",
+      patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      expectedRevision: 3,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch_safe", {
+        id: "doc-1",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.expectedRevision"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch_safe", {
+        id: "doc-1",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+        expectedRevision: -1,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.expectedRevision"));
+      return true;
+    }
+  );
+});
+
+test("documents.apply_patch_safe handler enforces gate and required expectedRevision", async () => {
+  const contract = MUTATION_TOOLS["documents.apply_patch_safe"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+  assert.equal(contract.usageExample?.tool, "documents.apply_patch_safe");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        return { body: { data: { id: body.id, text: "Old", revision: 7 } } };
+      },
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      contract.handler(ctx, {
+        id: "doc-1",
+        expectedRevision: 7,
+        patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+
+  await assert.rejects(
+    () =>
+      contract.handler(ctx, {
+        id: "doc-1",
+        patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.message, "documents.apply_patch_safe requires args.expectedRevision");
+      return true;
+    }
+  );
+
+  assert.equal(calls.length, 0);
+});
+
+test("documents.apply_patch_safe delegates to apply_patch flow with deterministic envelope", async () => {
+  const contract = MUTATION_TOOLS["documents.apply_patch_safe"];
+  assert.ok(contract);
+
+  const conflictCalls = [];
+  const conflictCtx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        conflictCalls.push({ method, body, options });
+        if (method !== "documents.info") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        return {
+          body: {
+            data: {
+              id: "doc-1",
+              text: "Old",
+              revision: 8,
+            },
+          },
+        };
+      },
+    },
+  };
+
+  const conflictOutput = await contract.handler(conflictCtx, {
+    id: "doc-1",
+    expectedRevision: 7,
+    patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+    performAction: true,
+  });
+
+  assert.deepEqual(conflictCalls, [
+    {
+      method: "documents.info",
+      body: { id: "doc-1" },
+      options: { maxAttempts: 2 },
+    },
+  ]);
+  assert.deepEqual(conflictOutput, {
+    tool: "documents.apply_patch_safe",
+    profile: "profile-hardening",
+    result: {
+      ok: false,
+      code: "revision_conflict",
+      message: "Document revision changed since last read",
+      id: "doc-1",
+      expectedRevision: 7,
+      actualRevision: 8,
+      updated: false,
+      mode: "unified",
+      previousRevision: 8,
+    },
+  });
+
+  const successCalls = [];
+  const successCtx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        successCalls.push({ method, body, options });
+        if (method === "documents.info") {
+          return {
+            body: {
+              data: {
+                id: "doc-1",
+                text: "Old",
+                revision: 8,
+              },
+            },
+          };
+        }
+        if (method === "documents.update") {
+          return {
+            body: {
+              data: {
+                id: "doc-1",
+                title: "Runbook",
+                collectionId: "col-1",
+                parentDocumentId: null,
+                revision: 9,
+                updatedAt: "2026-03-05T00:00:00.000Z",
+                publishedAt: null,
+                urlId: "runbook",
+                emoji: "book",
+                text: "New",
+              },
+            },
+          };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const successOutput = await contract.handler(successCtx, {
+    id: "doc-1",
+    expectedRevision: 8,
+    patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+    performAction: true,
+    view: "summary",
+  });
+
+  assert.deepEqual(successCalls, [
+    {
+      method: "documents.info",
+      body: { id: "doc-1" },
+      options: { maxAttempts: 2 },
+    },
+    {
+      method: "documents.update",
+      body: { id: "doc-1", text: "New", editMode: "replace" },
+      options: { maxAttempts: 1 },
+    },
+  ]);
+
+  assert.deepEqual(successOutput, {
+    tool: "documents.apply_patch_safe",
+    profile: "profile-hardening",
+    result: {
+      ok: true,
+      updated: true,
+      id: "doc-1",
+      mode: "unified",
+      previousRevision: 8,
+      currentRevision: 9,
+      data: {
+        id: "doc-1",
+        title: "Runbook",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        revision: 9,
+        updatedAt: "2026-03-05T00:00:00.000Z",
+        publishedAt: null,
+        urlId: "runbook",
+        emoji: "book",
+        excerpt: "New",
+      },
+    },
+  });
+});
+
 test("revisions.diff is exposed as a first-class mutation wrapper with deterministic payload", async () => {
   const contract = MUTATION_TOOLS["revisions.diff"];
   assert.ok(contract);

@@ -1248,19 +1248,26 @@ async function revisionsDiffTool(ctx, args) {
   };
 }
 
-async function documentsApplyPatchTool(ctx, args) {
+async function documentsApplyPatchTool(ctx, args, options = {}) {
+  const toolName = options.toolName || "documents.apply_patch";
+  const requireExpectedRevision = options.requireExpectedRevision === true;
+
   if (!args.id) {
-    throw new CliError("documents.apply_patch requires args.id");
+    throw new CliError(`${toolName} requires args.id`);
   }
   if (typeof args.patch !== "string") {
-    throw new CliError("documents.apply_patch requires args.patch as string");
+    throw new CliError(`${toolName} requires args.patch as string`);
   }
   assertPerformAction(args, {
-    tool: "documents.apply_patch",
+    tool: toolName,
     action: "apply a document patch",
   });
 
   const mode = args.mode === "replace" ? "replace" : "unified";
+  const hasExpectedRevision = Object.prototype.hasOwnProperty.call(args, "expectedRevision");
+  if (requireExpectedRevision && !hasExpectedRevision) {
+    throw new CliError(`${toolName} requires args.expectedRevision`);
+  }
 
   const info = await ctx.client.call("documents.info", { id: args.id }, {
     maxAttempts: toInteger(args.maxAttempts, 2),
@@ -1269,7 +1276,6 @@ async function documentsApplyPatchTool(ctx, args) {
   const current = info.body?.data;
   const currentText = current?.text || "";
   const previousRevision = Number(current?.revision);
-  const hasExpectedRevision = Object.prototype.hasOwnProperty.call(args, "expectedRevision");
   const expectedRevision = hasExpectedRevision ? Number(args.expectedRevision) : undefined;
   if (hasExpectedRevision && !Number.isFinite(expectedRevision)) {
     throw new CliError("expectedRevision must be a number");
@@ -1278,7 +1284,7 @@ async function documentsApplyPatchTool(ctx, args) {
   const actualRevision = Number.isFinite(previousRevision) ? previousRevision : undefined;
   if (hasExpectedRevision && actualRevision !== expectedRevision) {
     return {
-      tool: "documents.apply_patch",
+      tool: toolName,
       profile: ctx.profile.id,
       result: {
         ...buildRevisionConflict({
@@ -1297,7 +1303,7 @@ async function documentsApplyPatchTool(ctx, args) {
     const applied = applyUnifiedPatch(currentText, args.patch);
     if (!applied.ok) {
       return {
-        tool: "documents.apply_patch",
+        tool: toolName,
         profile: ctx.profile.id,
         result: {
           ok: false,
@@ -1324,7 +1330,7 @@ async function documentsApplyPatchTool(ctx, args) {
   });
 
   return {
-    tool: "documents.apply_patch",
+    tool: toolName,
     profile: ctx.profile.id,
     result: {
       ok: true,
@@ -1336,6 +1342,13 @@ async function documentsApplyPatchTool(ctx, args) {
       data: normalizeDocumentSummary(updated.body?.data, args.view || "summary", toInteger(args.excerptChars, 220)),
     },
   };
+}
+
+async function documentsApplyPatchSafeTool(ctx, args) {
+  return documentsApplyPatchTool(ctx, args, {
+    toolName: "documents.apply_patch_safe",
+    requireExpectedRevision: true,
+  });
 }
 
 async function documentsBatchUpdateTool(ctx, args) {
@@ -1588,6 +1601,28 @@ export const MUTATION_TOOLS = {
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
     ],
     handler: documentsApplyPatchTool,
+  },
+  "documents.apply_patch_safe": {
+    signature:
+      "documents.apply_patch_safe(args: { id: string; expectedRevision: number; patch: string; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
+    description:
+      "Apply patch with mandatory revision guard so writes only proceed from the expected document revision.",
+    usageExample: {
+      tool: "documents.apply_patch_safe",
+      args: {
+        id: "doc-id",
+        expectedRevision: 7,
+        mode: "unified",
+        patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+      },
+    },
+    bestPractices: [
+      "Use this wrapper for all automated patch writes to enforce optimistic concurrency.",
+      "Re-read the document and regenerate patch when revision_conflict is returned.",
+      "Keep unified mode for minimal, auditable edits; use replace mode for full rewrites only.",
+      "This tool is action-gated; set performAction=true only after explicit confirmation.",
+    ],
+    handler: documentsApplyPatchSafeTool,
   },
   "documents.batch_update": {
     signature:

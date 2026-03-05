@@ -642,6 +642,20 @@ export const TOOL_ARG_SCHEMAS = {
       performAction: { type: "boolean" },
     },
   },
+  "documents.apply_patch_safe": {
+    required: ["id", "expectedRevision", "patch"],
+    properties: {
+      id: { type: "string" },
+      patch: { type: "string" },
+      expectedRevision: { type: "number", min: 0 },
+      mode: { type: "string", enum: ["unified", "replace"] },
+      title: { type: "string" },
+      view: { type: "string", enum: ["summary", "full"] },
+      excerptChars: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
   "documents.batch_update": {
     required: ["updates"],
     properties: {

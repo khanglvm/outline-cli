@@ -62,6 +62,102 @@ test("api.call accepts method or endpoint and rejects when both missing", () => 
   );
 });
 
+test("validateToolArgs covers new scenario wrapper schemas", () => {
+  assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
+  assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.create", {
+      documentId: "doc-1",
+      text: "looks good",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("events.list", {
+      auditLog: true,
+      limit: 5,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.answer_batch", {
+      questions: ["What changed?"],
+      concurrency: 1,
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("documents.cleanup_test", { deleteMode: "safe" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("collections.add_user", {
+      id: "collection-1",
+      userId: "user-1",
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.info", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("templates.update", { title: "Missing id" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("comments.create", { documentId: "doc-1" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.text"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("webhooks.create", { name: "w", url: "https://example.com", events: [] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.events"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.answer_batch", { questions: ["  "] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.questions[0]"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.cleanup_test", { deleteMode: "unsafe" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.deleteMode"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.remove_group", { groupId: "group-1", performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+});
+
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-hardening-"));
   const store = new ResultStore({ tmpDir });

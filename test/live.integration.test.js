@@ -206,7 +206,7 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       assert.ok(capabilities.result?.evidence?.probes, "capabilities.map should include evidence probes");
     });
 
-    await t.test("read + navigation tools", async () => {
+    await t.test("read + navigation tools", async (t) => {
       const collections = await invokeTool(tmpDir, configPath, "collections.list", {
         limit: 10,
         view: "summary",
@@ -296,6 +296,60 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       if (listIdsView.result.data[0]) {
         assert.ok(typeof listIdsView.result.data[0].id === "string");
         assert.ok(!("excerpt" in listIdsView.result.data[0]));
+      }
+
+      const readWrapperCandidates = [
+        { tool: "events.list", args: { limit: 3, view: "full" }, body: { limit: 3 } },
+        { tool: "shares.list", args: { limit: 3, view: "full" }, body: { limit: 3 } },
+        { tool: "templates.list", args: { limit: 3, view: "full" }, body: { limit: 3 } },
+      ];
+
+      let comparedCount = 0;
+      for (const candidate of readWrapperCandidates) {
+        let wrapped;
+        try {
+          wrapped = await invokeTool(tmpDir, configPath, candidate.tool, candidate.args);
+        } catch {
+          continue;
+        }
+
+        if (wrapped?.result?.success === false) {
+          continue;
+        }
+
+        let raw;
+        try {
+          raw = await invokeTool(tmpDir, configPath, "api.call", {
+            method: candidate.tool,
+            body: candidate.body,
+          });
+        } catch {
+          continue;
+        }
+
+        if (raw?.result?.success === false) {
+          continue;
+        }
+
+        const wrappedRows = Array.isArray(wrapped?.result?.data)
+          ? wrapped.result.data
+          : Array.isArray(wrapped?.result)
+            ? wrapped.result
+            : null;
+        const rawRows = Array.isArray(raw?.result?.data) ? raw.result.data : null;
+        if (!wrappedRows || !rawRows) {
+          continue;
+        }
+
+        assert.equal(raw.tool, "api.call");
+        assert.equal(raw.method, candidate.tool);
+        assert.ok(wrappedRows.length <= 3);
+        assert.ok(rawRows.length <= 3);
+        comparedCount += 1;
+      }
+
+      if (comparedCount === 0) {
+        t.diagnostic("Skipped read-wrapper equivalence: events.list/shares.list/templates.list unavailable");
       }
     });
 

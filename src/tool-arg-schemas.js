@@ -534,6 +534,684 @@ export const TOOL_ARG_SCHEMAS = {
       performAction: { type: "boolean" },
     },
   },
+  "revisions.info": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "shares.list": {
+    properties: {
+      query: { type: "string" },
+      documentId: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "shares.info": {
+    properties: {
+      id: { type: "string" },
+      documentId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.documentId) {
+        issues.push({ path: "args.id", message: "or args.documentId is required" });
+      }
+    },
+  },
+  "shares.create": {
+    required: ["documentId"],
+    properties: {
+      documentId: { type: "string" },
+      includeChildDocuments: { type: "boolean" },
+      published: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "shares.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includeChildDocuments: { type: "boolean" },
+      published: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "shares.revoke": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "templates.list": {
+    properties: {
+      collectionId: { type: "string" },
+      query: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "templates.info": {
+    properties: {
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      includePolicies: { type: "boolean" },
+      concurrency: { type: "number", min: 1 },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.ids) {
+        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      }
+    },
+  },
+  "templates.create": {
+    required: ["title", "data"],
+    properties: {
+      title: { type: "string" },
+      data: { type: "object" },
+      icon: { type: "string" },
+      color: { type: "string" },
+      collectionId: { type: "string" },
+      fullWidth: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "templates.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      title: { type: "string" },
+      data: { type: "object" },
+      icon: { type: ["string", "null"] },
+      color: { type: ["string", "null"] },
+      collectionId: { type: ["string", "null"] },
+      fullWidth: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "templates.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "templates.restore": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "templates.duplicate": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      title: { type: "string" },
+      collectionId: { type: ["string", "null"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.templatize": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      collectionId: { type: ["string", "null"] },
+      publish: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "comments.list": {
+    properties: {
+      documentId: { type: "string" },
+      collectionId: { type: "string" },
+      parentCommentId: { type: "string" },
+      includeAnchorText: { type: "boolean" },
+      includeReplies: { type: "boolean" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "comments.info": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includeAnchorText: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "comments.create": {
+    required: ["documentId"],
+    properties: {
+      documentId: { type: "string" },
+      text: { type: "string" },
+      data: { type: "object" },
+      parentCommentId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (!args.text && !args.data) {
+        issues.push({ path: "args.text", message: "or args.data is required" });
+      }
+    },
+  },
+  "comments.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      text: { type: "string" },
+      data: { type: "object" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (!args.text && !args.data) {
+        issues.push({ path: "args.text", message: "or args.data is required" });
+      }
+    },
+  },
+  "comments.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "comments.review_queue": {
+    properties: {
+      documentIds: { type: "string[]" },
+      collectionId: { type: "string" },
+      includeAnchorText: { type: "boolean" },
+      includeReplies: { type: "boolean" },
+      limitPerDocument: { type: "number", min: 1 },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "events.list": {
+    properties: {
+      actorId: { type: "string" },
+      documentId: { type: "string" },
+      collectionId: { type: "string" },
+      name: { type: "string" },
+      auditLog: { type: "boolean" },
+      ip: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.archived": {
+    properties: {
+      collectionId: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.deleted": {
+    properties: {
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.archive": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.restore": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      collectionId: { type: "string" },
+      revisionId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.empty_trash": {
+    properties: {
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "webhooks.list": {
+    properties: {
+      event: { type: "string" },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      includeSubscriptions: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "webhooks.info": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includeSubscriptions: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "webhooks.create": {
+    required: ["name", "url", "events"],
+    properties: {
+      name: { type: "string" },
+      url: { type: "string" },
+      events: { type: "string[]" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (Array.isArray(args.events) && args.events.length === 0) {
+        issues.push({ path: "args.events", message: "must be a non-empty array" });
+      }
+    },
+  },
+  "webhooks.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      url: { type: "string" },
+      events: { type: "string[]" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (
+        args.name === undefined &&
+        args.url === undefined &&
+        args.events === undefined
+      ) {
+        issues.push({ path: "args.name", message: "or args.url or args.events is required" });
+      }
+      if (Array.isArray(args.events) && args.events.length === 0) {
+        issues.push({ path: "args.events", message: "must be a non-empty array" });
+      }
+    },
+  },
+  "webhooks.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "users.list": {
+    properties: {
+      query: { type: "string" },
+      role: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "users.info": {
+    properties: {
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      email: { type: "string" },
+      includePolicies: { type: "boolean" },
+      concurrency: { type: "number", min: 1 },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.ids && !args.email) {
+        issues.push({ path: "args.id", message: "or args.ids[] or args.email is required" });
+      }
+    },
+  },
+  "groups.list": {
+    properties: {
+      query: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "groups.info": {
+    properties: {
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      includePolicies: { type: "boolean" },
+      concurrency: { type: "number", min: 1 },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.ids) {
+        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      }
+    },
+  },
+  "groups.memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "groups.create": {
+    required: ["name"],
+    properties: {
+      name: { type: "string" },
+      memberIds: { type: "string[]" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "groups.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "groups.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "groups.add_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "groups.remove_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "collections.memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "collections.group_memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "collections.add_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "collections.remove_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "collections.add_group": {
+    required: ["id", "groupId"],
+    properties: {
+      id: { type: "string" },
+      groupId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "collections.remove_group": {
+    required: ["id", "groupId"],
+    properties: {
+      id: { type: "string" },
+      groupId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.group_memberships": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
+  "documents.add_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.remove_user": {
+    required: ["id", "userId"],
+    properties: {
+      id: { type: "string" },
+      userId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.add_group": {
+    required: ["id", "groupId"],
+    properties: {
+      id: { type: "string" },
+      groupId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.remove_group": {
+    required: ["id", "groupId"],
+    properties: {
+      id: { type: "string" },
+      groupId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+  },
+  "documents.answer": {
+    required: ["question"],
+    properties: {
+      question: { type: "string" },
+      collectionId: { type: "string" },
+      documentId: { type: "string" },
+      userId: { type: "string" },
+      statusFilter: { type: ["string", "string[]"] },
+      dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
+      includePolicies: { type: "boolean" },
+      includeEvidenceDocs: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.question === "string" && args.question.trim().length === 0) {
+        issues.push({ path: "args.question", message: "must be non-empty" });
+      }
+    },
+  },
+  "documents.answer_batch": {
+    required: ["questions"],
+    properties: {
+      questions: { type: "string[]" },
+      collectionId: { type: "string" },
+      documentId: { type: "string" },
+      userId: { type: "string" },
+      statusFilter: { type: ["string", "string[]"] },
+      dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
+      includePolicies: { type: "boolean" },
+      includeEvidenceDocs: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!Array.isArray(args.questions) || args.questions.length === 0) {
+        issues.push({ path: "args.questions", message: "must be a non-empty string[]" });
+        return;
+      }
+      for (let i = 0; i < args.questions.length; i += 1) {
+        if (typeof args.questions[i] !== "string" || args.questions[i].trim().length === 0) {
+          issues.push({ path: `args.questions[${i}]`, message: "must be a non-empty string" });
+        }
+      }
+    },
+  },
   "capabilities.map": {
     properties: {
       includePolicies: { type: "boolean" },
@@ -550,6 +1228,7 @@ export const TOOL_ARG_SCHEMAS = {
       concurrency: { type: "number", min: 1 },
       allowUnsafePrefix: { type: "boolean" },
       includeErrors: { type: "boolean" },
+      deleteMode: { type: "string", enum: ["safe", "direct"] },
       performAction: { type: "boolean" },
     },
   },

@@ -103,3 +103,46 @@ test("delete read receipt lifecycle: issue -> validate -> consume", async () => 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("delete read receipt only accepts document-scoped token kind", async () => {
+  const previousTmp = process.env.OUTLINE_AGENT_TMP_DIR;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-action-gate-kind-"));
+  process.env.OUTLINE_AGENT_TMP_DIR = tmpDir;
+
+  try {
+    const issued = await issueDocumentDeleteReadReceipt({
+      profileId: "test-profile",
+      documentId: "doc-123",
+      revision: 7,
+      title: "Doc 123",
+      ttlSeconds: 600,
+    });
+
+    const storePath = getActionGateStorePath();
+    const raw = await fs.readFile(storePath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.receipts[issued.token].kind = "webhooks.delete.read";
+    await fs.writeFile(storePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+
+    await assert.rejects(
+      () =>
+        getDocumentDeleteReadReceipt({
+          token: issued.token,
+          profileId: "test-profile",
+          documentId: "doc-123",
+        }),
+      (err) => {
+        assert.ok(err instanceof CliError);
+        assert.equal(err.details?.code, "DELETE_READ_TOKEN_INVALID");
+        return true;
+      }
+    );
+  } finally {
+    if (previousTmp == null) {
+      delete process.env.OUTLINE_AGENT_TMP_DIR;
+    } else {
+      process.env.OUTLINE_AGENT_TMP_DIR = previousTmp;
+    }
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});

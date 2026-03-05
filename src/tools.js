@@ -1045,12 +1045,7 @@ export async function invokeTool(ctx, name, args = {}) {
     throw new CliError(`Unknown tool: ${name}`);
   }
 
-  const argsForValidation =
-    name === "documents.apply_patch" && args && typeof args === "object" && "expectedRevision" in args
-      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "expectedRevision"))
-      : args;
-
-  validateToolArgs(name, argsForValidation);
+  validateToolArgs(name, args);
 
   const result = await tool.handler(ctx, args);
   if (args.compact ?? true) {

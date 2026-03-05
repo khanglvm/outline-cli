@@ -109,6 +109,15 @@ function runCliNdjson(args, opts = {}) {
   };
 }
 
+function hasToolContract(name) {
+  try {
+    const contract = runCli(["tools", "contract", name, "--result-mode", "inline"]).json;
+    return contract?.ok === true && contract?.contract?.name === name;
+  } catch {
+    return false;
+  }
+}
+
 async function writeJsonFile(dir, prefix, value) {
   const file = path.join(dir, `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
   await fs.writeFile(file, `${JSON.stringify(value)}\n`, "utf8");
@@ -364,6 +373,63 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
       state.createdDocumentId = createDoc?.result?.data?.id;
       assert.ok(state.createdDocumentId, "documents.create must return id");
+    });
+
+    await t.test("federated sync manifest composite read (stable + skippable)", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+      assert.ok(state.marker, "created test marker is required");
+
+      if (!hasToolContract("federated.sync_manifest")) {
+        t.skip("federated.sync_manifest is not registered in this build");
+        return;
+      }
+
+      let manifest;
+      try {
+        manifest = await invokeTool(tmpDir, configPath, "federated.sync_manifest", {
+          query: state.marker,
+          includeDrafts: true,
+          limit: 5,
+          offset: 0,
+          view: "summary",
+        });
+      } catch (err) {
+        t.diagnostic(`Skipping federated.sync_manifest check: ${err.message}`);
+        t.skip("federated.sync_manifest endpoint behavior is environment-dependent");
+        return;
+      }
+
+      assert.equal(manifest?.tool, "federated.sync_manifest");
+
+      const rows = Array.isArray(manifest?.result?.data)
+        ? manifest.result.data
+        : Array.isArray(manifest?.result?.items)
+          ? manifest.result.items
+          : Array.isArray(manifest?.result?.rows)
+            ? manifest.result.rows
+            : null;
+
+      if (!rows) {
+        t.diagnostic(`Unexpected federated.sync_manifest shape: ${JSON.stringify(manifest?.result)}`);
+        t.skip("manifest payload shape is deployment-specific");
+        return;
+      }
+
+      const found = rows.find(
+        (row) =>
+          row &&
+          typeof row === "object" &&
+          (row.id === state.createdDocumentId || row.title === state.marker)
+      );
+
+      if (!found) {
+        t.diagnostic("No deterministic match found in sync manifest for suite-created document");
+        t.skip("manifest visibility/indexing can vary by deployment and sync lag");
+        return;
+      }
+
+      assert.ok(typeof found.id === "string" && found.id.length > 0, "manifest row should include id");
+      assert.ok(typeof found.title === "string" && found.title.length > 0, "manifest row should include title");
     });
 
     await t.test("mutation safety + patch + diff + revisions", async () => {

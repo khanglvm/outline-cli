@@ -395,6 +395,7 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       patch: { type: "string" },
+      expectedRevision: { type: "number", min: 0 },
       mode: { type: "string", enum: ["unified", "replace"] },
       title: { type: "string" },
       view: { type: "string", enum: ["summary", "full"] },
@@ -782,6 +783,180 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom(args, issues) {
+      const hasDocumentIds = Array.isArray(args.documentIds) && args.documentIds.length > 0;
+      const hasCollectionId = typeof args.collectionId === "string" && args.collectionId.length > 0;
+      if (!hasDocumentIds && !hasCollectionId) {
+        issues.push({ path: "args.documentIds", message: "or args.collectionId is required" });
+      }
+      if (Array.isArray(args.documentIds) && args.documentIds.length === 0) {
+        issues.push({ path: "args.documentIds", message: "must be a non-empty string[] when provided" });
+      }
+    },
+  },
+  "federated.sync_manifest": {
+    properties: {
+      collectionId: { type: "string" },
+      query: { type: "string" },
+      since: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      includeDrafts: { type: "boolean" },
+      includeMemberships: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.since === "string") {
+        const parsed = Date.parse(args.since);
+        if (!Number.isFinite(parsed) || !args.since.includes("T")) {
+          issues.push({ path: "args.since", message: "must be an ISO-8601 timestamp" });
+        }
+      }
+    },
+  },
+  "federated.sync_probe": {
+    properties: {
+      ids: { type: "string[]" },
+      queries: { type: "string[]" },
+      mode: { type: "string", enum: ["titles", "semantic", "both"] },
+      collectionId: { type: "string" },
+      limit: { type: "number", min: 1 },
+      freshnessHours: { type: "number", min: 1 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasQueries = Array.isArray(args.queries) && args.queries.length > 0;
+      if (!hasIds && !hasQueries) {
+        issues.push({ path: "args.ids", message: "or args.queries[] is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (Array.isArray(args.queries) && args.queries.length === 0) {
+        issues.push({ path: "args.queries", message: "must be a non-empty string[] when provided" });
+      }
+    },
+  },
+  "federated.permission_snapshot": {
+    required: ["ids"],
+    properties: {
+      ids: { type: "string[]" },
+      includeCollectionMemberships: { type: "boolean" },
+      includeDocumentMemberships: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[]" });
+      }
+    },
+  },
+  "documents.plan_terminology_refactor": {
+    required: ["glossary"],
+    properties: {
+      glossary: { type: "array" },
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      collectionId: { type: "string" },
+      includeTitleSearch: { type: "boolean" },
+      includeSemanticSearch: { type: "boolean" },
+      limitPerQuery: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      maxDocuments: { type: "number", min: 1 },
+      readConcurrency: { type: "number", min: 1 },
+      includeUnchanged: { type: "boolean" },
+      hunkLimit: { type: "number", min: 1 },
+      hunkLineLimit: { type: "number", min: 1 },
+      excludeDocIds: { type: "string[]" },
+      excludePatterns: { type: "string[]" },
+      excludeCodeBlocks: { type: "boolean" },
+      excludeInlineCode: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!Array.isArray(args.glossary) || args.glossary.length === 0) {
+        issues.push({ path: "args.glossary", message: "must be a non-empty array" });
+      } else {
+        const seenFind = new Set();
+        for (let i = 0; i < args.glossary.length; i += 1) {
+          const item = args.glossary[i];
+          if (!item || typeof item !== "object" || Array.isArray(item)) {
+            issues.push({ path: `args.glossary[${i}]`, message: "must be an object" });
+            continue;
+          }
+          const find = typeof item.find === "string" ? item.find.trim() : "";
+          const replace = typeof item.replace === "string" ? item.replace.trim() : "";
+          if (!find) {
+            issues.push({ path: `args.glossary[${i}].find`, message: "is required and must be a non-empty string" });
+          }
+          if (typeof item.replace !== "string") {
+            issues.push({ path: `args.glossary[${i}].replace`, message: "is required and must be a string" });
+          }
+          if (find && replace && find === replace) {
+            issues.push({ path: `args.glossary[${i}].replace`, message: "must differ from find" });
+          }
+          if (find) {
+            if (seenFind.has(find)) {
+              issues.push({ path: `args.glossary[${i}].find`, message: "must be unique across glossary entries" });
+            } else {
+              seenFind.add(find);
+            }
+          }
+          if (
+            item.field !== undefined &&
+            !["title", "text", "both"].includes(item.field)
+          ) {
+            issues.push({
+              path: `args.glossary[${i}].field`,
+              message: "must be one of: title, text, both",
+            });
+          }
+        }
+      }
+
+      const hasScopeId = typeof args.id === "string" && args.id.length > 0;
+      const hasScopeIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasScopeQuery = typeof args.query === "string" && args.query.trim().length > 0;
+      const hasScopeQueries = Array.isArray(args.queries) && args.queries.length > 0;
+      if (!hasScopeId && !hasScopeIds && !hasScopeQuery && !hasScopeQueries) {
+        issues.push({ path: "args.ids", message: "or args.query/args.queries[] is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (Array.isArray(args.queries) && args.queries.length === 0) {
+        issues.push({ path: "args.queries", message: "must be a non-empty string[] when provided" });
+      }
+      if (args.includeTitleSearch === false && args.includeSemanticSearch === false) {
+        issues.push({
+          path: "args.includeTitleSearch",
+          message: "and includeSemanticSearch cannot both be false",
+        });
+      }
+      if (Array.isArray(args.excludePatterns)) {
+        for (let i = 0; i < args.excludePatterns.length; i += 1) {
+          const pattern = args.excludePatterns[i];
+          try {
+            // Validate that each pattern is a compilable JS regex source string.
+            new RegExp(pattern);
+          } catch {
+            issues.push({
+              path: `args.excludePatterns[${i}]`,
+              message: "must be a valid regex source string",
+            });
+          }
+        }
+      }
+    },
   },
   "events.list": {
     properties: {
@@ -1166,9 +1341,9 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "documents.answer": {
-    required: ["question"],
     properties: {
       question: { type: "string" },
+      query: { type: "string" },
       collectionId: { type: "string" },
       documentId: { type: "string" },
       userId: { type: "string" },
@@ -1180,15 +1355,17 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (typeof args.question === "string" && args.question.trim().length === 0) {
-        issues.push({ path: "args.question", message: "must be non-empty" });
+      const selected = args.question ?? args.query;
+      if (typeof selected !== "string" || selected.trim().length === 0) {
+        issues.push({ path: "args.question", message: "or args.query is required and must be non-empty" });
       }
     },
   },
   "documents.answer_batch": {
-    required: ["questions"],
     properties: {
-      questions: { type: "string[]" },
+      question: { type: "string" },
+      query: { type: "string" },
+      questions: { type: "array" },
       collectionId: { type: "string" },
       documentId: { type: "string" },
       userId: { type: "string" },
@@ -1201,13 +1378,43 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (!Array.isArray(args.questions) || args.questions.length === 0) {
-        issues.push({ path: "args.questions", message: "must be a non-empty string[]" });
+      const hasSingle = args.question !== undefined || args.query !== undefined;
+      const singleQuestion = args.question ?? args.query;
+      const questionCount = Array.isArray(args.questions) ? args.questions.length : 0;
+
+      if (hasSingle && (typeof singleQuestion !== "string" || singleQuestion.trim().length === 0)) {
+        issues.push({ path: "args.question", message: "or args.query must be a non-empty string when provided" });
+      }
+
+      if (!hasSingle && questionCount === 0) {
+        issues.push({ path: "args.questions", message: "or args.question or args.query is required" });
+      }
+
+      if (args.questions === undefined) {
         return;
       }
+
+      if (!Array.isArray(args.questions)) {
+        return;
+      }
+
       for (let i = 0; i < args.questions.length; i += 1) {
-        if (typeof args.questions[i] !== "string" || args.questions[i].trim().length === 0) {
-          issues.push({ path: `args.questions[${i}]`, message: "must be a non-empty string" });
+        const item = args.questions[i];
+        if (typeof item === "string") {
+          if (item.trim().length === 0) {
+            issues.push({ path: `args.questions[${i}]`, message: "must be a non-empty string" });
+          }
+          continue;
+        }
+
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          issues.push({ path: `args.questions[${i}]`, message: "must be a string or object" });
+          continue;
+        }
+
+        const itemQuestion = item.question ?? item.query;
+        if (typeof itemQuestion !== "string" || itemQuestion.trim().length === 0) {
+          issues.push({ path: `args.questions[${i}].question`, message: "or .query must be a non-empty string" });
         }
       }
     },

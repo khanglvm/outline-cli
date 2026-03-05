@@ -158,6 +158,197 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
   );
 });
 
+test("documents.apply_patch accepts optional expectedRevision and validates bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.apply_patch", {
+      id: "doc-1",
+      patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      expectedRevision: 3,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch", {
+        id: "doc-1",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+        expectedRevision: -1,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.expectedRevision"));
+      return true;
+    }
+  );
+});
+
+test("comments.review_queue schema enforces scope selector", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.review_queue", {
+      documentIds: ["doc-1"],
+      limitPerDocument: 3,
+      view: "summary",
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.review_queue", {
+      collectionId: "col-1",
+      includeReplies: true,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("comments.review_queue", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentIds"));
+      return true;
+    }
+  );
+});
+
+test("federated.sync_manifest schema validates timestamp and bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("federated.sync_manifest", {
+      query: "policy",
+      since: "2026-01-01T00:00:00.000Z",
+      limit: 5,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("federated.sync_manifest", {
+        since: "yesterday",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.since"));
+      return true;
+    }
+  );
+});
+
+test("federated.sync_probe schema requires ids or queries", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("federated.sync_probe", {
+      ids: ["doc-1"],
+      mode: "both",
+      freshnessHours: 6,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("federated.sync_probe", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+});
+
+test("federated.permission_snapshot schema requires non-empty ids", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("federated.permission_snapshot", {
+      ids: ["doc-1", "doc-2"],
+      includeDocumentMemberships: true,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("federated.permission_snapshot", { ids: [] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+});
+
+test("documents.plan_terminology_refactor schema validates glossary and scope", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.plan_terminology_refactor", {
+      glossary: [
+        {
+          find: "KPI",
+          replace: "Key Performance Indicator",
+          field: "text",
+        },
+      ],
+      query: "metrics",
+      includeTitleSearch: true,
+      includeSemanticSearch: true,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.plan_terminology_refactor", {
+        glossary: [{ find: "SLA", replace: "SLA" }],
+        query: "ops",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.glossary[0].replace"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.plan_terminology_refactor", {
+        glossary: [{ find: "SLO", replace: "Service Level Objective" }],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+});
+
+test("documents.answer and documents.answer_batch schema match handler inputs", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.answer", {
+      query: "What changed this week?",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.answer", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.question"));
+      return true;
+    }
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.answer_batch", {
+      question: "Where is the runbook?",
+      questions: [{ query: "Who owns incident response?" }],
+      concurrency: 1,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.answer_batch", {
+        questions: [{}],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.questions[0].question"));
+      return true;
+    }
+  );
+});
+
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-agent-hardening-"));
   const store = new ResultStore({ tmpDir });

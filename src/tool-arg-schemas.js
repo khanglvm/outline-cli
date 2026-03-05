@@ -1102,6 +1102,215 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "oauth_clients.list": {
+    properties: {
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.limit === "number" && args.limit > 250) {
+        issues.push({ path: "args.limit", message: "must be <= 250" });
+      }
+    },
+  },
+  "oauth_clients.info": {
+    properties: {
+      id: { type: "string" },
+      clientId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasClientId = typeof args.clientId === "string" && args.clientId.trim().length > 0;
+
+      if (!hasId && !hasClientId) {
+        issues.push({ path: "args.id", message: "or args.clientId is required" });
+      }
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string when provided" });
+      }
+      if (typeof args.clientId === "string" && args.clientId.trim().length === 0) {
+        issues.push({ path: "args.clientId", message: "must be a non-empty string when provided" });
+      }
+      if (hasId && hasClientId) {
+        issues.push({ path: "args.clientId", message: "cannot be combined with args.id" });
+      }
+    },
+  },
+  "oauth_clients.create": {
+    required: ["name", "redirectUris"],
+    properties: {
+      name: { type: "string" },
+      description: { type: "string" },
+      developerName: { type: "string" },
+      developerUrl: { type: "string" },
+      avatarUrl: { type: "string" },
+      redirectUris: { type: "string[]" },
+      published: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.name === "string" && args.name.trim().length === 0) {
+        issues.push({ path: "args.name", message: "must be a non-empty string" });
+      }
+      if (Array.isArray(args.redirectUris)) {
+        if (args.redirectUris.length === 0) {
+          issues.push({ path: "args.redirectUris", message: "must be a non-empty string[]" });
+        }
+        for (let i = 0; i < args.redirectUris.length; i += 1) {
+          if (args.redirectUris[i].trim().length === 0) {
+            issues.push({ path: `args.redirectUris[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+    },
+  },
+  "oauth_clients.update": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      description: { type: "string" },
+      developerName: { type: "string" },
+      developerUrl: { type: "string" },
+      avatarUrl: { type: "string" },
+      redirectUris: { type: "string[]" },
+      published: { type: "boolean" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+      if (typeof args.name === "string" && args.name.trim().length === 0) {
+        issues.push({ path: "args.name", message: "must be a non-empty string when provided" });
+      }
+      if (Array.isArray(args.redirectUris)) {
+        if (args.redirectUris.length === 0) {
+          issues.push({ path: "args.redirectUris", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.redirectUris.length; i += 1) {
+          if (args.redirectUris[i].trim().length === 0) {
+            issues.push({ path: `args.redirectUris[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+    },
+  },
+  "oauth_clients.rotate_secret": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "oauth_clients.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "oauth_authentications.list": {
+    properties: {
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.limit === "number" && args.limit > 250) {
+        issues.push({ path: "args.limit", message: "must be <= 250" });
+      }
+    },
+  },
+  "oauth_authentications.delete": {
+    required: ["oauthClientId"],
+    properties: {
+      oauthClientId: { type: "string" },
+      scope: { type: "string[]" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.oauthClientId === "string" && args.oauthClientId.trim().length === 0) {
+        issues.push({ path: "args.oauthClientId", message: "must be a non-empty string" });
+      }
+      if (Array.isArray(args.scope)) {
+        if (args.scope.length === 0) {
+          issues.push({ path: "args.scope", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.scope.length; i += 1) {
+          if (args.scope[i].trim().length === 0) {
+            issues.push({ path: `args.scope[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+    },
+  },
+  "oauthClients.delete": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+    },
+  },
+  "oauthAuthentications.delete": {
+    required: ["oauthClientId"],
+    properties: {
+      oauthClientId: { type: "string" },
+      scope: { type: "string[]" },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (typeof args.oauthClientId === "string" && args.oauthClientId.trim().length === 0) {
+        issues.push({ path: "args.oauthClientId", message: "must be a non-empty string" });
+      }
+      if (Array.isArray(args.scope)) {
+        if (args.scope.length === 0) {
+          issues.push({ path: "args.scope", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.scope.length; i += 1) {
+          if (args.scope[i].trim().length === 0) {
+            issues.push({ path: `args.scope[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+    },
+  },
   "documents.create_from_template": {
     required: ["templateId"],
     properties: {

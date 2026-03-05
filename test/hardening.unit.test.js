@@ -358,6 +358,205 @@ test("data_attributes wrappers map to dataAttributes RPC methods with action gat
   assert.equal(calls.length, 5);
 });
 
+test("oauth wrappers expose canonical and alias methods with deterministic envelopes", async () => {
+  for (const method of [
+    "oauth_clients.list",
+    "oauth_clients.info",
+    "oauth_clients.create",
+    "oauth_clients.update",
+    "oauth_clients.rotate_secret",
+    "oauth_clients.delete",
+    "oauth_authentications.list",
+    "oauth_authentications.delete",
+    "oauthClients.delete",
+    "oauthAuthentications.delete",
+  ]) {
+    assert.ok(EXTENDED_TOOLS[method], `${method} should be registered`);
+  }
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "oauthClients.list") {
+          return {
+            body: {
+              data: [{ id: "oauth-client-1", name: "CLI App" }],
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        if (method === "oauthClients.info") {
+          return {
+            body: {
+              data: { id: body.id ?? "oauth-client-1", name: "CLI App" },
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        if (method === "oauthAuthentications.list") {
+          return {
+            body: {
+              data: [{ oauthClientId: "oauth-client-1", scope: ["read"] }],
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        if (method === "oauthAuthentications.delete") {
+          return {
+            body: {
+              success: true,
+              oauthClientId: body.oauthClientId,
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        if (method === "oauthClients.delete") {
+          return {
+            body: {
+              success: true,
+              id: body.id,
+              policies: [{ id: "policy-1" }],
+            },
+          };
+        }
+        return {
+          body: {
+            data: { id: body.id ?? "oauth-client-1", name: body.name ?? "CLI App" },
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const listRes = await EXTENDED_TOOLS["oauth_clients.list"].handler(ctx, { limit: 10, offset: 0 });
+  const infoRes = await EXTENDED_TOOLS["oauth_clients.info"].handler(ctx, { id: "oauth-client-1" });
+  const createRes = await EXTENDED_TOOLS["oauth_clients.create"].handler(ctx, {
+    name: "CLI App",
+    redirectUris: ["https://example.com/callback"],
+    published: true,
+    performAction: true,
+  });
+  await EXTENDED_TOOLS["oauth_clients.update"].handler(ctx, {
+    id: "oauth-client-1",
+    name: "CLI App v2",
+    performAction: true,
+  });
+  const rotateRes = await EXTENDED_TOOLS["oauth_clients.rotate_secret"].handler(ctx, {
+    id: "oauth-client-1",
+    performAction: true,
+  });
+  const deleteRes = await EXTENDED_TOOLS["oauth_clients.delete"].handler(ctx, {
+    id: "oauth-client-1",
+    performAction: true,
+  });
+  const authListRes = await EXTENDED_TOOLS["oauth_authentications.list"].handler(ctx, {
+    limit: 5,
+    offset: 0,
+  });
+  const authDeleteRes = await EXTENDED_TOOLS["oauth_authentications.delete"].handler(ctx, {
+    oauthClientId: "oauth-client-1",
+    scope: ["read"],
+    performAction: true,
+  });
+  const aliasClientDeleteRes = await EXTENDED_TOOLS["oauthClients.delete"].handler(ctx, {
+    id: "oauth-client-2",
+    performAction: true,
+  });
+  const aliasAuthDeleteRes = await EXTENDED_TOOLS["oauthAuthentications.delete"].handler(ctx, {
+    oauthClientId: "oauth-client-2",
+    scope: ["write"],
+    performAction: true,
+  });
+
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    [
+      "oauthClients.list",
+      "oauthClients.info",
+      "oauthClients.create",
+      "oauthClients.update",
+      "oauthClients.rotate_secret",
+      "oauthClients.delete",
+      "oauthAuthentications.list",
+      "oauthAuthentications.delete",
+      "oauthClients.delete",
+      "oauthAuthentications.delete",
+    ]
+  );
+  assert.deepEqual(calls[0].body, { limit: 10, offset: 0 });
+  assert.deepEqual(calls[2].body, {
+    name: "CLI App",
+    redirectUris: ["https://example.com/callback"],
+    published: true,
+  });
+  assert.deepEqual(calls[4].body, { id: "oauth-client-1" });
+  assert.deepEqual(calls[7].body, {
+    oauthClientId: "oauth-client-1",
+    scope: ["read"],
+  });
+  assert.equal(calls[0].options?.maxAttempts, 2);
+  assert.equal(calls[1].options?.maxAttempts, 2);
+  assert.equal(calls[2].options?.maxAttempts, 1);
+  assert.equal(calls[6].options?.maxAttempts, 2);
+  assert.equal(calls[7].options?.maxAttempts, 1);
+  assert.equal(calls[8].options?.maxAttempts, 1);
+
+  assert.equal(listRes.tool, "oauth_clients.list");
+  assert.equal(infoRes.tool, "oauth_clients.info");
+  assert.equal(createRes.tool, "oauth_clients.create");
+  assert.equal(rotateRes.tool, "oauth_clients.rotate_secret");
+  assert.equal(authListRes.tool, "oauth_authentications.list");
+  assert.equal(authDeleteRes.tool, "oauth_authentications.delete");
+  assert.equal(aliasClientDeleteRes.tool, "oauthClients.delete");
+  assert.equal(aliasAuthDeleteRes.tool, "oauthAuthentications.delete");
+  assert.deepEqual(listRes.result, { data: [{ id: "oauth-client-1", name: "CLI App" }] });
+  assert.deepEqual(deleteRes.result, { success: true, id: "oauth-client-1" });
+  assert.deepEqual(authListRes.result, {
+    data: [{ oauthClientId: "oauth-client-1", scope: ["read"] }],
+  });
+  assert.deepEqual(authDeleteRes.result, {
+    success: true,
+    oauthClientId: "oauth-client-1",
+  });
+  assert.deepEqual(aliasClientDeleteRes.result, {
+    success: true,
+    id: "oauth-client-2",
+  });
+  assert.deepEqual(aliasAuthDeleteRes.result, {
+    success: true,
+    oauthClientId: "oauth-client-2",
+  });
+
+  await assert.rejects(
+    () =>
+      EXTENDED_TOOLS["oauth_clients.create"].handler(ctx, {
+        name: "CLI App",
+        redirectUris: ["https://example.com/callback"],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+  await assert.rejects(
+    () =>
+      EXTENDED_TOOLS["oauthAuthentications.delete"].handler(ctx, {
+        oauthClientId: "oauth-client-3",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.match(err.message, /performAction/);
+      return true;
+    }
+  );
+  assert.equal(calls.length, 10);
+});
+
 test("import and file operation wrappers expose deterministic envelopes and action gating", async () => {
   for (const method of [
     "documents.import",
@@ -627,6 +826,129 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+});
+
+test("oauth schemas validate canonical wrappers and compatibility aliases", () => {
+  assert.doesNotThrow(() => validateToolArgs("oauth_clients.list", { limit: 10, offset: 0 }));
+  assert.doesNotThrow(() => validateToolArgs("oauth_clients.info", { id: "oauth-client-1" }));
+  assert.doesNotThrow(() => validateToolArgs("oauth_clients.info", { clientId: "pub-client-id" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauth_clients.create", {
+      name: "CLI App",
+      redirectUris: ["https://example.com/callback"],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauth_clients.update", {
+      id: "oauth-client-1",
+      redirectUris: ["https://example.com/callback"],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauth_clients.rotate_secret", {
+      id: "oauth-client-1",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauth_clients.delete", { id: "oauth-client-1", performAction: true })
+  );
+  assert.doesNotThrow(() => validateToolArgs("oauth_authentications.list", { limit: 5, offset: 0 }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauth_authentications.delete", {
+      oauthClientId: "oauth-client-1",
+      scope: ["read"],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() => validateToolArgs("oauthClients.delete", { id: "oauth-client-1", performAction: true }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("oauthAuthentications.delete", {
+      oauthClientId: "oauth-client-1",
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("oauth_clients.info", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("oauth_clients.info", { id: "oauth-client-1", clientId: "pub-client-id" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.clientId"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("oauth_clients.create", {
+        name: "CLI App",
+        redirectUris: [],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.redirectUris"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("oauth_clients.create", {
+        redirectUris: ["https://example.com/callback"],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.name"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("oauth_authentications.delete", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.oauthClientId"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("oauth_authentications.delete", {
+        oauthClientId: "oauth-client-1",
+        scope: [],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.scope"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("oauthClients.delete", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("oauthAuthentications.delete", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.oauthClientId"));
       return true;
     }
   );

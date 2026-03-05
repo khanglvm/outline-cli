@@ -97,6 +97,39 @@ function defaultUsageArgs(def) {
       performAction: true,
     };
   }
+  if (def.tool === "oauth_clients.create") {
+    return {
+      name: "Example OAuth App",
+      redirectUris: ["https://example.com/callback"],
+      performAction: true,
+    };
+  }
+  if (def.tool === "oauth_clients.update") {
+    return {
+      id: "oauth-client-id",
+      name: "Updated OAuth App",
+      performAction: true,
+    };
+  }
+  if (
+    def.tool === "oauth_clients.rotate_secret" ||
+    def.tool === "oauth_clients.delete" ||
+    def.tool === "oauthClients.delete"
+  ) {
+    return {
+      id: "oauth-client-id",
+      performAction: true,
+    };
+  }
+  if (
+    def.tool === "oauth_authentications.delete" ||
+    def.tool === "oauthAuthentications.delete"
+  ) {
+    return {
+      oauthClientId: "oauth-client-id",
+      performAction: true,
+    };
+  }
   if (
     def.tool.endsWith(".list") ||
     def.tool.endsWith(".archived") ||
@@ -188,6 +221,40 @@ const RPC_WRAPPER_DEFS = [
   { tool: "comments.update", method: "comments.update", description: "Update a comment.", mutating: true },
   { tool: "comments.delete", method: "comments.delete", description: "Delete a comment.", mutating: true },
   { tool: "events.list", method: "events.list", description: "List workspace events." },
+  { tool: "oauth_clients.list", method: "oauthClients.list", description: "List OAuth clients." },
+  { tool: "oauth_clients.info", method: "oauthClients.info", description: "Get OAuth client details." },
+  { tool: "oauth_clients.create", method: "oauthClients.create", description: "Create an OAuth client.", mutating: true },
+  { tool: "oauth_clients.update", method: "oauthClients.update", description: "Update an OAuth client.", mutating: true },
+  {
+    tool: "oauth_clients.rotate_secret",
+    method: "oauthClients.rotate_secret",
+    description: "Rotate an OAuth client secret.",
+    mutating: true,
+  },
+  { tool: "oauth_clients.delete", method: "oauthClients.delete", description: "Delete an OAuth client.", mutating: true },
+  {
+    tool: "oauth_authentications.list",
+    method: "oauthAuthentications.list",
+    description: "List OAuth authentications.",
+  },
+  {
+    tool: "oauth_authentications.delete",
+    method: "oauthAuthentications.delete",
+    description: "Delete an OAuth authentication.",
+    mutating: true,
+  },
+  {
+    tool: "oauthClients.delete",
+    method: "oauthClients.delete",
+    description: "Compatibility alias for oauth_clients.delete.",
+    mutating: true,
+  },
+  {
+    tool: "oauthAuthentications.delete",
+    method: "oauthAuthentications.delete",
+    description: "Compatibility alias for oauth_authentications.delete.",
+    mutating: true,
+  },
   { tool: "data_attributes.list", method: "dataAttributes.list", description: "List data attributes." },
   { tool: "data_attributes.info", method: "dataAttributes.info", description: "Get data attribute details." },
   { tool: "data_attributes.create", method: "dataAttributes.create", description: "Create a data attribute.", mutating: true },

@@ -379,6 +379,627 @@ function uniqueStrings(values = []) {
   return out;
 }
 
+function normalizeGraphView(view) {
+  if (view === "ids" || view === "full") {
+    return view;
+  }
+  return "summary";
+}
+
+function normalizeGraphNode(row, view = "summary") {
+  const id = row?.id ? String(row.id) : "";
+  if (!id) {
+    return null;
+  }
+
+  if (view === "full") {
+    return row;
+  }
+
+  const summary = {
+    id,
+    title: row?.title ? String(row.title) : "",
+    collectionId: row?.collectionId ? String(row.collectionId) : "",
+    parentDocumentId: row?.parentDocumentId ? String(row.parentDocumentId) : "",
+    updatedAt: row?.updatedAt ? String(row.updatedAt) : "",
+    publishedAt: row?.publishedAt ? String(row.publishedAt) : "",
+    urlId: row?.urlId ? String(row.urlId) : "",
+    emoji: row?.emoji ? String(row.emoji) : "",
+  };
+
+  if (view === "ids") {
+    return {
+      id: summary.id,
+      title: summary.title,
+    };
+  }
+
+  return summary;
+}
+
+function scoreGraphNode(row) {
+  const fields = [
+    "id",
+    "title",
+    "collectionId",
+    "parentDocumentId",
+    "updatedAt",
+    "publishedAt",
+    "urlId",
+    "emoji",
+    "text",
+  ];
+  let score = 0;
+  for (const field of fields) {
+    if (row?.[field]) {
+      score += 1;
+    }
+  }
+  return score;
+}
+
+function upsertGraphNode(nodesById, row) {
+  const id = row?.id ? String(row.id) : "";
+  if (!id) {
+    return;
+  }
+  const existing = nodesById.get(id);
+  if (!existing) {
+    nodesById.set(id, row);
+    return;
+  }
+
+  const candidateScore = scoreGraphNode(row);
+  const existingScore = scoreGraphNode(existing);
+  if (candidateScore > existingScore) {
+    nodesById.set(id, row);
+    return;
+  }
+  if (candidateScore < existingScore) {
+    return;
+  }
+
+  if (compareIsoDesc(existing?.updatedAt, row?.updatedAt) > 0) {
+    nodesById.set(id, row);
+  }
+}
+
+function sortGraphEdges(edges = []) {
+  return edges.sort((a, b) => {
+    const sourceCmp = compareIdAsc(a.sourceId, b.sourceId);
+    if (sourceCmp !== 0) {
+      return sourceCmp;
+    }
+    const targetCmp = compareIdAsc(a.targetId, b.targetId);
+    if (targetCmp !== 0) {
+      return targetCmp;
+    }
+    const typeCmp = String(a.type || "").localeCompare(String(b.type || ""));
+    if (typeCmp !== 0) {
+      return typeCmp;
+    }
+    const queryCmp = String(a.query || "").localeCompare(String(b.query || ""));
+    if (queryCmp !== 0) {
+      return queryCmp;
+    }
+    return Number(a.rank || 0) - Number(b.rank || 0);
+  });
+}
+
+function sortGraphErrors(errors = []) {
+  return errors.sort((a, b) => {
+    const sourceCmp = compareIdAsc(a.sourceId, b.sourceId);
+    if (sourceCmp !== 0) {
+      return sourceCmp;
+    }
+    const typeCmp = String(a.type || "").localeCompare(String(b.type || ""));
+    if (typeCmp !== 0) {
+      return typeCmp;
+    }
+    const queryCmp = String(a.query || "").localeCompare(String(b.query || ""));
+    if (queryCmp !== 0) {
+      return queryCmp;
+    }
+    const statusCmp = Number(a.status || 0) - Number(b.status || 0);
+    if (statusCmp !== 0) {
+      return statusCmp;
+    }
+    return String(a.error || "").localeCompare(String(b.error || ""));
+  });
+}
+
+function normalizeGraphSourceIds(args = {}) {
+  const values = [];
+  if (args.id !== undefined && args.id !== null) {
+    values.push(args.id);
+  }
+  for (const id of ensureStringArray(args.ids, "ids") || []) {
+    values.push(id);
+  }
+  return uniqueStrings(values).sort(compareIdAsc);
+}
+
+function normalizeGraphSearchQueries(value) {
+  return uniqueStrings(ensureStringArray(value, "searchQueries") || []);
+}
+
+async function fetchGraphSourceDocs(ctx, sourceIds, maxAttempts) {
+  const ids = uniqueStrings(sourceIds).sort(compareIdAsc);
+  const byId = new Map();
+  const errors = [];
+
+  const items = await mapLimit(ids, Math.min(4, Math.max(1, ids.length || 1)), async (id) => {
+    try {
+      const res = await ctx.client.call("documents.info", { id }, { maxAttempts });
+      return {
+        id,
+        row: res.body?.data || { id },
+      };
+    } catch (err) {
+      if (err instanceof ApiError) {
+        return {
+          id,
+          row: { id },
+          error: err.message,
+          status: err.details.status,
+        };
+      }
+      throw err;
+    }
+  });
+
+  for (const item of items) {
+    byId.set(item.id, item.row);
+    if (item.error) {
+      errors.push({
+        sourceId: item.id,
+        type: "source_info",
+        query: "",
+        status: item.status,
+        error: item.error,
+      });
+    }
+  }
+
+  return {
+    byId,
+    errors: sortGraphErrors(errors),
+  };
+}
+
+function buildGraphNodeList(nodesById, view = "summary") {
+  return Array.from(nodesById.entries())
+    .sort(([a], [b]) => compareIdAsc(a, b))
+    .map(([id, row]) => {
+      const normalized = normalizeGraphNode(row || { id }, view);
+      if (normalized) {
+        return normalized;
+      }
+      return normalizeGraphNode({ id }, view);
+    })
+    .filter(Boolean);
+}
+
+async function collectGraphNeighbors(ctx, sourceIds, options = {}) {
+  const sortedSourceIds = uniqueStrings(sourceIds).sort(compareIdAsc);
+  const includeBacklinks = options.includeBacklinks !== false;
+  const includeSearchNeighbors = options.includeSearchNeighbors === true;
+  const limitPerSource = Math.max(1, Math.min(100, toInteger(options.limitPerSource, 10)));
+  const maxAttempts = Math.max(1, toInteger(options.maxAttempts, 2));
+  const explicitSearchQueries = normalizeGraphSearchQueries(options.searchQueries);
+  const hydrateSources =
+    options.hydrateSources === true ||
+    includeSearchNeighbors ||
+    options.view === "summary" ||
+    options.view === "full";
+
+  const sourceDocsById =
+    options.sourceDocsById instanceof Map ? new Map(options.sourceDocsById) : new Map();
+  const nodesById = new Map();
+  const edgeMap = new Map();
+  const errors = [];
+
+  if (hydrateSources) {
+    const missing = sortedSourceIds.filter((id) => !sourceDocsById.has(id));
+    if (missing.length > 0) {
+      const hydrated = await fetchGraphSourceDocs(ctx, missing, maxAttempts);
+      for (const [id, row] of hydrated.byId.entries()) {
+        sourceDocsById.set(id, row);
+      }
+      errors.push(...hydrated.errors);
+    }
+  }
+
+  for (const sourceId of sortedSourceIds) {
+    const sourceNode = sourceDocsById.get(sourceId) || { id: sourceId };
+    upsertGraphNode(nodesById, sourceNode);
+
+    if (includeBacklinks) {
+      try {
+        const backlinksRes = await ctx.client.call(
+          "documents.list",
+          {
+            backlinkDocumentId: sourceId,
+            limit: limitPerSource,
+            offset: 0,
+            sort: "updatedAt",
+            direction: "DESC",
+          },
+          { maxAttempts }
+        );
+        const rows = Array.isArray(backlinksRes.body?.data) ? backlinksRes.body.data : [];
+
+        for (let i = 0; i < rows.length; i += 1) {
+          const row = rows[i];
+          const targetId = row?.id ? String(row.id) : "";
+          if (!targetId || targetId === sourceId) {
+            continue;
+          }
+
+          upsertGraphNode(nodesById, row);
+          const key = `${sourceId}\u0000${targetId}\u0000backlink`;
+          const edge = {
+            sourceId,
+            targetId,
+            type: "backlink",
+            query: "",
+            rank: i + 1,
+          };
+          const existing = edgeMap.get(key);
+          if (!existing || edge.rank < existing.rank) {
+            edgeMap.set(key, edge);
+          }
+        }
+      } catch (err) {
+        if (err instanceof ApiError) {
+          errors.push({
+            sourceId,
+            type: "backlink",
+            query: "",
+            status: err.details.status,
+            error: err.message,
+          });
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (includeSearchNeighbors) {
+      let queries = explicitSearchQueries;
+      if (queries.length === 0) {
+        const inferred = String(sourceNode?.title || "").trim();
+        queries = inferred ? [inferred] : [];
+      }
+      if (queries.length === 0) {
+        continue;
+      }
+
+      const searchCandidates = new Map();
+      for (const query of queries) {
+        try {
+          const searchRes = await ctx.client.call(
+            "documents.search_titles",
+            {
+              query,
+              limit: limitPerSource,
+              offset: 0,
+            },
+            { maxAttempts }
+          );
+          const rows = Array.isArray(searchRes.body?.data) ? searchRes.body.data : [];
+
+          for (let i = 0; i < rows.length; i += 1) {
+            const row = rows[i];
+            const targetId = row?.id ? String(row.id) : "";
+            if (!targetId || targetId === sourceId) {
+              continue;
+            }
+            upsertGraphNode(nodesById, row);
+
+            const ranking = normalizeProbeRanking(row?.ranking, i);
+            const updatedAt = row?.updatedAt ? String(row.updatedAt) : "";
+            const existing = searchCandidates.get(targetId);
+            if (!existing) {
+              searchCandidates.set(targetId, {
+                targetId,
+                ranking,
+                query,
+                updatedAt,
+              });
+              continue;
+            }
+
+            if (ranking > existing.ranking) {
+              searchCandidates.set(targetId, {
+                targetId,
+                ranking,
+                query,
+                updatedAt,
+              });
+              continue;
+            }
+
+            if (
+              ranking === existing.ranking &&
+              compareIsoDesc(existing.updatedAt, updatedAt) > 0
+            ) {
+              searchCandidates.set(targetId, {
+                targetId,
+                ranking,
+                query,
+                updatedAt,
+              });
+            }
+          }
+        } catch (err) {
+          if (err instanceof ApiError) {
+            errors.push({
+              sourceId,
+              type: "search",
+              query,
+              status: err.details.status,
+              error: err.message,
+            });
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      const ranked = Array.from(searchCandidates.values())
+        .sort((a, b) => {
+          if (b.ranking !== a.ranking) {
+            return b.ranking - a.ranking;
+          }
+          const updatedCmp = compareIsoDesc(a.updatedAt, b.updatedAt);
+          if (updatedCmp !== 0) {
+            return updatedCmp;
+          }
+          return compareIdAsc(a.targetId, b.targetId);
+        })
+        .slice(0, limitPerSource);
+
+      for (let i = 0; i < ranked.length; i += 1) {
+        const item = ranked[i];
+        const key = `${sourceId}\u0000${item.targetId}\u0000search`;
+        const edge = {
+          sourceId,
+          targetId: item.targetId,
+          type: "search",
+          query: item.query,
+          rank: i + 1,
+        };
+        const existing = edgeMap.get(key);
+        if (
+          !existing ||
+          edge.rank < existing.rank ||
+          (edge.rank === existing.rank && edge.query.localeCompare(existing.query) < 0)
+        ) {
+          edgeMap.set(key, edge);
+        }
+      }
+    }
+  }
+
+  return {
+    nodesById,
+    edges: sortGraphEdges(Array.from(edgeMap.values())),
+    errors: sortGraphErrors(errors),
+    sourceDocsById,
+  };
+}
+
+async function documentsBacklinksTool(ctx, args = {}) {
+  const id = String(args.id || "").trim();
+  if (!id) {
+    throw new CliError("documents.backlinks requires args.id");
+  }
+
+  const view = normalizeGraphView(args.view);
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+
+  const res = await ctx.client.call(
+    "documents.list",
+    compactValue({
+      backlinkDocumentId: id,
+      limit: toInteger(args.limit, 25),
+      offset: toInteger(args.offset, 0),
+      sort: args.sort,
+      direction: args.direction,
+    }) || {},
+    { maxAttempts }
+  );
+
+  let payload = res.body;
+  if (view !== "full" && payload && typeof payload === "object") {
+    payload = {
+      ...payload,
+      data: Array.isArray(payload.data) ? payload.data.map((row) => normalizeGraphNode(row, view)) : [],
+    };
+  }
+  payload = maybeDropPolicies(payload, !!args.includePolicies);
+
+  return {
+    tool: "documents.backlinks",
+    profile: ctx.profile.id,
+    result: payload,
+  };
+}
+
+async function documentsGraphNeighborsTool(ctx, args = {}) {
+  const sourceIds = normalizeGraphSourceIds(args);
+  if (sourceIds.length === 0) {
+    throw new CliError("documents.graph_neighbors requires args.id or args.ids[]");
+  }
+
+  const includeBacklinks = args.includeBacklinks !== false;
+  const includeSearchNeighbors = args.includeSearchNeighbors === true;
+  if (!includeBacklinks && !includeSearchNeighbors) {
+    throw new CliError("documents.graph_neighbors requires includeBacklinks or includeSearchNeighbors");
+  }
+
+  const view = normalizeGraphView(args.view);
+  const limitPerSource = Math.max(1, Math.min(100, toInteger(args.limitPerSource, 10)));
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const searchQueries = normalizeGraphSearchQueries(args.searchQueries);
+
+  const collected = await collectGraphNeighbors(ctx, sourceIds, {
+    includeBacklinks,
+    includeSearchNeighbors,
+    searchQueries,
+    limitPerSource,
+    maxAttempts,
+    hydrateSources: view !== "ids" || includeSearchNeighbors,
+    view,
+  });
+
+  const nodes = buildGraphNodeList(collected.nodesById, view);
+  const edges = sortGraphEdges(collected.edges);
+
+  return {
+    tool: "documents.graph_neighbors",
+    profile: ctx.profile.id,
+    result: {
+      sourceIds,
+      includeBacklinks,
+      includeSearchNeighbors,
+      searchQueries,
+      limitPerSource,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      nodes,
+      edges,
+      errors: collected.errors,
+    },
+  };
+}
+
+async function documentsGraphReportTool(ctx, args = {}) {
+  const requestedSeedIds = uniqueStrings(ensureStringArray(args.seedIds, "seedIds") || []).sort(compareIdAsc);
+  if (requestedSeedIds.length === 0) {
+    throw new CliError("documents.graph_report requires args.seedIds[]");
+  }
+
+  const includeBacklinks = args.includeBacklinks !== false;
+  const includeSearchNeighbors = args.includeSearchNeighbors === true;
+  if (!includeBacklinks && !includeSearchNeighbors) {
+    throw new CliError("documents.graph_report requires includeBacklinks or includeSearchNeighbors");
+  }
+
+  const depth = Math.max(0, Math.min(6, toInteger(args.depth, 2)));
+  const maxNodes = Math.max(1, Math.min(500, toInteger(args.maxNodes, 120)));
+  const limitPerSource = Math.max(1, Math.min(100, toInteger(args.limitPerSource, 10)));
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const view = normalizeGraphView(args.view);
+
+  const seedIds = requestedSeedIds.slice(0, maxNodes);
+  const visited = new Set(seedIds);
+  const nodesById = new Map(seedIds.map((id) => [id, { id }]));
+  const edgeMap = new Map();
+  const errors = [];
+
+  let sourceDocsById = new Map();
+  let frontier = [...seedIds];
+  let exploredDepth = 0;
+  let truncated = seedIds.length < requestedSeedIds.length;
+
+  for (let level = 0; level < depth && frontier.length > 0; level += 1) {
+    const hop = await collectGraphNeighbors(ctx, frontier, {
+      includeBacklinks,
+      includeSearchNeighbors,
+      searchQueries: [],
+      limitPerSource,
+      maxAttempts,
+      sourceDocsById,
+      hydrateSources: view !== "ids" || includeSearchNeighbors,
+      view,
+    });
+    sourceDocsById = hop.sourceDocsById;
+
+    for (const [id, row] of hop.nodesById.entries()) {
+      if (visited.has(id)) {
+        upsertGraphNode(nodesById, row);
+      }
+    }
+
+    const next = new Set();
+    for (const edge of hop.edges) {
+      if (!visited.has(edge.sourceId)) {
+        continue;
+      }
+
+      if (!visited.has(edge.targetId)) {
+        if (visited.size >= maxNodes) {
+          truncated = true;
+          continue;
+        }
+        visited.add(edge.targetId);
+        next.add(edge.targetId);
+        upsertGraphNode(nodesById, hop.nodesById.get(edge.targetId) || { id: edge.targetId });
+      }
+
+      const key = `${edge.sourceId}\u0000${edge.targetId}\u0000${edge.type}`;
+      const existing = edgeMap.get(key);
+      if (
+        !existing ||
+        edge.rank < existing.rank ||
+        (edge.rank === existing.rank && String(edge.query || "").localeCompare(String(existing.query || "")) < 0)
+      ) {
+        edgeMap.set(key, edge);
+      }
+    }
+
+    for (const error of hop.errors) {
+      errors.push({
+        ...error,
+        hop: level + 1,
+      });
+    }
+
+    exploredDepth = level + 1;
+    frontier = Array.from(next).sort(compareIdAsc);
+  }
+
+  for (const id of visited) {
+    if (!nodesById.has(id)) {
+      upsertGraphNode(nodesById, sourceDocsById.get(id) || { id });
+    }
+  }
+
+  const allowedIds = new Set(visited);
+  const filteredNodes = new Map(
+    Array.from(nodesById.entries()).filter(([id]) => allowedIds.has(id))
+  );
+  const nodes = buildGraphNodeList(filteredNodes, view);
+  const edges = sortGraphEdges(
+    Array.from(edgeMap.values()).filter(
+      (edge) => allowedIds.has(edge.sourceId) && allowedIds.has(edge.targetId)
+    )
+  );
+
+  return {
+    tool: "documents.graph_report",
+    profile: ctx.profile.id,
+    result: {
+      seedIds,
+      requestedSeedCount: requestedSeedIds.length,
+      depth,
+      exploredDepth,
+      maxNodes,
+      includeBacklinks,
+      includeSearchNeighbors,
+      limitPerSource,
+      truncated,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      nodes,
+      edges,
+      errors: sortGraphErrors(errors),
+    },
+  };
+}
+
 function normalizeCommentContent(row, maxChars = 200) {
   const direct = [row?.text, row?.content, row?.anchorText];
   for (const value of direct) {
@@ -1193,6 +1814,65 @@ export const EXTENDED_TOOLS = {
       "Use per-item statuses to retry only failures.",
     ],
     handler: documentsAnswerBatchTool,
+  },
+  "documents.backlinks": {
+    signature:
+      "documents.backlinks(args: { id: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'ids'|'summary'|'full'; includePolicies?: boolean; maxAttempts?: number })",
+    description: "List backlinks for a document via documents.list(backlinkDocumentId=id).",
+    usageExample: {
+      tool: "documents.backlinks",
+      args: {
+        id: "doc-1",
+        limit: 20,
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Use view=ids for low-token planning loops, then hydrate specific documents separately.",
+      "Use limit/offset pagination for deterministic traversal over large backlink sets.",
+    ],
+    handler: documentsBacklinksTool,
+  },
+  "documents.graph_neighbors": {
+    signature:
+      "documents.graph_neighbors(args: { id?: string; ids?: string[]; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; searchQueries?: string[]; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description: "Collect one-hop graph neighbors and deterministic edge rows for source document IDs.",
+    usageExample: {
+      tool: "documents.graph_neighbors",
+      args: {
+        id: "doc-1",
+        includeBacklinks: true,
+        includeSearchNeighbors: true,
+        searchQueries: ["incident response"],
+        limitPerSource: 8,
+      },
+    },
+    bestPractices: [
+      "Start with a single source id and small limitPerSource, then expand incrementally.",
+      "Enable includeSearchNeighbors only when additional semantic neighborhood expansion is needed.",
+    ],
+    handler: documentsGraphNeighborsTool,
+  },
+  "documents.graph_report": {
+    signature:
+      "documents.graph_report(args: { seedIds: string[]; depth?: number; maxNodes?: number; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description: "Build a bounded BFS graph report with stable nodes[] and edges[] output.",
+    usageExample: {
+      tool: "documents.graph_report",
+      args: {
+        seedIds: ["doc-1", "doc-2"],
+        depth: 2,
+        maxNodes: 120,
+        includeBacklinks: true,
+        includeSearchNeighbors: false,
+        limitPerSource: 10,
+      },
+    },
+    bestPractices: [
+      "Cap maxNodes and depth to keep traversal deterministic and cost-bounded.",
+      "Prefer view=ids for graph planning and fetch full nodes only for selected IDs.",
+    ],
+    handler: documentsGraphReportTool,
   },
   "comments.review_queue": {
     signature:

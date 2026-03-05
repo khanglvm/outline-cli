@@ -988,6 +988,479 @@ test("documents.answer and documents.answer_batch schema match handler inputs", 
   );
 });
 
+test("graph schemas enforce selector constraints and strict bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.backlinks", {
+      id: "doc-1",
+      limit: 25,
+      offset: 0,
+      direction: "DESC",
+      view: "summary",
+      maxAttempts: 2,
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.graph_neighbors", {
+      id: "doc-1",
+      includeBacklinks: true,
+      includeSearchNeighbors: true,
+      searchQueries: ["incident response"],
+      limitPerSource: 10,
+      view: "ids",
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.graph_report", {
+      seedIds: ["doc-1", "doc-2"],
+      depth: 2,
+      maxNodes: 50,
+      includeBacklinks: true,
+      includeSearchNeighbors: false,
+      limitPerSource: 6,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.backlinks", { id: "", limit: 251 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.limit"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.graph_neighbors", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.graph_neighbors", {
+        id: "doc-1",
+        ids: ["doc-2"],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.graph_neighbors", {
+        id: "doc-1",
+        includeBacklinks: false,
+        includeSearchNeighbors: false,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.includeBacklinks"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.graph_neighbors", {
+        id: "doc-1",
+        includeSearchNeighbors: false,
+        searchQueries: ["incident response"],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.includeSearchNeighbors"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.graph_report", {
+        seedIds: [],
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.seedIds"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.graph_report", {
+        seedIds: ["doc-1"],
+        depth: 7,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.depth"));
+      return true;
+    }
+  );
+});
+
+test("documents.backlinks wraps documents.list with backlinkDocumentId", async () => {
+  const contract = EXTENDED_TOOLS["documents.backlinks"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        return {
+          body: {
+            data: [
+              {
+                id: "doc-2",
+                title: "Backlink Source A",
+              },
+              {
+                id: "doc-3",
+                title: "Backlink Source B",
+              },
+            ],
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    id: "doc-root",
+    limit: 2,
+    offset: 1,
+    sort: "updatedAt",
+    direction: "DESC",
+    view: "ids",
+    maxAttempts: 3,
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "documents.list",
+      body: {
+        backlinkDocumentId: "doc-root",
+        limit: 2,
+        offset: 1,
+        sort: "updatedAt",
+        direction: "DESC",
+      },
+      options: { maxAttempts: 3 },
+    },
+  ]);
+  assert.equal(output.tool, "documents.backlinks");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result, {
+    data: [
+      { id: "doc-2", title: "Backlink Source A" },
+      { id: "doc-3", title: "Backlink Source B" },
+    ],
+  });
+});
+
+test("documents.graph_neighbors returns deterministic nodes and edges", async () => {
+  const contract = EXTENDED_TOOLS["documents.graph_neighbors"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.info") {
+          return {
+            body: {
+              data: {
+                id: "doc-1",
+                title: "Seed Document",
+              },
+            },
+          };
+        }
+        if (method === "documents.list") {
+          return {
+            body: {
+              data: [
+                {
+                  id: "doc-2",
+                  title: "Runbook",
+                  collectionId: "col-1",
+                  parentDocumentId: "",
+                  updatedAt: "2026-03-01T00:00:00.000Z",
+                  publishedAt: "2026-03-01T00:00:00.000Z",
+                  urlId: "runbook",
+                  emoji: ":blue_book:",
+                },
+                {
+                  id: "doc-3",
+                  title: "Escalation Policy",
+                  collectionId: "col-1",
+                  parentDocumentId: "",
+                  updatedAt: "2026-03-02T00:00:00.000Z",
+                  publishedAt: "2026-03-02T00:00:00.000Z",
+                  urlId: "escalation-policy",
+                  emoji: ":green_book:",
+                },
+              ],
+            },
+          };
+        }
+        if (method === "documents.search_titles") {
+          return {
+            body: {
+              data: [
+                {
+                  id: "doc-3",
+                  title: "Escalation Policy",
+                  ranking: 0.9,
+                  updatedAt: "2026-03-02T00:00:00.000Z",
+                },
+                {
+                  id: "doc-4",
+                  title: "Incident Checklist",
+                  ranking: 0.7,
+                  collectionId: "col-2",
+                  updatedAt: "2026-03-03T00:00:00.000Z",
+                },
+              ],
+            },
+          };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    id: "doc-1",
+    includeBacklinks: true,
+    includeSearchNeighbors: true,
+    searchQueries: ["incident"],
+    limitPerSource: 2,
+    view: "summary",
+  });
+
+  assert.deepEqual(
+    calls.map((call) => call.method),
+    ["documents.info", "documents.list", "documents.search_titles"]
+  );
+  assert.deepEqual(calls[0], {
+    method: "documents.info",
+    body: { id: "doc-1" },
+    options: { maxAttempts: 2 },
+  });
+  assert.deepEqual(calls[1], {
+    method: "documents.list",
+    body: {
+      backlinkDocumentId: "doc-1",
+      limit: 2,
+      offset: 0,
+      sort: "updatedAt",
+      direction: "DESC",
+    },
+    options: { maxAttempts: 2 },
+  });
+  assert.deepEqual(calls[2], {
+    method: "documents.search_titles",
+    body: {
+      query: "incident",
+      limit: 2,
+      offset: 0,
+    },
+    options: { maxAttempts: 2 },
+  });
+
+  assert.equal(output.tool, "documents.graph_neighbors");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result, {
+    sourceIds: ["doc-1"],
+    includeBacklinks: true,
+    includeSearchNeighbors: true,
+    searchQueries: ["incident"],
+    limitPerSource: 2,
+    nodeCount: 4,
+    edgeCount: 4,
+    nodes: [
+      {
+        id: "doc-1",
+        title: "Seed Document",
+        collectionId: "",
+        parentDocumentId: "",
+        updatedAt: "",
+        publishedAt: "",
+        urlId: "",
+        emoji: "",
+      },
+      {
+        id: "doc-2",
+        title: "Runbook",
+        collectionId: "col-1",
+        parentDocumentId: "",
+        updatedAt: "2026-03-01T00:00:00.000Z",
+        publishedAt: "2026-03-01T00:00:00.000Z",
+        urlId: "runbook",
+        emoji: ":blue_book:",
+      },
+      {
+        id: "doc-3",
+        title: "Escalation Policy",
+        collectionId: "col-1",
+        parentDocumentId: "",
+        updatedAt: "2026-03-02T00:00:00.000Z",
+        publishedAt: "2026-03-02T00:00:00.000Z",
+        urlId: "escalation-policy",
+        emoji: ":green_book:",
+      },
+      {
+        id: "doc-4",
+        title: "Incident Checklist",
+        collectionId: "col-2",
+        parentDocumentId: "",
+        updatedAt: "2026-03-03T00:00:00.000Z",
+        publishedAt: "",
+        urlId: "",
+        emoji: "",
+      },
+    ],
+    edges: [
+      {
+        sourceId: "doc-1",
+        targetId: "doc-2",
+        type: "backlink",
+        query: "",
+        rank: 1,
+      },
+      {
+        sourceId: "doc-1",
+        targetId: "doc-3",
+        type: "backlink",
+        query: "",
+        rank: 2,
+      },
+      {
+        sourceId: "doc-1",
+        targetId: "doc-3",
+        type: "search",
+        query: "incident",
+        rank: 1,
+      },
+      {
+        sourceId: "doc-1",
+        targetId: "doc-4",
+        type: "search",
+        query: "incident",
+        rank: 2,
+      },
+    ],
+    errors: [],
+  });
+});
+
+test("documents.graph_report performs bounded BFS with stable output ordering", async () => {
+  const contract = EXTENDED_TOOLS["documents.graph_report"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method !== "documents.list") {
+          throw new Error(`Unexpected method: ${method}`);
+        }
+        return {
+          body: {
+            data: [
+              { id: "doc-2", title: "Neighbor A" },
+              { id: "doc-3", title: "Neighbor B" },
+              { id: "doc-4", title: "Neighbor C" },
+            ],
+          },
+        };
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    seedIds: ["doc-1"],
+    depth: 1,
+    maxNodes: 3,
+    includeBacklinks: true,
+    includeSearchNeighbors: false,
+    limitPerSource: 3,
+    view: "ids",
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "documents.list",
+      body: {
+        backlinkDocumentId: "doc-1",
+        limit: 3,
+        offset: 0,
+        sort: "updatedAt",
+        direction: "DESC",
+      },
+      options: { maxAttempts: 2 },
+    },
+  ]);
+  assert.equal(output.tool, "documents.graph_report");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result, {
+    seedIds: ["doc-1"],
+    requestedSeedCount: 1,
+    depth: 1,
+    exploredDepth: 1,
+    maxNodes: 3,
+    includeBacklinks: true,
+    includeSearchNeighbors: false,
+    limitPerSource: 3,
+    truncated: true,
+    nodeCount: 3,
+    edgeCount: 2,
+    nodes: [
+      { id: "doc-1", title: "" },
+      { id: "doc-2", title: "Neighbor A" },
+      { id: "doc-3", title: "Neighbor B" },
+    ],
+    edges: [
+      {
+        sourceId: "doc-1",
+        targetId: "doc-2",
+        type: "backlink",
+        query: "",
+        rank: 1,
+      },
+      {
+        sourceId: "doc-1",
+        targetId: "doc-3",
+        type: "backlink",
+        query: "",
+        rank: 2,
+      },
+    ],
+    errors: [],
+  });
+});
+
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-hardening-"));
   const store = new ResultStore({ tmpDir });

@@ -155,6 +155,118 @@ export const TOOL_ARG_SCHEMAS = {
       ...SHARED_DOC_COMMON,
     },
   },
+  "documents.backlinks": {
+    required: ["id"],
+    properties: {
+      id: { type: "string" },
+      limit: { type: "number", min: 1 },
+      offset: { type: "number", min: 0 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      includePolicies: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (typeof args.id === "string" && args.id.trim().length === 0) {
+        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      }
+      if (typeof args.limit === "number" && args.limit > 250) {
+        issues.push({ path: "args.limit", message: "must be <= 250" });
+      }
+    },
+  },
+  "documents.graph_neighbors": {
+    properties: {
+      id: { type: "string" },
+      ids: { type: "string[]" },
+      includeBacklinks: { type: "boolean" },
+      includeSearchNeighbors: { type: "boolean" },
+      searchQueries: { type: "string[]" },
+      limitPerSource: { type: "number", min: 1 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+
+      if (!hasId && !hasIds) {
+        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (hasId && Array.isArray(args.ids)) {
+        issues.push({ path: "args.ids", message: "cannot be combined with args.id" });
+      }
+      if (args.includeBacklinks === false && args.includeSearchNeighbors === false) {
+        issues.push({
+          path: "args.includeBacklinks",
+          message: "and includeSearchNeighbors cannot both be false",
+        });
+      }
+      if (Array.isArray(args.searchQueries)) {
+        if (args.searchQueries.length === 0) {
+          issues.push({ path: "args.searchQueries", message: "must be a non-empty string[] when provided" });
+        }
+        for (let i = 0; i < args.searchQueries.length; i += 1) {
+          if (typeof args.searchQueries[i] === "string" && args.searchQueries[i].trim().length === 0) {
+            issues.push({ path: `args.searchQueries[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+        if (args.includeSearchNeighbors === false) {
+          issues.push({
+            path: "args.includeSearchNeighbors",
+            message: "must be true when args.searchQueries is provided",
+          });
+        }
+      }
+      if (typeof args.limitPerSource === "number" && args.limitPerSource > 100) {
+        issues.push({ path: "args.limitPerSource", message: "must be <= 100" });
+      }
+    },
+  },
+  "documents.graph_report": {
+    required: ["seedIds"],
+    properties: {
+      seedIds: { type: "string[]" },
+      depth: { type: "number", min: 0 },
+      maxNodes: { type: "number", min: 1 },
+      includeBacklinks: { type: "boolean" },
+      includeSearchNeighbors: { type: "boolean" },
+      limitPerSource: { type: "number", min: 1 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (Array.isArray(args.seedIds) && args.seedIds.length === 0) {
+        issues.push({ path: "args.seedIds", message: "must be a non-empty string[]" });
+      }
+      if (Array.isArray(args.seedIds)) {
+        for (let i = 0; i < args.seedIds.length; i += 1) {
+          if (typeof args.seedIds[i] === "string" && args.seedIds[i].trim().length === 0) {
+            issues.push({ path: `args.seedIds[${i}]`, message: "must be a non-empty string" });
+          }
+        }
+      }
+      if (typeof args.depth === "number" && args.depth > 6) {
+        issues.push({ path: "args.depth", message: "must be <= 6" });
+      }
+      if (typeof args.maxNodes === "number" && args.maxNodes > 500) {
+        issues.push({ path: "args.maxNodes", message: "must be <= 500" });
+      }
+      if (typeof args.limitPerSource === "number" && args.limitPerSource > 100) {
+        issues.push({ path: "args.limitPerSource", message: "must be <= 100" });
+      }
+      if (args.includeBacklinks === false && args.includeSearchNeighbors === false) {
+        issues.push({
+          path: "args.includeBacklinks",
+          message: "and includeSearchNeighbors cannot both be false",
+        });
+      }
+    },
+  },
   "documents.info": {
     properties: {
       id: { type: "string" },

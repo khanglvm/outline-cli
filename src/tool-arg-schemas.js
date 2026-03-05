@@ -1126,8 +1126,17 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (!args.id && !args.ids && !args.email) {
+      const hasId = typeof args.id === "string" && args.id.length > 0;
+      const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+
+      if (!hasId && !hasIds && !args.email) {
         issues.push({ path: "args.id", message: "or args.ids[] or args.email is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (hasId && Array.isArray(args.ids)) {
+        issues.push({ path: "args.ids", message: "cannot be combined with args.id" });
       }
     },
   },
@@ -1153,8 +1162,17 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (!args.id && !args.ids) {
+      const hasId = typeof args.id === "string" && args.id.length > 0;
+      const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+
+      if (!hasId && !hasIds) {
         issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (hasId && Array.isArray(args.ids)) {
+        issues.push({ path: "args.ids", message: "cannot be combined with args.id" });
       }
     },
   },
@@ -1180,6 +1198,11 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      if (Array.isArray(args.memberIds) && args.memberIds.length === 0) {
+        issues.push({ path: "args.memberIds", message: "must be a non-empty string[] when provided" });
+      }
     },
   },
   "groups.update": {

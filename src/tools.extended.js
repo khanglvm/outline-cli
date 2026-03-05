@@ -164,6 +164,7 @@ const RPC_WRAPPER_DEFS = [
   { tool: "users.info", method: "users.info", description: "Get user details." },
   { tool: "groups.list", method: "groups.list", description: "List groups." },
   { tool: "groups.info", method: "groups.info", description: "Get group details." },
+  { tool: "groups.memberships", method: "groups.memberships", description: "List group user memberships." },
   { tool: "groups.create", method: "groups.create", description: "Create a group.", mutating: true },
   { tool: "groups.update", method: "groups.update", description: "Update a group.", mutating: true },
   { tool: "groups.delete", method: "groups.delete", description: "Delete a group.", mutating: true },

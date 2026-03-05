@@ -7,6 +7,7 @@ import path from "node:path";
 import { CliError } from "../src/errors.js";
 import { ResultStore } from "../src/result-store.js";
 import { TOOL_ARG_SCHEMAS, validateToolArgs } from "../src/tool-arg-schemas.js";
+import { EXTENDED_TOOLS } from "../src/tools.extended.js";
 
 test("validateToolArgs rejects unknown args by default", () => {
   assert.throws(
@@ -62,6 +63,50 @@ test("api.call accepts method or endpoint and rejects when both missing", () => 
   );
 });
 
+test("groups.memberships is exposed as a first-class extended wrapper", async () => {
+  const contract = EXTENDED_TOOLS["groups.memberships"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+  assert.equal(contract.usageExample?.tool, "groups.memberships");
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        return {
+          body: {
+            data: [{ id: "membership-1", userId: "user-1" }],
+            policies: [{ id: "policy-1" }],
+          },
+        };
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    id: "group-1",
+    limit: 10,
+    offset: 0,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "groups.memberships");
+  assert.deepEqual(calls[0].body, {
+    id: "group-1",
+    limit: 10,
+    offset: 0,
+  });
+  assert.equal(calls[0].options?.maxAttempts, 2);
+
+  assert.equal(output.tool, "groups.memberships");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result, {
+    data: [{ id: "membership-1", userId: "user-1" }],
+  });
+});
+
 test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
   assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
@@ -91,6 +136,14 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
       id: "collection-1",
       userId: "user-1",
       performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("groups.memberships", {
+      id: "group-1",
+      limit: 20,
+      offset: 0,
+      view: "summary",
     })
   );
 
@@ -153,6 +206,73 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+});
+
+test("users/groups schemas enforce deterministic id selector constraints", () => {
+  assert.doesNotThrow(() => validateToolArgs("users.info", { id: "user-1" }));
+  assert.doesNotThrow(() => validateToolArgs("users.info", { ids: ["user-1", "user-2"] }));
+  assert.doesNotThrow(() => validateToolArgs("groups.info", { id: "group-1" }));
+  assert.doesNotThrow(() => validateToolArgs("groups.info", { ids: ["group-1"] }));
+
+  assert.throws(
+    () => validateToolArgs("users.info", { ids: [] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("users.info", { id: "user-1", ids: ["user-2"] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("groups.info", { ids: [] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("groups.info", { id: "group-1", ids: ["group-2"] }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+});
+
+test("groups.create schema requires non-empty memberIds when provided", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("groups.create", {
+      name: "Engineering",
+      memberIds: ["user-1"],
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("groups.create", {
+        name: "Engineering",
+        memberIds: [],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.memberIds"));
       return true;
     }
   );

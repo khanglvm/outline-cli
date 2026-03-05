@@ -431,6 +431,97 @@ function normalizePlanRules(args) {
   });
 }
 
+function normalizeTerminologyRuleEntries(args) {
+  const rawGlossary = Array.isArray(args.glossary) ? args.glossary : null;
+  const rawMapCandidates = [args.map, args.glossaryMap, args.terminologyMap];
+  const rawMap = rawMapCandidates.find(
+    (candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate)
+  );
+
+  const rules = [];
+  let inputMode = "";
+
+  if (rawGlossary && rawGlossary.length > 0) {
+    inputMode = "glossary";
+    for (let index = 0; index < rawGlossary.length; index += 1) {
+      const entry = rawGlossary[index];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new CliError(`glossary[${index}] must be an object`);
+      }
+
+      const from = String(entry.from ?? entry.find ?? "").trim();
+      if (!from) {
+        throw new CliError(`glossary[${index}].from (or find) is required`);
+      }
+
+      const to = String(entry.to ?? entry.replace ?? "");
+      const field = entry.field || "both";
+      if (!["title", "text", "both"].includes(field)) {
+        throw new CliError(`glossary[${index}].field must be title|text|both`);
+      }
+
+      rules.push({
+        field,
+        find: from,
+        replace: to,
+        caseSensitive: entry.caseSensitive,
+        wholeWord: entry.wholeWord,
+        all: entry.all,
+      });
+    }
+  } else if (rawMap && Object.keys(rawMap).length > 0) {
+    inputMode = "map";
+    const keys = Object.keys(rawMap).sort((a, b) => a.localeCompare(b));
+    for (const fromKey of keys) {
+      const from = String(fromKey || "").trim();
+      if (!from) {
+        continue;
+      }
+      rules.push({
+        field: "both",
+        find: from,
+        replace: String(rawMap[fromKey] ?? ""),
+        caseSensitive: !!args.caseSensitive,
+        wholeWord: args.wholeWord,
+        all: args.all,
+      });
+    }
+  } else {
+    throw new CliError("documents.plan_terminology_refactor requires args.glossary[] or args.map object");
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  for (const rule of rules) {
+    const key = [
+      rule.field || "both",
+      String(rule.find || ""),
+      String(rule.replace ?? ""),
+      rule.caseSensitive ? "1" : "0",
+      rule.wholeWord ? "1" : "0",
+      rule.all === false ? "0" : "1",
+    ].join("::");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(rule);
+  }
+
+  return {
+    inputMode,
+    rules: deduped,
+    glossary: deduped.map((rule) => ({
+      from: rule.find,
+      to: String(rule.replace ?? ""),
+      field: rule.field || "both",
+      caseSensitive: !!rule.caseSensitive,
+      wholeWord: !!rule.wholeWord,
+      all: rule.all !== false,
+    })),
+  };
+}
+
 function countMatches(text, regex) {
   const flags = regex.flags.includes("g") ? regex.flags : `${regex.flags}g`;
   const counter = new RegExp(regex.source, flags);
@@ -709,6 +800,43 @@ async function documentsPlanBatchUpdateTool(ctx, args) {
           confirmHash: planHash,
           plan: normalizedPlan,
         },
+      },
+    },
+  };
+}
+
+async function documentsPlanTerminologyRefactorTool(ctx, args) {
+  const normalizedGlossary = normalizeTerminologyRuleEntries(args || {});
+  const planArgs = compactValue({
+    id: args.id,
+    ids: args.ids,
+    query: args.query,
+    queries: args.queries,
+    collectionId: args.collectionId,
+    rules: normalizedGlossary.rules,
+    includeTitleSearch: args.includeTitleSearch,
+    includeSemanticSearch: args.includeSemanticSearch,
+    limitPerQuery: args.limitPerQuery,
+    offset: args.offset,
+    maxDocuments: args.maxDocuments,
+    readConcurrency: args.readConcurrency,
+    includeUnchanged: args.includeUnchanged,
+    hunkLimit: args.hunkLimit,
+    hunkLineLimit: args.hunkLineLimit,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  const planned = await documentsPlanBatchUpdateTool(ctx, planArgs);
+  return {
+    tool: "documents.plan_terminology_refactor",
+    profile: ctx.profile.id,
+    result: {
+      ...(planned.result || {}),
+      metadata: {
+        sourceTool: "documents.plan_batch_update",
+        inputMode: normalizedGlossary.inputMode,
+        glossaryCount: normalizedGlossary.glossary.length,
+        glossary: normalizedGlossary.glossary,
       },
     },
   };
@@ -1022,6 +1150,28 @@ async function documentsApplyPatchTool(ctx, args) {
   const current = info.body?.data;
   const currentText = current?.text || "";
   const previousRevision = Number(current?.revision);
+  const hasExpectedRevision = Object.prototype.hasOwnProperty.call(args, "expectedRevision");
+  const expectedRevision = hasExpectedRevision ? Number(args.expectedRevision) : undefined;
+  if (hasExpectedRevision && !Number.isFinite(expectedRevision)) {
+    throw new CliError("expectedRevision must be a number");
+  }
+
+  const actualRevision = Number.isFinite(previousRevision) ? previousRevision : undefined;
+  if (hasExpectedRevision && actualRevision !== expectedRevision) {
+    return {
+      tool: "documents.apply_patch",
+      profile: ctx.profile.id,
+      result: {
+        ...buildRevisionConflict({
+          id: args.id,
+          expectedRevision,
+          actualRevision,
+        }),
+        mode,
+        previousRevision: actualRevision,
+      },
+    };
+  }
 
   let nextText = args.patch;
   if (mode === "unified") {
@@ -1300,18 +1450,20 @@ export const MUTATION_TOOLS = {
   },
   "documents.apply_patch": {
     signature:
-      "documents.apply_patch(args: { id: string; patch: string; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
+      "documents.apply_patch(args: { id: string; patch: string; mode?: 'unified'|'replace'; expectedRevision?: number; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
     description: "Apply unified diff patch (or full replace) to a document and persist update.",
     usageExample: {
       tool: "documents.apply_patch",
       args: {
         id: "doc-id",
+        expectedRevision: 7,
         mode: "unified",
         patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
       },
     },
     bestPractices: [
       "Prefer unified mode for minimal, auditable text changes.",
+      "Pass expectedRevision when coordinating concurrent editors to prevent stale writes.",
       "On patch_apply_failed, re-read latest text and regenerate patch.",
       "Use replace mode only for full-document rewrites.",
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
@@ -1387,6 +1539,29 @@ export const MUTATION_TOOLS = {
       "Apply with `documents.apply_batch_plan` using the returned `planHash` for explicit confirmation.",
     ],
     handler: documentsPlanBatchUpdateTool,
+  },
+  "documents.plan_terminology_refactor": {
+    signature:
+      "documents.plan_terminology_refactor(args: { glossary?: Array<{ from?: string; to?: string; find?: string; replace?: string; field?: 'title'|'text'|'both'; caseSensitive?: boolean; wholeWord?: boolean; all?: boolean }>; map?: Record<string, string>; glossaryMap?: Record<string, string>; terminologyMap?: Record<string, string>; id?: string; ids?: string[]; query?: string; queries?: string[]; collectionId?: string; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; limitPerQuery?: number; offset?: number; maxDocuments?: number; readConcurrency?: number; includeUnchanged?: boolean; hunkLimit?: number; hunkLineLimit?: number; maxAttempts?: number })",
+    description:
+      "Plan terminology refactors using glossary/map inputs and return plan_batch_update-compatible output with metadata.",
+    usageExample: {
+      tool: "documents.plan_terminology_refactor",
+      args: {
+        queries: ["incident response", "escalation policy"],
+        glossary: [
+          { from: "SEV1", to: "SEV-1", field: "both", wholeWord: true },
+          { from: "on call", to: "on-call", field: "text" },
+        ],
+        maxDocuments: 25,
+      },
+    },
+    bestPractices: [
+      "Use glossary[] when each mapping needs its own field/casing controls.",
+      "Use map for fast one-to-one terminology upgrades across both title and text.",
+      "Review returned impacts/planHash before applying with documents.apply_batch_plan.",
+    ],
+    handler: documentsPlanTerminologyRefactorTool,
   },
   "documents.apply_batch_plan": {
     signature:

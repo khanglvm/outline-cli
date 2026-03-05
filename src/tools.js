@@ -1046,8 +1046,8 @@ export async function invokeTool(ctx, name, args = {}) {
   }
 
   const argsForValidation =
-    name === "documents.cleanup_test" && args && typeof args === "object" && "deleteMode" in args
-      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "deleteMode"))
+    name === "documents.apply_patch" && args && typeof args === "object" && "expectedRevision" in args
+      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "expectedRevision"))
       : args;
 
   validateToolArgs(name, argsForValidation);

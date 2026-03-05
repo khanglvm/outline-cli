@@ -1,10 +1,6 @@
 # outline-cli
 
-`outline-cli` is a Node.js CLI for the Outline API, optimized for AI agents and automation workflows.
-
-It is built for deterministic, low-token, machine-readable operations first.
-
-It prioritizes deterministic, machine-friendly output:
+`outline-cli` is a Node.js CLI for the Outline API, optimized for AI agents and automation workflows with deterministic, low-token, machine-readable output.
 
 - Stable JSON envelopes
 - Token-efficient `ids` and `summary` views

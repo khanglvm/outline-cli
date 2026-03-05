@@ -162,21 +162,21 @@ outline-cli tools contract all --pretty
 
 ## `documents.list`
 
-- Signature: `documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; parentDocumentId?: string | null; userId?: string; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })`
+- Signature: `documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; parentDocumentId?: string | null; backlinkDocumentId?: string; userId?: string; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })`
 - Usage example:
 
 ```json
 {
   "tool": "documents.list",
   "args": {
-    "collectionId": "6f35e6db-5930-4db8-9c31-66fe12f9f4aa",
+    "backlinkDocumentId": "outline-api-NTpezNwhUP",
     "limit": 20,
-    "statusFilter": ["published"],
     "view": "summary"
   }
 }
 ```
 
+- Best practice (AI): use `backlinkDocumentId` for deterministic internal graph traversal (which docs reference a known source doc).
 - Best practice (AI): page with small limits; avoid full view unless needed.
 
 ## `documents.info`
@@ -1015,6 +1015,121 @@ outline-cli tools contract all --pretty
 ```
 
 - Best practice (AI): reserve deletes for invalid/noise comments; prefer edits for audit continuity.
+
+## `events.list`
+
+- Signature: `events.list(args?: { actorId?: string; documentId?: string; collectionId?: string; name?: string; auditLog?: boolean; ip?: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "events.list",
+  "args": {
+    "documentId": "doc-id",
+    "auditLog": true,
+    "limit": 25,
+    "sort": "createdAt",
+    "direction": "DESC",
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use document/collection/actor filters to keep audit windows deterministic and token-efficient.
+- Best practice (AI): treat empty/no-row responses as deployment-policy dependent and handle gracefully in live smoke checks.
+
+## `data_attributes.list` (optional wrapper)
+
+- Signature: `data_attributes.list(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "data_attributes.list",
+  "args": {
+    "limit": 50,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): discover taxonomy keys once, then cache IDs/names for downstream issue-link tagging workflows.
+- Best practice (AI): if unavailable in your build, fallback to `api.call` with `method: "dataAttributes.list"`.
+
+## `data_attributes.info` (optional wrapper)
+
+- Signature: `data_attributes.info(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "data_attributes.info",
+  "args": {
+    "id": "data-attribute-id",
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): hydrate attribute metadata before mutation to keep schema/value usage consistent.
+- Best practice (AI): for batch hydration, use ids in stable chunks and low concurrency.
+
+## `data_attributes.create` (optional wrapper)
+
+- Signature: `data_attributes.create(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "data_attributes.create",
+  "args": {
+    "name": "linearIssueKey",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): create only after checking list/info to prevent duplicate taxonomy entries.
+- Best practice (AI): this tool is action-gated; set `performAction=true` only for explicit metadata writes.
+
+## `data_attributes.update` (optional wrapper)
+
+- Signature: `data_attributes.update(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "data_attributes.update",
+  "args": {
+    "id": "data-attribute-id",
+    "name": "linearIssueKey",
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): mutate only changed fields to keep change reviews/audit trails concise.
+- Best practice (AI): this tool is action-gated; set `performAction=true` only for explicit metadata writes.
+
+## `data_attributes.delete` (optional wrapper)
+
+- Signature: `data_attributes.delete(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "data_attributes.delete",
+  "args": {
+    "id": "data-attribute-id",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): delete only after verifying no active issue-link workflows depend on the attribute.
+- Best practice (AI): this tool is action-gated; set `performAction=true` only for explicitly confirmed deletes.
 
 ## `capabilities.map`
 

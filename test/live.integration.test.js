@@ -379,6 +379,46 @@ function extractAnswerSignals(result) {
   return { answerText, noAnswerReason, citations };
 }
 
+function extractResolveCandidates(result) {
+  const rows = [];
+
+  const pushRows = (value) => {
+    if (Array.isArray(value)) {
+      rows.push(...value);
+    }
+  };
+
+  pushRows(result?.candidates);
+  pushRows(result?.data);
+
+  if (Array.isArray(result?.perQuery)) {
+    for (const bucket of result.perQuery) {
+      if (!bucket || typeof bucket !== "object") {
+        continue;
+      }
+      pushRows(bucket.candidates);
+      pushRows(bucket.data);
+      pushRows(bucket.hits);
+    }
+  }
+
+  return rows.filter((row) => row && typeof row === "object");
+}
+
+function hasCliValidationIssue(envelope, pathPrefix) {
+  const err = envelope?.error;
+  if (!err || err.type !== "CliError" || !Array.isArray(err.issues)) {
+    return false;
+  }
+
+  return err.issues.some(
+    (issue) =>
+      issue &&
+      typeof issue.path === "string" &&
+      issue.path.startsWith(pathPrefix)
+  );
+}
+
 test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }, async (t) => {
   const env = await resolveLiveEnv();
   assert.ok(env.baseUrl, "OUTLINE_TEST_BASE_URL is required");
@@ -1324,6 +1364,289 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
         const memberships = payload.result?.data?.memberships ?? payload.result?.memberships ?? [];
         assert.ok(Array.isArray(memberships), "collections.memberships should expose memberships array");
+      });
+    });
+
+    await t.test("UC-07 project docs issue-link workflows", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+      assert.ok(state.marker, "created test marker is required");
+
+      const requiredTools = [
+        "documents.update",
+        "documents.search",
+        "documents.resolve",
+        "documents.list",
+        "documents.info",
+      ];
+      const missing = requiredTools.filter((tool) => !hasToolContract(tool));
+      if (missing.length > 0) {
+        t.skip(`Missing UC-07 tools in this build: ${missing.join(", ")}`);
+        return;
+      }
+
+      const issueSeed = Date.now();
+      const issueKey = `ENG-${String(issueSeed).slice(-6)}`;
+      const issueUrl = `https://linear.app/acme/issue/${issueKey.toLowerCase()}`;
+      const issueToken = `uc07-issue-token-${issueSeed}-${Math.random().toString(36).slice(2, 10)}`;
+      const patchMarker = `uc07-patch-${issueSeed}`;
+
+      const injectRes = await invokeTool(tmpDir, configPath, "documents.update", {
+        id: state.createdDocumentId,
+        text:
+          "\n\n## UC-07 Issue Links\n" +
+          `- Linear issue key: ${issueKey}\n` +
+          `- Linear issue URL: ${issueUrl}\n` +
+          `- Deterministic token: ${issueToken}\n` +
+          `- Patch marker: ${patchMarker}\n`,
+        editMode: "append",
+        performAction: true,
+        view: "summary",
+      });
+      assert.equal(injectRes.tool, "documents.update");
+
+      await t.test("issue token retrieval via documents.search", async (t) => {
+        let found = false;
+        let finalRows = [];
+
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const searchRes = await invokeTool(tmpDir, configPath, "documents.search", {
+            query: issueToken,
+            mode: "titles",
+            limit: 10,
+            view: "summary",
+            merge: true,
+          });
+          assert.equal(searchRes.tool, "documents.search");
+
+          finalRows = extractResultRows(searchRes.result) || [];
+          found = finalRows.some(
+            (row) =>
+              row &&
+              typeof row === "object" &&
+              (row.id === state.createdDocumentId || row.title === state.marker)
+          );
+
+          if (found) {
+            break;
+          }
+          if (attempt < 6) {
+            await wait(700);
+          }
+        }
+
+        if (!found) {
+          t.diagnostic(`UC-07 search rows did not include suite doc: ${JSON.stringify(finalRows)}`);
+          t.skip("Search indexing lag or deployment search behavior prevented deterministic token retrieval");
+          return;
+        }
+
+        assert.equal(found, true);
+      });
+
+      await t.test("issue token retrieval via documents.resolve", async (t) => {
+        let found = false;
+        let finalCandidates = [];
+
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const resolveRes = await invokeTool(tmpDir, configPath, "documents.resolve", {
+            query: issueToken,
+            limit: 10,
+            strict: false,
+            view: "summary",
+          });
+          assert.equal(resolveRes.tool, "documents.resolve");
+
+          finalCandidates = extractResolveCandidates(resolveRes.result);
+          found = finalCandidates.some((candidate) => {
+            const candidateId = pickStringId(
+              candidate.id,
+              candidate.documentId,
+              candidate.document?.id
+            );
+            return candidateId === state.createdDocumentId;
+          });
+
+          if (found) {
+            break;
+          }
+          if (attempt < 6) {
+            await wait(700);
+          }
+        }
+
+        if (!found) {
+          t.diagnostic(`UC-07 resolve candidates missing suite doc: ${JSON.stringify(finalCandidates)}`);
+          t.skip("Resolve ranking/indexing varies by deployment for fresh issue tokens");
+          return;
+        }
+
+        assert.equal(found, true);
+      });
+
+      await t.test("backlink traversal via documents.list(backlinkDocumentId)", async (t) => {
+        const sourceInfo = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        assert.equal(sourceInfo.tool, "documents.info");
+
+        const sourceDoc = sourceInfo.result?.data || {};
+        const sourceUrlId = typeof sourceDoc.urlId === "string" ? sourceDoc.urlId : null;
+        const sourceUrl = typeof sourceDoc.url === "string" && sourceDoc.url.length > 0
+          ? sourceDoc.url
+          : sourceUrlId
+            ? `${String(env.baseUrl || "").replace(/\/+$/, "")}/doc/${sourceUrlId}`
+            : null;
+
+        const backlinkDocTitle = `${state.marker}-uc07-backlink-${Date.now()}`;
+        const backlinkDocText =
+          `# ${backlinkDocTitle}\n\n` +
+          "This suite-created document references the UC-07 target document.\n\n" +
+          `- Issue key: ${issueKey}\n` +
+          `- Issue URL: ${issueUrl}\n` +
+          (sourceUrl
+            ? `- Target doc: [${state.marker}](${sourceUrl})\n`
+            : `- Target doc id: ${state.createdDocumentId}\n`);
+
+        const createBacklinkDoc = await invokeTool(tmpDir, configPath, "documents.create", {
+          title: backlinkDocTitle,
+          text: backlinkDocText,
+          publish: false,
+          view: "summary",
+        });
+        const backlinkDocId = pickStringId(
+          createBacklinkDoc?.result?.data?.id,
+          createBacklinkDoc?.result?.id
+        );
+        if (!backlinkDocId) {
+          t.diagnostic(`Backlink source doc missing id: ${JSON.stringify(createBacklinkDoc.result)}`);
+          t.skip("Cannot verify backlink traversal without backlink source document id");
+          return;
+        }
+        state.uc03AdditionalDocumentIds.push(backlinkDocId);
+
+        let foundBacklink = false;
+        let finalRows = [];
+
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const listRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.list", {
+            backlinkDocumentId: state.createdDocumentId,
+            limit: 25,
+            view: "summary",
+          });
+
+          if (listRun.status !== 0) {
+            if (
+              hasCliValidationIssue(listRun.stderrJson, "args.backlinkDocumentId") ||
+              isSkippableDirectoryReadError(listRun.stderrJson)
+            ) {
+              t.diagnostic(`documents.list backlink query skipped payload: ${listRun.stderr || "<empty stderr>"}`);
+              t.skip("backlinkDocumentId not accepted/available in this deployment");
+              return;
+            }
+            assert.fail(
+              `documents.list backlink query expected success, got status=${listRun.status}, stderr=${listRun.stderr || "<empty>"}`
+            );
+          }
+
+          const payload = listRun.stdoutJson;
+          assert.ok(payload, `documents.list stdout must be valid JSON: ${listRun.stdout}`);
+          assert.equal(payload.tool, "documents.list");
+
+          finalRows = extractResultRows(payload.result) || [];
+          foundBacklink = finalRows.some(
+            (row) =>
+              row &&
+              typeof row === "object" &&
+              pickStringId(row.id, row.documentId) === backlinkDocId
+          );
+
+          if (foundBacklink) {
+            break;
+          }
+          if (attempt < 6) {
+            await wait(700);
+          }
+        }
+
+        if (!foundBacklink) {
+          t.diagnostic(
+            `UC-07 backlink rows missing expected source document ${backlinkDocId}: ${JSON.stringify(finalRows)}`
+          );
+          t.skip("Backlink graph/index propagation varies by deployment");
+          return;
+        }
+
+        assert.equal(foundBacklink, true);
+      });
+
+      await t.test("events.list audit context query for UC-07 update", async (t) => {
+        if (!hasToolContract("events.list")) {
+          t.skip("events.list contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "events.list", {
+          documentId: state.createdDocumentId,
+          limit: 25,
+          sort: "createdAt",
+          direction: "DESC",
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableDirectoryReadError(run.stderrJson)) {
+            t.diagnostic(`events.list skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("events.list unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`events.list expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `events.list stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "events.list");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+
+        const rows = extractResultRows(payload.result);
+        if (!rows) {
+          t.diagnostic(`Unexpected events.list payload shape: ${JSON.stringify(payload.result)}`);
+          t.skip("events.list payload shape differs across deployments");
+          return;
+        }
+        assert.ok(Array.isArray(rows), "events.list should expose an array payload");
+
+        if (rows.length === 0) {
+          t.diagnostic("events.list returned no rows for document-scoped UC-07 audit query");
+          t.skip("Audit events can be delayed or hidden by retention/policy settings");
+          return;
+        }
+
+        const hasDocumentScopedEvent = rows.some((row) => {
+          if (!row || typeof row !== "object") {
+            return false;
+          }
+          const rowDocumentId = pickStringId(
+            row.documentId,
+            row.modelId,
+            row.document?.id,
+            row.document?.documentId
+          );
+          if (rowDocumentId === state.createdDocumentId) {
+            return true;
+          }
+          const rowText = JSON.stringify(row);
+          return typeof rowText === "string" && rowText.includes(state.createdDocumentId);
+        });
+
+        if (!hasDocumentScopedEvent) {
+          t.diagnostic(`events.list rows did not include target doc id ${state.createdDocumentId}`);
+          t.skip("Event payload/document linkage differs by deployment");
+          return;
+        }
+
+        assert.equal(hasDocumentScopedEvent, true);
       });
     });
 

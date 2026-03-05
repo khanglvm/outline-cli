@@ -365,7 +365,41 @@ npx ./bin/outline-cli.js invoke groups.remove_user \
   --args '{"id":"<group-id>","userId":"<user-id>","performAction":true}'
 ```
 
-### 10. Safe mutation and revision workflows
+### 10. Project docs + issue tracker linkage (UC-07)
+
+Deterministic loop: `discover issue refs -> hydrate docs -> patch -> audit`.
+
+```bash
+# 1) Discover docs that already mention the issue token/key
+npx ./bin/outline-cli.js invoke documents.search \
+  --args '{"query":"ENG-4312","mode":"titles","limit":10,"view":"ids"}'
+
+# 2) Resolve fuzzy references, then hydrate only selected docs
+npx ./bin/outline-cli.js invoke documents.resolve \
+  --args '{"query":"ENG-4312","limit":8,"view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"ids":["<doc-id-1>","<doc-id-2>"],"view":"summary","concurrency":2}'
+
+# 3) Patch the target project doc with deterministic issue references
+npx ./bin/outline-cli.js invoke documents.update \
+  --args '{"id":"<project-doc-id>","text":"\n\n## Issue links\n- Linear: ENG-4312\n- URL: https://linear.app/acme/issue/eng-4312","editMode":"append","performAction":true,"view":"summary"}'
+
+# 4) Traverse internal backlinks (which docs reference the project doc)
+npx ./bin/outline-cli.js invoke documents.list \
+  --args '{"backlinkDocumentId":"<project-doc-id>","limit":20,"view":"summary"}'
+
+# 5) Audit update context through workspace events
+npx ./bin/outline-cli.js invoke events.list \
+  --args '{"documentId":"<project-doc-id>","auditLog":true,"limit":25,"sort":"createdAt","direction":"DESC","view":"summary"}'
+
+# Optional metadata taxonomy flow (if data_attributes wrappers are enabled in your build)
+npx ./bin/outline-cli.js invoke data_attributes.list \
+  --args '{"limit":50,"view":"summary"}'
+npx ./bin/outline-cli.js invoke data_attributes.create \
+  --args '{"name":"linearIssueKey","performAction":true,"view":"summary"}'
+```
+
+### 11. Safe mutation and revision workflows
 
 ```bash
 npx ./bin/outline-cli.js invoke documents.safe_update \
@@ -406,7 +440,7 @@ npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","l
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
 
-### 11. UC-03: meeting notes + decision logs
+### 12. UC-03: meeting notes + decision logs
 
 ```bash
 # 1) Turn a canonical meeting-note document into a reusable template
@@ -444,7 +478,7 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 12. Capability mapping and test cleanup
+### 13. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -509,6 +543,7 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `comments.create`
 - `comments.update`
 - `comments.delete`
+- `events.list`
 - `users.list`
 - `users.info`
 - `groups.list`

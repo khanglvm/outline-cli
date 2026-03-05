@@ -106,6 +106,87 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): batch IDs to reduce round trips; check per-item `ok` in batch results. Use `armDelete=true` before delete to obtain a read receipt token.
 
+## `documents.answer`
+
+- Signature: `documents.answer(args: { question?: string; query?: string; ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.answer",
+  "args": {
+    "question": "How do I reset VPN access?",
+    "collectionId": "collection-id",
+    "view": "summary",
+    "includeEvidenceDocs": true
+  }
+}
+```
+
+- Best practice (AI): keep question wording specific and scope by `collectionId` or `documentId` when possible.
+- Best practice (AI): consume deterministic wrapper envelope (`result.question` + endpoint payload) and branch explicitly on no-hit signals.
+
+## `documents.answer_batch`
+
+- Signature: `documents.answer_batch(args: { question?: string; questions?: Array<string | { question?: string; query?: string; ...endpointArgs }>; ...endpointArgs; concurrency?: number; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.answer_batch",
+  "args": {
+    "questions": [
+      "How do I reset VPN access?",
+      { "question": "Who approves expense exceptions?", "documentId": "doc-id" }
+    ],
+    "collectionId": "collection-id",
+    "concurrency": 2,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): keep batch sizes small and use low concurrency for predictable latency/token usage.
+- Best practice (AI): inspect per-item `ok/status/error` and retry only failed questions.
+
+## `documents.memberships`
+
+- Signature: `documents.memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.memberships",
+  "args": {
+    "id": "doc-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use for read-path visibility debugging before requesting permission mutations.
+- Best practice (AI): keep `view` compact unless full user attributes are required.
+
+## `collections.memberships`
+
+- Signature: `collections.memberships(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "collections.memberships",
+  "args": {
+    "id": "collection-id",
+    "limit": 20,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use collection membership checks when FAQ answers appear missing due to collection-level access.
+- Best practice (AI): page through membership lists with `limit/offset` for deterministic audit loops.
+
 ## `documents.create`
 
 - Signature: `documents.create(args: { title?: string; text?: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; icon?: string; color?: string; templateId?: string; fullWidth?: boolean; view?: 'summary'|'full' })`

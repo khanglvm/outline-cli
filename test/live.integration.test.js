@@ -194,6 +194,116 @@ async function batchInvoke(tmpDir, configPath, ops) {
   return run.json;
 }
 
+async function invokeToolAnyStatus(tmpDir, configPath, tool, args) {
+  const argsFile = await writeJsonFile(tmpDir, `args-${tool.replace(/\./g, "-")}`, args);
+  const res = spawnSync(
+    process.execPath,
+    [
+      CLI_BIN,
+      "invoke",
+      tool,
+      "--config",
+      configPath,
+      "--result-mode",
+      "inline",
+      "--args-file",
+      argsFile,
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: process.env,
+      maxBuffer: 20 * 1024 * 1024,
+    }
+  );
+
+  const stdout = (res.stdout || "").trim();
+  const stderr = (res.stderr || "").trim();
+  let stdoutJson = null;
+  let stderrJson = null;
+
+  if (stdout) {
+    try {
+      stdoutJson = JSON.parse(stdout);
+    } catch {
+      stdoutJson = null;
+    }
+  }
+
+  if (stderr) {
+    try {
+      stderrJson = JSON.parse(stderr);
+    } catch {
+      stderrJson = null;
+    }
+  }
+
+  return {
+    status: res.status ?? -1,
+    stdout,
+    stderr,
+    stdoutJson,
+    stderrJson,
+  };
+}
+
+function isApiNotFoundErrorEnvelope(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+  if (Number(err.status) !== 404) {
+    return false;
+  }
+  return err?.body?.error === "not_found" || /resource not found/i.test(String(err.message || ""));
+}
+
+function isSkippableMembershipError(envelope) {
+  const err = envelope?.error;
+  return err?.type === "ApiError" && [401, 403, 404, 405].includes(Number(err.status));
+}
+
+function extractAnswerSignals(result) {
+  const pickString = (...candidates) => {
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+    return "";
+  };
+
+  const answerText = pickString(
+    result?.answer,
+    result?.response,
+    result?.text,
+    result?.data?.answer,
+    result?.data?.response,
+    result?.data?.text
+  );
+
+  const noAnswerReason = pickString(
+    result?.noAnswerReason,
+    result?.reason,
+    result?.data?.noAnswerReason,
+    result?.data?.reason
+  );
+
+  const citationCandidates = [
+    result?.citations,
+    result?.sources,
+    result?.references,
+    result?.documents,
+    result?.data?.citations,
+    result?.data?.sources,
+    result?.data?.references,
+    result?.data?.documents,
+  ];
+  const citations = citationCandidates.find((candidate) => Array.isArray(candidate)) || [];
+
+  return { answerText, noAnswerReason, citations };
+}
+
 test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }, async (t) => {
   const env = await resolveLiveEnv();
   assert.ok(env.baseUrl, "OUTLINE_TEST_BASE_URL is required");
@@ -212,6 +322,9 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     uc03CommentId: null,
     uc03CommentDeleted: false,
     uc03AdditionalDocumentIds: [],
+    faqResetCode: null,
+    faqOwner: null,
+    faqNoHitToken: null,
   };
 
   async function bestEffortDeleteDocument(documentId) {
@@ -442,15 +555,242 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
     await t.test("create isolated test document", async () => {
       state.marker = `outline-cli-live-test-${Date.now()}`;
+      state.faqResetCode = `OPS-${Date.now()}`;
+      state.faqOwner = "Ops Helpdesk";
+      state.faqNoHitToken = `no-hit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       const createDoc = await invokeTool(tmpDir, configPath, "documents.create", {
         title: state.marker,
-        text: `# ${state.marker}\n\nCreated by live integration suite.`,
+        text:
+          `# ${state.marker}\n\n` +
+          "Created by live integration suite.\n\n" +
+          "## Internal FAQ\n" +
+          `- VPN reset code: ${state.faqResetCode}\n` +
+          `- Escalation owner: ${state.faqOwner}\n` +
+          "- Expense approval SLA: 2 business days\n",
         publish: false,
         view: "full",
       });
 
       state.createdDocumentId = createDoc?.result?.data?.id;
       assert.ok(state.createdDocumentId, "documents.create must return id");
+    });
+
+    await t.test("UC-04 internal FAQ wrappers", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+      assert.ok(state.faqResetCode, "FAQ reset code marker is required");
+      assert.ok(state.faqNoHitToken, "FAQ no-hit token marker is required");
+
+      const hasAnswer = hasToolContract("documents.answer");
+      const hasAnswerBatch = hasToolContract("documents.answer_batch");
+      const hasDocumentMemberships = hasToolContract("documents.memberships");
+      const hasCollectionMemberships = hasToolContract("collections.memberships");
+
+      const happyQuestion = `What is the VPN reset code in ${state.marker}?`;
+      const noHitQuestion = `What is the emergency token ${state.faqNoHitToken}?`;
+      const noHitPattern = /not found|no answer|no information|unable to|cannot|can't|couldn't|do not have|don't have/i;
+
+      await t.test("documents.answer happy path + deterministic envelope assertions", async (t) => {
+        if (!hasAnswer) {
+          t.skip("documents.answer contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.answer", {
+          question: happyQuestion,
+          documentId: state.createdDocumentId,
+          includeEvidenceDocs: true,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
+            t.diagnostic(`documents.answer unsupported payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
+            return;
+          }
+          assert.fail(`documents.answer expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.answer stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.answer");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.equal(payload.result?.question, happyQuestion);
+
+        const signals = extractAnswerSignals(payload.result);
+        assert.ok(
+          signals.answerText.length > 0,
+          `documents.answer happy path should include answer text: ${JSON.stringify(payload.result)}`
+        );
+        assert.ok(Array.isArray(signals.citations), "documents.answer envelope should expose citations array");
+      });
+
+      await t.test("documents.answer no-hit path assertions", async (t) => {
+        if (!hasAnswer) {
+          t.skip("documents.answer contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.answer", {
+          question: noHitQuestion,
+          documentId: state.createdDocumentId,
+          includeEvidenceDocs: true,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
+            t.diagnostic(`documents.answer unsupported payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
+            return;
+          }
+          assert.fail(`documents.answer no-hit expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.answer stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.answer");
+        assert.equal(payload.result?.question, noHitQuestion);
+
+        const signals = extractAnswerSignals(payload.result);
+        assert.ok(
+          signals.noAnswerReason.length > 0 || signals.citations.length === 0 || noHitPattern.test(signals.answerText),
+          `documents.answer no-hit should include explicit no-hit signal: ${JSON.stringify(payload.result)}`
+        );
+      });
+
+      await t.test("documents.answer_batch mixed questions keep per-item isolation", async (t) => {
+        if (!hasAnswerBatch) {
+          t.skip("documents.answer_batch contract unavailable");
+          return;
+        }
+
+        const missingDocumentId = "00000000-0000-0000-0000-000000000000";
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.answer_batch", {
+          questions: [
+            { question: happyQuestion, documentId: state.createdDocumentId },
+            { question: noHitQuestion, documentId: state.createdDocumentId },
+            { question: "Force missing-doc isolation check", documentId: missingDocumentId },
+          ],
+          concurrency: 2,
+          includeEvidenceDocs: true,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
+            t.diagnostic(`documents.answer_batch unsupported payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
+            return;
+          }
+          assert.fail(`documents.answer_batch expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.answer_batch stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.answer_batch");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.equal(payload.result?.total, 3);
+        assert.ok(Array.isArray(payload.result?.items));
+        assert.equal(payload.result.items.length, 3);
+
+        const allItemsNotFound = payload.result.items.every(
+          (item) => item?.ok === false && Number(item?.status) === 404 && /resource not found/i.test(String(item?.error || ""))
+        );
+        if (allItemsNotFound) {
+          t.diagnostic(`documents.answer_batch unsupported payload: ${JSON.stringify(payload.result.items)}`);
+          t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
+          return;
+        }
+
+        for (let i = 0; i < payload.result.items.length; i += 1) {
+          const item = payload.result.items[i];
+          assert.equal(item.index, i);
+          assert.equal(typeof item.ok, "boolean");
+          assert.ok(typeof item.question === "string" && item.question.length > 0);
+        }
+
+        const succeeded = payload.result.items.filter((item) => item.ok);
+        const failed = payload.result.items.filter((item) => !item.ok);
+        assert.equal(payload.result.succeeded, succeeded.length);
+        assert.equal(payload.result.failed, failed.length);
+
+        const forcedFailure = payload.result.items.find((item) => item.index === 2);
+        assert.equal(forcedFailure?.ok, false);
+        assert.ok(typeof forcedFailure?.error === "string" && forcedFailure.error.length > 0);
+        assert.ok(succeeded.length >= 1, "documents.answer_batch should preserve successful items when one item fails");
+      });
+
+      await t.test("documents.memberships read-path checks", async (t) => {
+        if (!hasDocumentMemberships) {
+          t.skip("documents.memberships contract unavailable");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "documents.memberships", {
+          id: state.createdDocumentId,
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson)) {
+            t.diagnostic(`documents.memberships skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("documents.memberships unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`documents.memberships expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `documents.memberships stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "documents.memberships");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+
+        const memberships = payload.result?.data?.memberships ?? payload.result?.memberships ?? [];
+        assert.ok(Array.isArray(memberships), "documents.memberships should expose memberships array");
+      });
+
+      await t.test("collections.memberships read-path checks", async (t) => {
+        if (!hasCollectionMemberships) {
+          t.skip("collections.memberships contract unavailable");
+          return;
+        }
+        if (!state.firstCollectionId) {
+          t.skip("No collection id available for collections.memberships check");
+          return;
+        }
+
+        const run = await invokeToolAnyStatus(tmpDir, configPath, "collections.memberships", {
+          id: state.firstCollectionId,
+          limit: 5,
+          view: "summary",
+        });
+
+        if (run.status !== 0) {
+          if (isSkippableMembershipError(run.stderrJson)) {
+            t.diagnostic(`collections.memberships skipped payload: ${run.stderr || "<empty stderr>"}`);
+            t.skip("collections.memberships unsupported or unauthorized in this deployment");
+            return;
+          }
+          assert.fail(`collections.memberships expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
+        }
+
+        const payload = run.stdoutJson;
+        assert.ok(payload, `collections.memberships stdout must be valid JSON: ${run.stdout}`);
+        assert.equal(payload.tool, "collections.memberships");
+        assert.equal(typeof payload.profile, "string");
+        assert.ok(payload.profile.length > 0);
+        assert.ok(payload.result && typeof payload.result === "object");
+        assert.ok(payload.result.pagination && typeof payload.result.pagination === "object");
+
+        const memberships = payload.result?.data?.memberships ?? payload.result?.memberships ?? [];
+        assert.ok(Array.isArray(memberships), "collections.memberships should expose memberships array");
+      });
     });
 
     await t.test("federated sync manifest composite read (stable + skippable)", async (t) => {

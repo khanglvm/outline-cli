@@ -259,7 +259,39 @@ npx ./bin/outline-cli.js invoke collections.tree \
   --args '{"collectionId":"<collection-id>","includeDrafts":false,"maxDepth":4,"view":"summary"}'
 ```
 
-### 7. Safe mutation and revision workflows
+### 7. Internal FAQ playbook (UC-04)
+
+Use an ids/summary-first loop, then call answer wrappers on narrowed scope.
+
+```bash
+# 1) Resolve FAQ collection ids
+npx ./bin/outline-agent.js invoke collections.list \
+  --args '{"query":"faq","limit":10,"view":"ids"}'
+
+# 2) Resolve candidate FAQ docs with ids first
+npx ./bin/outline-agent.js invoke documents.search \
+  --args '{"query":"vpn reset","mode":"semantic","limit":8,"view":"ids","collectionId":"<collection-id>"}'
+
+# 3) Hydrate only selected ids as summaries
+npx ./bin/outline-agent.js invoke documents.info \
+  --args '{"ids":["<doc-id-1>","<doc-id-2>"],"view":"summary","concurrency":2}'
+
+# 4) Ask one question with deterministic answer envelope
+npx ./bin/outline-agent.js invoke documents.answer \
+  --args '{"question":"How do I reset VPN?","collectionId":"<collection-id>","view":"summary","includeEvidenceDocs":true}'
+
+# 5) Ask repeated questions in one call (per-item isolation)
+npx ./bin/outline-agent.js invoke documents.answer_batch \
+  --args '{"questions":["How do I reset VPN?","Who approves expense exceptions?"],"collectionId":"<collection-id>","concurrency":2,"view":"summary","includeEvidenceDocs":true}'
+
+# 6) Debug visibility issues for missing answers
+npx ./bin/outline-agent.js invoke documents.memberships \
+  --args '{"id":"<doc-id>","limit":20,"view":"summary"}'
+npx ./bin/outline-agent.js invoke collections.memberships \
+  --args '{"id":"<collection-id>","limit":20,"view":"summary"}'
+```
+
+### 8. Safe mutation and revision workflows
 
 ```bash
 npx ./bin/outline-cli.js invoke documents.safe_update \
@@ -300,7 +332,7 @@ npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","l
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
 
-### 8. UC-03: meeting notes + decision logs
+### 9. UC-03: meeting notes + decision logs
 
 ```bash
 # 1) Turn a canonical meeting-note document into a reusable template
@@ -338,7 +370,7 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 9. Capability mapping and test cleanup
+### 10. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \

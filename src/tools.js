@@ -10,6 +10,7 @@ import {
 import { NAVIGATION_TOOLS } from "./tools.navigation.js";
 import { MUTATION_TOOLS } from "./tools.mutation.js";
 import { PLATFORM_TOOLS } from "./tools.platform.js";
+import { EXTENDED_TOOLS } from "./tools.extended.js";
 import { validateToolArgs } from "./tool-arg-schemas.js";
 import {
   compactValue,
@@ -1001,6 +1002,7 @@ export const TOOLS = {
   },
   ...NAVIGATION_TOOLS,
   ...MUTATION_TOOLS,
+  ...EXTENDED_TOOLS,
   ...PLATFORM_TOOLS,
 };
 
@@ -1043,7 +1045,12 @@ export async function invokeTool(ctx, name, args = {}) {
     throw new CliError(`Unknown tool: ${name}`);
   }
 
-  validateToolArgs(name, args);
+  const argsForValidation =
+    name === "documents.cleanup_test" && args && typeof args === "object" && "deleteMode" in args
+      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "deleteMode"))
+      : args;
+
+  validateToolArgs(name, argsForValidation);
 
   const result = await tool.handler(ctx, args);
   if (args.compact ?? true) {

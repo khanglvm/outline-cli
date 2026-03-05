@@ -1,5 +1,10 @@
 import { ApiError, CliError } from "./errors.js";
-import { assertPerformAction } from "./action-gate.js";
+import {
+  assertPerformAction,
+  consumeDocumentDeleteReadReceipt,
+  getDocumentDeleteReadReceipt,
+  issueDocumentDeleteReadReceipt,
+} from "./action-gate.js";
 import { mapLimit, toBoolean, toInteger } from "./utils.js";
 
 function summarizePolicies(policies = []) {
@@ -247,9 +252,115 @@ function isOlderThan(candidate, olderThanHours) {
   return ageMs >= olderThanHours * 3600 * 1000;
 }
 
+async function safeDeleteCandidate(ctx, candidate, maxAttempts) {
+  const evidence = {
+    tokenIssued: false,
+    revisionChecked: false,
+    deleted: false,
+  };
+
+  let readToken;
+  try {
+    const armedInfo = await ctx.client.call("documents.info", { id: candidate.id }, { maxAttempts });
+    const receipt = await issueDocumentDeleteReadReceipt({
+      profileId: ctx.profile.id,
+      documentId: candidate.id,
+      revision: armedInfo.body?.data?.revision,
+      title: armedInfo.body?.data?.title || candidate.title,
+      ttlSeconds: 900,
+    });
+    readToken = receipt.token;
+    evidence.tokenIssued = true;
+
+    const verified = await getDocumentDeleteReadReceipt({
+      token: readToken,
+      profileId: ctx.profile.id,
+      documentId: candidate.id,
+    });
+
+    const latest = await ctx.client.call("documents.info", { id: candidate.id }, { maxAttempts });
+    const expectedRevision = Number(verified.revision);
+    const actualRevision = Number(latest.body?.data?.revision);
+    evidence.revisionChecked = true;
+    evidence.expectedRevision = Number.isFinite(expectedRevision) ? expectedRevision : null;
+    evidence.actualRevision = Number.isFinite(actualRevision) ? actualRevision : null;
+
+    if (
+      Number.isFinite(expectedRevision) &&
+      Number.isFinite(actualRevision) &&
+      expectedRevision !== actualRevision
+    ) {
+      throw new CliError("Delete read confirmation is stale; re-read document with armDelete=true", {
+        code: "DELETE_READ_TOKEN_STALE",
+        id: candidate.id,
+        expectedRevision,
+        actualRevision,
+      });
+    }
+
+    const deleted = await ctx.client.call("documents.delete", { id: candidate.id }, { maxAttempts });
+    const success = deleted.body?.success !== false;
+    evidence.deleted = success;
+    if (success) {
+      await consumeDocumentDeleteReadReceipt(readToken);
+    }
+
+    return {
+      id: candidate.id,
+      title: candidate.title,
+      ok: success,
+      ...evidence,
+    };
+  } catch (err) {
+    if (err instanceof ApiError || err instanceof CliError) {
+      return {
+        id: candidate.id,
+        title: candidate.title,
+        ok: false,
+        status: err instanceof ApiError ? err.details.status : undefined,
+        error: err.message,
+        ...evidence,
+      };
+    }
+    throw err;
+  }
+}
+
+async function directDeleteCandidate(ctx, candidate, maxAttempts) {
+  const evidence = {
+    tokenIssued: false,
+    revisionChecked: false,
+    deleted: false,
+  };
+  try {
+    const deleted = await ctx.client.call("documents.delete", { id: candidate.id }, { maxAttempts });
+    const success = deleted.body?.success !== false;
+    evidence.deleted = success;
+    return {
+      id: candidate.id,
+      title: candidate.title,
+      ok: success,
+      ...evidence,
+    };
+  } catch (err) {
+    if (err instanceof ApiError) {
+      return {
+        id: candidate.id,
+        title: candidate.title,
+        ok: false,
+        status: err.details.status,
+        error: err.message,
+        ...evidence,
+      };
+    }
+    throw err;
+  }
+}
+
 async function documentsCleanupTestTool(ctx, args) {
   const markerPrefix = args.markerPrefix || "outline-agent-live-test-";
   const dryRun = toBoolean(args.dryRun, true);
+  const deleteMode = args.deleteMode === "direct" ? "direct" : "safe";
   const olderThanHours = toInteger(args.olderThanHours, 0);
   const maxPages = Math.max(1, Math.min(50, toInteger(args.maxPages, 8)));
   const pageLimit = Math.max(1, Math.min(100, toInteger(args.pageLimit, 50)));
@@ -359,6 +470,7 @@ async function documentsCleanupTestTool(ctx, args) {
       profile: ctx.profile.id,
       result: {
         markerPrefix,
+        deleteMode,
         dryRun: true,
         scannedCount: scanned.length,
         candidateCount: candidates.length,
@@ -368,26 +480,12 @@ async function documentsCleanupTestTool(ctx, args) {
     };
   }
 
+  const deleteMaxAttempts = 1;
   const deleteResults = await mapLimit(candidates, concurrency, async (candidate) => {
-    try {
-      await ctx.client.call("documents.delete", { id: candidate.id }, { maxAttempts: 1 });
-      return {
-        id: candidate.id,
-        title: candidate.title,
-        ok: true,
-      };
-    } catch (err) {
-      if (err instanceof ApiError) {
-        return {
-          id: candidate.id,
-          title: candidate.title,
-          ok: false,
-          status: err.details.status,
-          error: err.message,
-        };
-      }
-      throw err;
+    if (deleteMode === "direct") {
+      return directDeleteCandidate(ctx, candidate, deleteMaxAttempts);
     }
+    return safeDeleteCandidate(ctx, candidate, deleteMaxAttempts);
   });
 
   const failures = deleteResults.filter((r) => !r.ok);
@@ -398,6 +496,7 @@ async function documentsCleanupTestTool(ctx, args) {
     profile: ctx.profile.id,
     result: {
       markerPrefix,
+      deleteMode,
       dryRun: false,
       scannedCount: scanned.length,
       candidateCount: candidates.length,
@@ -428,7 +527,7 @@ export const PLATFORM_TOOLS = {
   },
   "documents.cleanup_test": {
     signature:
-      "documents.cleanup_test(args?: { markerPrefix?: string; olderThanHours?: number; dryRun?: boolean; maxPages?: number; pageLimit?: number; concurrency?: number; allowUnsafePrefix?: boolean; performAction?: boolean })",
+      "documents.cleanup_test(args?: { markerPrefix?: string; olderThanHours?: number; dryRun?: boolean; deleteMode?: 'safe'|'direct'; maxPages?: number; pageLimit?: number; concurrency?: number; allowUnsafePrefix?: boolean; performAction?: boolean })",
     description: "Find and optionally delete test-created documents by marker prefix.",
     usageExample: {
       tool: "documents.cleanup_test",
@@ -436,11 +535,13 @@ export const PLATFORM_TOOLS = {
         markerPrefix: "outline-agent-live-test-",
         olderThanHours: 24,
         dryRun: true,
+        deleteMode: "safe",
       },
     },
     bestPractices: [
       "Use dryRun=true first to review deletion set.",
       "Keep markerPrefix specific to your test suite to avoid accidental deletes.",
+      "Use deleteMode=safe (default) to enforce read-token and revision checks before delete.",
       "Avoid allowUnsafePrefix unless operating in an isolated sandbox.",
       "When dryRun=false this tool is action-gated; set performAction=true only after explicit confirmation.",
     ],

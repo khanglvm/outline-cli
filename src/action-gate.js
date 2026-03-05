@@ -89,22 +89,48 @@ export function assertPerformAction(args, { tool, action }) {
   });
 }
 
+function normalizeMethodName(method) {
+  return String(method || "")
+    .split(".")
+    .map((segment) =>
+      String(segment || "")
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .replace(/-/g, "_")
+        .toLowerCase()
+    )
+    .join(".");
+}
+
 export function isLikelyMutatingMethod(method) {
-  const normalized = String(method || "").toLowerCase();
+  const normalized = normalizeMethodName(method);
   if (!normalized) {
     return false;
   }
-  return /(create|update|delete|restore|archive|unarchive|move|rename|patch|apply|publish|unpublish|batch)/.test(
-    normalized
+
+  const operation = normalized.split(".").at(-1) || "";
+  if (!operation) {
+    return false;
+  }
+
+  if (/^(list|info|search|search_titles|memberships|group_memberships|archived|deleted)$/.test(operation)) {
+    return false;
+  }
+
+  return (
+    /(^|_)(create|update|delete|permanent_delete|permanentdelete|restore|archive|unarchive|move|rename|patch|apply|publish|unpublish|batch|duplicate|templatize|invite|revoke|import|export|empty_trash|emptytrash|suspend|activate|deactivate)(_|$)/.test(
+      operation
+    ) ||
+    /^(add|remove|invite|revoke)_/.test(operation)
   );
 }
 
 export function isLikelyDeleteMethod(method) {
-  const normalized = String(method || "").toLowerCase();
+  const normalized = normalizeMethodName(method);
   if (!normalized) {
     return false;
   }
-  return /(^|\.)(delete|permanentdelete)$/.test(normalized) || normalized.includes(".delete");
+  const canonical = normalized.replace(/\.permanentdelete$/, ".permanent_delete");
+  return canonical === "documents.delete" || canonical === "documents.permanent_delete";
 }
 
 export async function issueDocumentDeleteReadReceipt({

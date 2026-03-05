@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import path from "node:path";
+import { getAgentSkillHelp, listHelpSections } from "./agent-skills.js";
 import {
   buildProfile,
   defaultConfigPath,
@@ -421,6 +422,61 @@ export async function run(argv = process.argv) {
         label: "tool-contract",
         mode: merged.resultMode,
       });
+    });
+
+  tools
+    .command("help [section]")
+    .description("Show structured help sections for AI-oriented CLI usage")
+    .option("--view <mode>", "View mode: summary|full", "summary")
+    .option("--scenario <id>", "Filter ai-skills by scenario id, e.g. UC-12")
+    .option("--skill <id>", "Filter ai-skills by skill id")
+    .option("--query <text>", "Search ai-skills by tool/scenario/topic keyword")
+    .action(async (section, opts, cmd) => {
+      const merged = { ...cmd.parent.opts(), ...opts };
+      const store = buildStoreFromOptions(merged);
+      const sectionName = String(section || "index").trim().toLowerCase();
+
+      if (sectionName === "index" || sectionName === "all") {
+        await emitOutput(
+          store,
+          {
+            ok: true,
+            section: "index",
+            sections: listHelpSections(),
+          },
+          merged,
+          {
+            label: "tools-help-index",
+            mode: merged.resultMode,
+          }
+        );
+        return;
+      }
+
+      if (sectionName === "ai" || sectionName === "skill" || sectionName === "skills" || sectionName === "ai-skills") {
+        await emitOutput(
+          store,
+          {
+            ok: true,
+            ...getAgentSkillHelp({
+              view: merged.view,
+              scenario: merged.scenario,
+              skill: merged.skill,
+              query: merged.query,
+            }),
+          },
+          merged,
+          {
+            label: "tools-help-ai-skills",
+            mode: merged.resultMode,
+          }
+        );
+        return;
+      }
+
+      throw new CliError(
+        `Unknown tools help section: ${section}. Supported: ${listHelpSections().map((row) => row.id).join(", ")}`
+      );
     });
 
   const invoke = configureSharedOutputOptions(

@@ -8,6 +8,14 @@ Use CLI to get canonical JSON contracts:
 outline-cli tools contract all --pretty
 ```
 
+AI instruction skills (scenario help) are available via:
+
+```bash
+outline-cli tools help ai-skills --view summary
+outline-cli tools help ai-skills --scenario UC-19
+outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
+```
+
 ## Runtime Profile Routing
 
 - Runtime commands (`invoke`, `batch`, `profile test`) resolve profile in this order:

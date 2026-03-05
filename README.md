@@ -175,6 +175,24 @@ At runtime the entry validates submodule hashes against this build-time signatur
 npx ./bin/outline-cli.js tools contract all --pretty
 ```
 
+### AI instruction skills help (scenario playbooks)
+
+Use the built-in help section to retrieve machine-readable AI skill guidance for scenario execution.
+
+```bash
+# list help sections
+npx ./bin/outline-cli.js tools help
+
+# list AI skills in summary mode
+npx ./bin/outline-cli.js tools help ai-skills --view summary
+
+# filter by usecase scenario
+npx ./bin/outline-cli.js tools help ai-skills --scenario UC-12
+
+# get one full skill playbook
+npx ./bin/outline-cli.js tools help ai-skills --skill legacy_wiki_migration --view full
+```
+
 ### 2. Single-tool invoke
 
 ```bash

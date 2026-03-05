@@ -517,6 +517,65 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "documents.resolve_urls": {
+    properties: {
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      collectionId: { type: "string" },
+      limit: { type: "number", min: 1 },
+      strict: { type: "boolean" },
+      strictHost: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      excerptChars: { type: "number", min: 1 },
+      forceGroupedResult: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.url && !args.urls) {
+        issues.push({ path: "args.url", message: "or args.urls[] is required" });
+      }
+      if (typeof args.strictThreshold === "number" && args.strictThreshold > 1) {
+        issues.push({ path: "args.strictThreshold", message: "must be <= 1" });
+      }
+    },
+  },
+  "documents.canonicalize_candidates": {
+    properties: {
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      ids: { type: "string[]" },
+      collectionId: { type: "string" },
+      limit: { type: "number", min: 1 },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      titleSimilarityThreshold: { type: "number", min: 0 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      excerptChars: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.query && !args.queries && !args.ids) {
+        issues.push({ path: "args.query", message: "or args.queries[] or args.ids[] is required" });
+      }
+      if (Array.isArray(args.ids) && args.ids.length === 0) {
+        issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
+      }
+      if (typeof args.strictThreshold === "number" && args.strictThreshold > 1) {
+        issues.push({ path: "args.strictThreshold", message: "must be <= 1" });
+      }
+      if (typeof args.titleSimilarityThreshold === "number" && args.titleSimilarityThreshold > 1) {
+        issues.push({ path: "args.titleSimilarityThreshold", message: "must be <= 1" });
+      }
+    },
+  },
   "collections.tree": {
     required: ["collectionId"],
     properties: {
@@ -571,10 +630,25 @@ export const TOOL_ARG_SCHEMAS = {
       offset: { type: "number", min: 0 },
       includeTitleSearch: { type: "boolean" },
       includeSemanticSearch: { type: "boolean" },
+      precisionMode: { type: "string", enum: ["balanced", "precision", "recall"] },
+      minScore: { type: "number", min: 0 },
+      diversify: { type: "boolean" },
+      diversityLambda: { type: "number", min: 0 },
+      rrfK: { type: "number", min: 1 },
       expandLimit: { type: "number", min: 1 },
       maxDocuments: { type: "number", min: 1 },
       seenIds: { type: "string[]" },
       view: { type: "string", enum: ["ids", "summary", "full"] },
+      perQueryView: { type: "string", enum: ["ids", "summary", "full"] },
+      perQueryHitLimit: { type: "number", min: 1 },
+      evidencePerDocument: { type: "number", min: 1 },
+      suggestedQueryLimit: { type: "number", min: 1 },
+      includePerQuery: { type: "boolean" },
+      includeExpanded: { type: "boolean" },
+      includeCoverage: { type: "boolean" },
+      includeBacklinks: { type: "boolean" },
+      backlinksLimit: { type: "number", min: 1 },
+      backlinksConcurrency: { type: "number", min: 1 },
       concurrency: { type: "number", min: 1 },
       hydrateConcurrency: { type: "number", min: 1 },
       contextChars: { type: "number", min: 1 },
@@ -592,6 +666,12 @@ export const TOOL_ARG_SCHEMAS = {
           path: "args.includeTitleSearch",
           message: "and includeSemanticSearch cannot both be false",
         });
+      }
+      if (typeof args.minScore === "number" && args.minScore > 1) {
+        issues.push({ path: "args.minScore", message: "must be <= 1" });
+      }
+      if (typeof args.diversityLambda === "number" && args.diversityLambda > 1) {
+        issues.push({ path: "args.diversityLambda", message: "must be <= 1" });
       }
     },
   },

@@ -168,9 +168,32 @@ function makeRpcHandler(def) {
       });
     }
 
-    const res = await ctx.client.call(def.method, buildBody(args), {
-      maxAttempts: toInteger(args.maxAttempts, def.mutating ? 1 : 2),
-    });
+    const maxAttempts = toInteger(args.maxAttempts, def.mutating ? 1 : 2);
+    const body = buildBody(args);
+    let res;
+    try {
+      res = await ctx.client.call(def.method, body, { maxAttempts });
+    } catch (err) {
+      // Some Outline deployments require comments.update payload in data.text form.
+      if (
+        def.tool === "comments.update"
+        && err instanceof ApiError
+        && err.details?.status === 400
+        && /data/i.test(String(err.message || ""))
+        && typeof args?.text === "string"
+        && args?.text.length > 0
+        && (args?.data === undefined || args?.data === null)
+      ) {
+        const fallbackBody = buildBody({
+          ...args,
+          text: undefined,
+          data: { text: args.text },
+        });
+        res = await ctx.client.call(def.method, fallbackBody, { maxAttempts });
+      } else {
+        throw err;
+      }
+    }
 
     return {
       tool: def.tool,

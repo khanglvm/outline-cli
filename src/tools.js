@@ -85,6 +85,7 @@ function normalizeDocumentRow(row, view = "summary", excerptChars = 280) {
     title: row.title,
     collectionId: row.collectionId,
     parentDocumentId: row.parentDocumentId,
+    revision: row.revision,
     updatedAt: row.updatedAt,
     publishedAt: row.publishedAt,
     urlId: row.urlId,

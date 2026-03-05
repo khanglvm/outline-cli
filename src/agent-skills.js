@@ -1,12 +1,14 @@
 import { CliError } from "./errors.js";
 
-const AI_SKILL_DATA_VERSION = "2026-03-05";
+const AI_SKILL_DATA_VERSION = "2026-03-05.1";
 const AI_HELP_SECTION_ID = "ai-skills";
 
 const AI_GLOBAL_GUIDANCE = {
   principles: [
     "Use ids/summary views first, then hydrate only selected records.",
     "Prefer batch operations (queries, ids, or batch command) before multi-call loops.",
+    "For heavy retrieval, use search.research with precisionMode + perQueryView/perQueryHitLimit to control token cost.",
+    "When outputs offload to tmp files, read the new preview first, then inspect file content only when needed.",
     "Keep mutating calls action-gated and explicit with performAction=true only at execute time.",
     "Capture audit evidence (events/revisions/policies) immediately after high-impact changes.",
   ],
@@ -26,13 +28,13 @@ const AI_SKILLS = [
     objective: "Answer FAQ-style questions with bounded scope and deterministic follow-up.",
     featureUpdates: [
       "documents.answer and documents.answer_batch wrappers for permission-aware AI responses.",
-      "ids/summary-first flow aligned with low-token retrieval loops.",
+      "search.research now supports precisionMode, reranking diversification, and compact per-query response shaping.",
     ],
     sequence: [
       {
         step: 1,
-        tool: "documents.search",
-        purpose: "Resolve candidate FAQ documents with compact summary rows.",
+        tool: "search.research",
+        purpose: "Gather multi-query evidence and hydrated references in one call with precision/tokens controls.",
       },
       {
         step: 2,
@@ -51,7 +53,8 @@ const AI_SKILLS = [
       },
     ],
     efficiencyTips: [
-      "Use specific question phrasing and explicit collectionId/documentId scope.",
+      "Use precisionMode=precision and perQueryView=ids with a small perQueryHitLimit for stable token budgets.",
+      "Enable includeBacklinks only when one-call context gathering is worth extra API work.",
       "Keep batch concurrency low for stable latency and predictable cost.",
     ],
     safetyChecks: [

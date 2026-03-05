@@ -24,6 +24,12 @@ outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
   3. single-profile fallback when exactly one profile exists
 - If multiple profiles exist and no default is configured, `--profile <id>` is required.
 - `profile add` only sets default when `--set-default` is provided.
+- `profile add` auto-corrects common endpoint mistakes (missing scheme, pasted doc/share URLs, API paths, or Outline marketing/docs hosts).
+- `profile add` auto-generates missing metadata (`description`, `keywords`) unless `--no-auto-metadata` is used.
+- Store/tune profile metadata and use:
+  - `profile suggest <query>` for runtime source routing.
+  - `profile annotate <id> ...` for manual metadata edits.
+  - `profile enrich <id> ...` to auto-learn keywords/description from query/title/url hints over time.
 
 ## `api.call`
 
@@ -826,6 +832,52 @@ outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
 
 - Best practice (AI): resolve fuzzy refs once, then operate by exact IDs; use `strict=true` for automation safety.
 
+## `documents.resolve_urls`
+
+- Signature: `documents.resolve_urls(args: { url?: string; urls?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictHost?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; forceGroupedResult?: boolean; maxAttempts?: number; })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.resolve_urls",
+  "args": {
+    "urls": [
+      "https://handbook.example.com/doc/event-tracking-data-A7hLXuHZJl",
+      "https://handbook.example.com/doc/campaign-detail-page-GWK1uA8w35#d-GWK1uA8w35"
+    ],
+    "strict": true,
+    "strictThreshold": 0.85,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): use `strictHost=true` when links should map only within the selected profile host.
+- Best practice (AI): use `strict=true` in automation workflows to avoid low-confidence URL matches.
+- Best practice (AI): use `view=ids` first, then hydrate chosen IDs with `documents.info`.
+
+## `documents.canonicalize_candidates`
+
+- Signature: `documents.canonicalize_candidates(args: { query?: string; queries?: string[]; ids?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictThreshold?: number; titleSimilarityThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; maxAttempts?: number; })`
+- Usage example:
+
+```json
+{
+  "tool": "documents.canonicalize_candidates",
+  "args": {
+    "queries": ["campaign detail", "campaign tracking"],
+    "strict": true,
+    "strictThreshold": 0.8,
+    "titleSimilarityThreshold": 0.78,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): run this after broad retrieval to collapse duplicate/noisy results into canonical clusters.
+- Best practice (AI): inspect `memberCount` and `duplicateIds` before mutating documents in ambiguous areas.
+- Best practice (AI): increase `titleSimilarityThreshold` for precision; lower it for aggressive deduplication.
+
 ## `collections.tree`
 
 - Signature: `collections.tree(args: { collectionId: string; includeDrafts?: boolean; maxDepth?: number; view?: 'summary'|'full'; pageSize?: number; maxPages?: number; })`
@@ -864,10 +916,11 @@ outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
 ```
 
 - Best practice (AI): keep `expandLimit` small to control tokens while still fetching full docs for top hits.
+- Best practice (AI): duplicate `documents.info` hydration is cached within the same `search.expand` call for multi-query runs.
 
 ## `search.research`
 
-- Signature: `search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })`
+- Signature: `search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; precisionMode?: 'balanced'|'precision'|'recall'; minScore?: number; diversify?: boolean; diversityLambda?: number; rrfK?: number; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; perQueryView?: 'ids'|'summary'|'full'; perQueryHitLimit?: number; evidencePerDocument?: number; suggestedQueryLimit?: number; includePerQuery?: boolean; includeExpanded?: boolean; includeCoverage?: boolean; includeBacklinks?: boolean; backlinksLimit?: number; backlinksConcurrency?: number; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })`
 - Usage example:
 
 ```json
@@ -876,8 +929,14 @@ outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
   "args": {
     "question": "How do incident communication and escalation work?",
     "queries": ["incident comms", "escalation matrix"],
+    "precisionMode": "precision",
     "limitPerQuery": 8,
+    "perQueryView": "ids",
+    "perQueryHitLimit": 4,
+    "evidencePerDocument": 3,
     "expandLimit": 5,
+    "includeBacklinks": true,
+    "backlinksLimit": 3,
     "maxDocuments": 20,
     "view": "summary"
   }
@@ -885,6 +944,8 @@ outline-cli tools help ai-skills --skill oauth_compliance_audit --view full
 ```
 
 - Best practice (AI): pass previous `next.seenIds` into `seenIds` in follow-up turns to avoid repeated evidence.
+- Best practice (AI): use `precisionMode=precision` for answer-grade ranking, `precisionMode=recall` for exploration.
+- Best practice (AI): use `perQueryView=ids` with `perQueryHitLimit` to keep traces while controlling token usage.
 
 ## `documents.safe_update`
 

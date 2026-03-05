@@ -9,6 +9,7 @@ import { ResultStore } from "../src/result-store.js";
 import { TOOL_ARG_SCHEMAS, validateToolArgs } from "../src/tool-arg-schemas.js";
 import { EXTENDED_TOOLS } from "../src/tools.extended.js";
 import { MUTATION_TOOLS } from "../src/tools.mutation.js";
+import { NAVIGATION_TOOLS } from "../src/tools.navigation.js";
 
 test("validateToolArgs rejects unknown args by default", () => {
   assert.throws(
@@ -3123,6 +3124,637 @@ test("documents.issue_ref_report resolves candidates via search and extracts det
   assert.equal(output.result.documents[0].summary.refCount, 2);
   assert.equal(output.result.documents[1].summary.refCount, 0);
   assert.equal(output.result.documents[2].summary.refCount, 1);
+});
+
+test("search.research schema accepts precision controls and enforces numeric bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("search.research", {
+      query: "incident comms",
+      precisionMode: "precision",
+      minScore: 0.4,
+      diversify: true,
+      diversityLambda: 0.75,
+      rrfK: 50,
+      perQueryView: "ids",
+      perQueryHitLimit: 3,
+      evidencePerDocument: 2,
+      includePerQuery: true,
+      includeExpanded: true,
+      includeCoverage: true,
+      includeBacklinks: true,
+      backlinksLimit: 3,
+      backlinksConcurrency: 2,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("search.research", {
+        query: "incident comms",
+        minScore: 1.5,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.minScore"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("search.research", {
+        query: "incident comms",
+        diversityLambda: 1.5,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.diversityLambda"));
+      return true;
+    }
+  );
+});
+
+test("URL resolve and canonicalization schemas enforce selectors and bounds", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.resolve_urls", {
+      urls: [
+        "https://handbook.example.com/doc/event-tracking-data-A7hLXuHZJl",
+        "https://handbook.example.com/doc/campaign-detail-page-GWK1uA8w35#d-GWK1uA8w35",
+      ],
+      strict: true,
+      strictHost: true,
+      strictThreshold: 0.85,
+      view: "summary",
+      concurrency: 2,
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.canonicalize_candidates", {
+      queries: ["campaign tracking", "event tracking"],
+      ids: ["doc-1", "doc-2"],
+      strict: true,
+      strictThreshold: 0.8,
+      titleSimilarityThreshold: 0.78,
+      view: "summary",
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.resolve_urls", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.url"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.canonicalize_candidates", {
+        query: "tracking",
+        titleSimilarityThreshold: 1.2,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.titleSimilarityThreshold"));
+      return true;
+    }
+  );
+});
+
+test("documents.resolve_urls boosts urlId matches and keeps grouped deterministic output", async () => {
+  const contract = NAVIGATION_TOOLS["documents.resolve_urls"];
+  assert.ok(contract);
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening", baseUrl: "https://handbook.example.com" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.search_titles") {
+          return {
+            body: {
+              data: [
+                {
+                  id: "doc-1",
+                  title: "Event Tracking Data",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-03T00:00:00.000Z",
+                  publishedAt: "2026-03-03T00:00:00.000Z",
+                  urlId: "A7hLXuHZJl",
+                  text: "tracking details",
+                },
+                {
+                  id: "doc-2",
+                  title: "Event Tracking Overview",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-02T00:00:00.000Z",
+                  publishedAt: "2026-03-02T00:00:00.000Z",
+                  urlId: "legacy-url",
+                  text: "legacy",
+                },
+              ],
+            },
+          };
+        }
+        if (method === "documents.search") {
+          return {
+            body: {
+              data: [
+                {
+                  ranking: 0.88,
+                  context: "event tracking details",
+                  document: {
+                    id: "doc-1",
+                    title: "Event Tracking Data",
+                    collectionId: "col-1",
+                    updatedAt: "2026-03-03T00:00:00.000Z",
+                    publishedAt: "2026-03-03T00:00:00.000Z",
+                    urlId: "A7hLXuHZJl",
+                    text: "tracking details",
+                  },
+                },
+              ],
+            },
+          };
+        }
+        if (method === "documents.info") {
+          return {
+            body: {
+              data: {
+                id: "doc-share",
+                title: "Shared Handbook",
+                collectionId: "col-share",
+                updatedAt: "2026-03-01T00:00:00.000Z",
+                publishedAt: "2026-03-01T00:00:00.000Z",
+                urlId: "share-1",
+                text: "shared",
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    urls: [
+      "https://handbook.example.com/doc/event-tracking-data-A7hLXuHZJl",
+      "https://handbook.example.com/share/share-id-123",
+    ],
+    limit: 3,
+    view: "summary",
+    strict: false,
+  });
+
+  assert.equal(output.tool, "documents.resolve_urls");
+  assert.equal(output.profile, "profile-hardening");
+  assert.equal(output.urlCount, 2);
+  assert.equal(output.result.perUrl.length, 2);
+
+  const docUrl = output.result.perUrl.find((item) => item.url.includes("/doc/"));
+  assert.ok(docUrl);
+  assert.equal(docUrl.bestMatch?.id, "doc-1");
+  assert.ok(docUrl.bestMatch?.confidence >= 0.9);
+
+  const shareUrl = output.result.perUrl.find((item) => item.url.includes("/share/"));
+  assert.ok(shareUrl);
+  assert.equal(shareUrl.bestMatch?.id, "doc-share");
+  assert.ok(Array.isArray(output.result.mergedBestMatches));
+  assert.ok(calls.some((call) => call.method === "documents.info" && call.body.shareId));
+});
+
+test("documents.canonicalize_candidates groups duplicates into canonical clusters", async () => {
+  const contract = NAVIGATION_TOOLS["documents.canonicalize_candidates"];
+  assert.ok(contract);
+
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body) {
+        if (method === "documents.info") {
+          const rows = {
+            "doc-explicit": {
+              id: "doc-explicit",
+              title: "Campaign Detail Page",
+              collectionId: "col-1",
+              updatedAt: "2026-03-03T00:00:00.000Z",
+              publishedAt: "2026-03-03T00:00:00.000Z",
+              urlId: "GWK1uA8w35",
+              text: "explicit doc",
+            },
+          };
+          return { body: { data: rows[body.id] || null } };
+        }
+
+        if (method === "documents.search_titles") {
+          return {
+            body: {
+              data: [
+                {
+                  id: "doc-explicit",
+                  title: "Campaign Detail Page",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-03T00:00:00.000Z",
+                  publishedAt: "2026-03-03T00:00:00.000Z",
+                  urlId: "GWK1uA8w35",
+                  text: "explicit doc",
+                },
+                {
+                  id: "doc-dup",
+                  title: "Campaign Detail Pages",
+                  collectionId: "col-1",
+                  updatedAt: "2026-03-02T00:00:00.000Z",
+                  publishedAt: "2026-03-02T00:00:00.000Z",
+                  urlId: "legacy-url",
+                  text: "duplicate title variant",
+                },
+              ],
+            },
+          };
+        }
+
+        if (method === "documents.search") {
+          return {
+            body: {
+              data: [
+                {
+                  ranking: 0.9,
+                  context: "campaign detail setup",
+                  document: {
+                    id: "doc-dup",
+                    title: "Campaign Detail Pages",
+                    collectionId: "col-1",
+                    updatedAt: "2026-03-02T00:00:00.000Z",
+                    publishedAt: "2026-03-02T00:00:00.000Z",
+                    urlId: "legacy-url",
+                    text: "duplicate title variant",
+                  },
+                },
+              ],
+            },
+          };
+        }
+
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    ids: ["doc-explicit"],
+    query: "campaign detail page",
+    strict: true,
+    strictThreshold: 0.7,
+    titleSimilarityThreshold: 0.6,
+    view: "summary",
+  });
+
+  assert.equal(output.tool, "documents.canonicalize_candidates");
+  assert.equal(output.profile, "profile-hardening");
+  assert.equal(output.result.clusterCount, 1);
+  assert.equal(output.result.duplicateClusterCount, 1);
+  assert.equal(output.result.canonical.length, 1);
+  assert.equal(output.result.canonical[0].id, "doc-explicit");
+  assert.deepEqual(output.result.canonical[0].duplicateIds, ["doc-dup"]);
+});
+
+test("search.expand reuses hydration cache for duplicate ids across queries", async () => {
+  const contract = NAVIGATION_TOOLS["search.expand"];
+  assert.ok(contract);
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.search_titles") {
+          const base = [
+            {
+              id: "doc-a",
+              title: "Incident Communication",
+              collectionId: "col-1",
+              updatedAt: "2026-03-01T00:00:00.000Z",
+              publishedAt: "2026-03-01T00:00:00.000Z",
+              urlId: "doc-a-url",
+              text: "doc a",
+            },
+            {
+              id: "doc-b",
+              title: "Escalation Matrix",
+              collectionId: "col-1",
+              updatedAt: "2026-03-02T00:00:00.000Z",
+              publishedAt: "2026-03-02T00:00:00.000Z",
+              urlId: "doc-b-url",
+              text: "doc b",
+            },
+          ];
+          return { body: { data: base } };
+        }
+        if (method === "documents.info") {
+          return {
+            body: {
+              data: {
+                id: body.id,
+                title: body.id === "doc-a" ? "Incident Communication" : "Escalation Matrix",
+                collectionId: "col-1",
+                updatedAt: "2026-03-03T00:00:00.000Z",
+                publishedAt: "2026-03-03T00:00:00.000Z",
+                urlId: `${body.id}-url`,
+                text: `hydrated ${body.id}`,
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    queries: ["incident comms", "escalation matrix"],
+    mode: "titles",
+    limit: 5,
+    expandLimit: 2,
+    view: "summary",
+    concurrency: 2,
+    hydrateConcurrency: 2,
+  });
+
+  assert.equal(output.tool, "search.expand");
+  assert.equal(output.profile, "profile-hardening");
+  assert.equal(output.queryCount, 2);
+  assert.equal(output.result.perQuery.length, 2);
+
+  const infoCalls = calls.filter((call) => call.method === "documents.info");
+  assert.equal(infoCalls.length, 2, "shared hydration cache should avoid duplicate documents.info calls");
+  assert.deepEqual(
+    infoCalls.map((call) => call.body.id).sort(),
+    ["doc-a", "doc-b"]
+  );
+});
+
+test("search.research supports precision shaping, hit limiting, and backlink enrichment", async () => {
+  const contract = NAVIGATION_TOOLS["search.research"];
+  assert.ok(contract);
+
+  const titleHitsByQuery = {
+    "incident comms": [
+      {
+        id: "doc-1",
+        title: "Incident Communication Playbook",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-03-02T00:00:00.000Z",
+        publishedAt: "2026-03-02T00:00:00.000Z",
+        urlId: "doc-1-url",
+        text: "comms primary",
+      },
+      {
+        id: "doc-2",
+        title: "Escalation Matrix",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-02-25T00:00:00.000Z",
+        publishedAt: "2026-02-25T00:00:00.000Z",
+        urlId: "doc-2-url",
+        text: "matrix",
+      },
+    ],
+    "escalation matrix": [
+      {
+        id: "doc-2",
+        title: "Escalation Matrix",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-02-25T00:00:00.000Z",
+        publishedAt: "2026-02-25T00:00:00.000Z",
+        urlId: "doc-2-url",
+        text: "matrix",
+      },
+      {
+        id: "doc-3",
+        title: "Pager Rotation Channels",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-02-20T00:00:00.000Z",
+        publishedAt: "2026-02-20T00:00:00.000Z",
+        urlId: "doc-3-url",
+        text: "pager channels",
+      },
+    ],
+  };
+
+  const semanticHitsByQuery = {
+    "incident comms": [
+      {
+        ranking: 0.93,
+        context: "Communication path and escalation summary.",
+        document: {
+          id: "doc-1",
+          title: "Incident Communication Playbook",
+          collectionId: "col-1",
+          parentDocumentId: null,
+          updatedAt: "2026-03-02T00:00:00.000Z",
+          publishedAt: "2026-03-02T00:00:00.000Z",
+          urlId: "doc-1-url",
+          text: "comms primary",
+        },
+      },
+      {
+        ranking: 0.55,
+        context: "Channel fallback guidance.",
+        document: {
+          id: "doc-3",
+          title: "Pager Rotation Channels",
+          collectionId: "col-1",
+          parentDocumentId: null,
+          updatedAt: "2026-02-20T00:00:00.000Z",
+          publishedAt: "2026-02-20T00:00:00.000Z",
+          urlId: "doc-3-url",
+          text: "pager channels",
+        },
+      },
+    ],
+    "escalation matrix": [
+      {
+        ranking: 0.97,
+        context: "Escalation matrix and approvals.",
+        document: {
+          id: "doc-2",
+          title: "Escalation Matrix",
+          collectionId: "col-1",
+          parentDocumentId: null,
+          updatedAt: "2026-02-25T00:00:00.000Z",
+          publishedAt: "2026-02-25T00:00:00.000Z",
+          urlId: "doc-2-url",
+          text: "matrix",
+        },
+      },
+    ],
+  };
+
+  const hydratedDocs = {
+    "doc-1": {
+      id: "doc-1",
+      title: "Incident Communication Playbook",
+      collectionId: "col-1",
+      parentDocumentId: null,
+      updatedAt: "2026-03-02T00:00:00.000Z",
+      publishedAt: "2026-03-02T00:00:00.000Z",
+      urlId: "doc-1-url",
+      text: "Hydrated doc 1",
+    },
+    "doc-2": {
+      id: "doc-2",
+      title: "Escalation Matrix",
+      collectionId: "col-1",
+      parentDocumentId: null,
+      updatedAt: "2026-02-25T00:00:00.000Z",
+      publishedAt: "2026-02-25T00:00:00.000Z",
+      urlId: "doc-2-url",
+      text: "Hydrated doc 2",
+    },
+    "doc-3": {
+      id: "doc-3",
+      title: "Pager Rotation Channels",
+      collectionId: "col-1",
+      parentDocumentId: null,
+      updatedAt: "2026-02-20T00:00:00.000Z",
+      publishedAt: "2026-02-20T00:00:00.000Z",
+      urlId: "doc-3-url",
+      text: "Hydrated doc 3",
+    },
+  };
+
+  const backlinksByDoc = {
+    "doc-1": [
+      {
+        id: "doc-10",
+        title: "Incident Index",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-03-03T00:00:00.000Z",
+        publishedAt: "2026-03-03T00:00:00.000Z",
+        urlId: "doc-10-url",
+        text: "index",
+      },
+    ],
+    "doc-2": [
+      {
+        id: "doc-11",
+        title: "Escalation FAQ",
+        collectionId: "col-1",
+        parentDocumentId: null,
+        updatedAt: "2026-03-03T00:00:00.000Z",
+        publishedAt: "2026-03-03T00:00:00.000Z",
+        urlId: "doc-11-url",
+        text: "faq",
+      },
+    ],
+  };
+
+  const calls = [];
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        if (method === "documents.search_titles") {
+          return { body: { data: titleHitsByQuery[body.query] || [] } };
+        }
+        if (method === "documents.search") {
+          return { body: { data: semanticHitsByQuery[body.query] || [] } };
+        }
+        if (method === "documents.info") {
+          return { body: { data: hydratedDocs[body.id] || null } };
+        }
+        if (method === "documents.list") {
+          return { body: { data: backlinksByDoc[body.backlinkDocumentId] || [] } };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    queries: ["incident comms", "escalation matrix"],
+    includeTitleSearch: true,
+    includeSemanticSearch: true,
+    precisionMode: "precision",
+    limitPerQuery: 6,
+    perQueryView: "ids",
+    perQueryHitLimit: 1,
+    evidencePerDocument: 2,
+    maxDocuments: 2,
+    expandLimit: 2,
+    includeBacklinks: true,
+    backlinksLimit: 2,
+    view: "summary",
+  });
+
+  assert.equal(output.tool, "search.research");
+  assert.equal(output.profile, "profile-hardening");
+  assert.equal(output.queryCount, 2);
+  assert.equal(output.result.perQuery.length, 2);
+  assert.ok(output.result.perQuery.every((row) => row.hits.length <= 1));
+  assert.ok(output.result.merged.length <= 2);
+  assert.ok(output.result.expanded.length <= 2);
+  assert.ok(output.result.expanded.every((row) => Array.isArray(row.backlinks)));
+  assert.equal(output.result.coverage.precisionMode, "precision");
+  assert.equal(output.result.coverage.perQueryHitLimit, 1);
+  assert.equal(output.result.coverage.evidencePerDocument, 2);
+  assert.ok(output.result.coverage.backlinksRequested >= 1);
+
+  const backlinkCalls = calls.filter((call) => call.method === "documents.list");
+  assert.ok(backlinkCalls.length >= 1, "includeBacklinks should issue documents.list backlink reads");
+});
+
+test("ResultStore.emit offload envelope includes compact preview metadata", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-hardening-preview-"));
+  const store = new ResultStore({ tmpDir, mode: "auto", inlineMaxBytes: 64, pretty: false });
+  const originalWrite = process.stdout.write;
+  const chunks = [];
+  process.stdout.write = (chunk, encoding, callback) => {
+    chunks.push(typeof chunk === "string" ? chunk : String(chunk));
+    if (typeof encoding === "function") {
+      encoding();
+    } else if (typeof callback === "function") {
+      callback();
+    }
+    return true;
+  };
+
+  try {
+    await store.emit({
+      ok: true,
+      result: {
+        items: [
+          { id: "doc-1", title: "A" },
+          { id: "doc-2", title: "B" },
+          { id: "doc-3", title: "C" },
+          { id: "doc-4", title: "D" },
+        ],
+      },
+    });
+
+    const line = chunks.join("").trim();
+    const envelope = JSON.parse(line);
+    assert.equal(envelope.stored, true);
+    assert.equal(typeof envelope.file, "string");
+    assert.ok(envelope.preview);
+    assert.equal(envelope.preview.ok, true);
+    assert.ok(envelope.preview.result);
+  } finally {
+    process.stdout.write = originalWrite;
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("ResultStore.resolve restricts access to managed tmp dir", async () => {

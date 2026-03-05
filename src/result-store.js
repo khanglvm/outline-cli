@@ -29,12 +29,14 @@ export class ResultStore {
       ext: opts.ext,
       pretty,
     });
+    const preview = this.preview(value);
 
     const envelope = {
       ok: true,
       stored: true,
       file,
       bytes,
+      preview,
       hint: `Use shell tools to inspect file, e.g. jq '.' ${JSON.stringify(file)} | head`,
     };
 
@@ -125,5 +127,57 @@ export class ResultStore {
     }
 
     return target;
+  }
+
+  preview(value, opts = {}) {
+    const maxDepth = Math.max(0, Number(opts.maxDepth ?? 2));
+    const maxArrayItems = Math.max(1, Number(opts.maxArrayItems ?? 3));
+    const maxObjectKeys = Math.max(1, Number(opts.maxObjectKeys ?? 12));
+    const maxString = Math.max(16, Number(opts.maxString ?? 160));
+
+    const walk = (input, depth) => {
+      if (input === null || input === undefined) {
+        return input;
+      }
+
+      if (typeof input === "string") {
+        return input.length > maxString ? `${input.slice(0, maxString)}...` : input;
+      }
+
+      if (typeof input !== "object") {
+        return input;
+      }
+
+      if (Array.isArray(input)) {
+        if (depth >= maxDepth) {
+          return { type: "array", count: input.length };
+        }
+        const items = input.slice(0, maxArrayItems).map((item) => walk(item, depth + 1));
+        if (input.length > maxArrayItems) {
+          items.push({ truncatedItems: input.length - maxArrayItems });
+        }
+        return items;
+      }
+
+      const keys = Object.keys(input);
+      if (depth >= maxDepth) {
+        return {
+          type: "object",
+          keyCount: keys.length,
+          keys: keys.slice(0, maxObjectKeys),
+        };
+      }
+
+      const out = {};
+      for (const key of keys.slice(0, maxObjectKeys)) {
+        out[key] = walk(input[key], depth + 1);
+      }
+      if (keys.length > maxObjectKeys) {
+        out.truncatedKeys = keys.length - maxObjectKeys;
+      }
+      return out;
+    };
+
+    return walk(value, 0);
   }
 }

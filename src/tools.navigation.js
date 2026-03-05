@@ -90,6 +90,20 @@ function tokenize(text) {
     .filter(Boolean);
 }
 
+function uniqueStrings(values = []) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values) {
+    const trimmed = String(value || "").trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}
+
 const QUERY_STOP_WORDS = new Set([
   "a",
   "an",
@@ -138,6 +152,166 @@ function normalizeSearchRanking(value) {
     return ranking;
   }
   return Math.min(1, ranking / 10);
+}
+
+function normalizeResearchPrecisionMode(mode = "balanced") {
+  const normalized = String(mode || "balanced").trim().toLowerCase();
+  if (["balanced", "precision", "recall"].includes(normalized)) {
+    return normalized;
+  }
+  return "balanced";
+}
+
+function getResearchModeConfig(mode = "balanced") {
+  const precisionMode = normalizeResearchPrecisionMode(mode);
+  if (precisionMode === "precision") {
+    return {
+      precisionMode,
+      sourceWeights: { titles: 1.4, semantic: 0.9 },
+      scoreWeights: {
+        confidence: 0.48,
+        rrf: 0.2,
+        queryCoverage: 0.17,
+        sourceCoverage: 0.1,
+        recency: 0.05,
+      },
+      mmrLambda: 0.82,
+      minScore: 0.42,
+    };
+  }
+
+  if (precisionMode === "recall") {
+    return {
+      precisionMode,
+      sourceWeights: { titles: 1.05, semantic: 1.25 },
+      scoreWeights: {
+        confidence: 0.34,
+        rrf: 0.34,
+        queryCoverage: 0.16,
+        sourceCoverage: 0.06,
+        recency: 0.1,
+      },
+      mmrLambda: 0.66,
+      minScore: 0.2,
+    };
+  }
+
+  return {
+    precisionMode: "balanced",
+    sourceWeights: { titles: 1.25, semantic: 1 },
+    scoreWeights: {
+      confidence: 0.43,
+      rrf: 0.27,
+      queryCoverage: 0.14,
+      sourceCoverage: 0.08,
+      recency: 0.08,
+    },
+    mmrLambda: 0.74,
+    minScore: 0,
+  };
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function recencySignal(updatedAt) {
+  const ts = Number.isFinite(Date.parse(updatedAt || "")) ? Date.parse(updatedAt) : 0;
+  if (!ts) {
+    return 0;
+  }
+  const ageMs = Math.max(0, Date.now() - ts);
+  const ageDays = ageMs / (24 * 3600 * 1000);
+  if (ageDays <= 1) {
+    return 1;
+  }
+  if (ageDays <= 7) {
+    return 0.9;
+  }
+  if (ageDays <= 30) {
+    return 0.75;
+  }
+  if (ageDays <= 90) {
+    return 0.55;
+  }
+  if (ageDays <= 365) {
+    return 0.35;
+  }
+  return 0.15;
+}
+
+function tokenJaccardSimilarity(a, b) {
+  const aTokens = new Set(tokenize(a));
+  const bTokens = new Set(tokenize(b));
+  if (aTokens.size === 0 && bTokens.size === 0) {
+    return 0;
+  }
+
+  let intersection = 0;
+  for (const token of aTokens) {
+    if (bTokens.has(token)) {
+      intersection += 1;
+    }
+  }
+  const union = aTokens.size + bTokens.size - intersection;
+  if (union <= 0) {
+    return 0;
+  }
+  return intersection / union;
+}
+
+function diversifyRankedRows(rows, limit, lambda = 0.74) {
+  const maxItems = Math.max(0, Math.min(limit, rows.length));
+  if (maxItems <= 1) {
+    return rows.slice(0, maxItems);
+  }
+
+  const selected = [];
+  const remaining = [...rows];
+  const safeLambda = clamp(Number(lambda), 0, 1);
+
+  while (selected.length < maxItems && remaining.length > 0) {
+    let bestIndex = 0;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < remaining.length; i += 1) {
+      const candidate = remaining[i];
+      const relevance = Number(candidate.score || 0);
+      let maxSimilarity = 0;
+      for (const picked of selected) {
+        const sim = tokenJaccardSimilarity(
+          `${candidate.title || ""} ${candidate.queries?.join(" ") || ""}`,
+          `${picked.title || ""} ${picked.queries?.join(" ") || ""}`
+        );
+        if (sim > maxSimilarity) {
+          maxSimilarity = sim;
+        }
+      }
+      const mmrScore = safeLambda * relevance - (1 - safeLambda) * maxSimilarity;
+      if (mmrScore > bestScore) {
+        bestScore = mmrScore;
+        bestIndex = i;
+        continue;
+      }
+      if (mmrScore === bestScore) {
+        const bestCandidate = remaining[bestIndex];
+        if (Number(candidate.score || 0) > Number(bestCandidate.score || 0)) {
+          bestIndex = i;
+          continue;
+        }
+        if (
+          Number(candidate.score || 0) === Number(bestCandidate.score || 0) &&
+          String(candidate.title || "").localeCompare(String(bestCandidate.title || "")) < 0
+        ) {
+          bestIndex = i;
+        }
+      }
+    }
+
+    selected.push(remaining.splice(bestIndex, 1)[0]);
+  }
+
+  return selected;
 }
 
 function buildResearchQueries(args) {
@@ -203,7 +377,7 @@ function buildFollowUpQueries(merged, queries, limit = 6) {
   return tokens.slice(0, limit);
 }
 
-function shapeResearchMergedRow(row, view, excerptChars) {
+function shapeResearchMergedRow(row, view, excerptChars, evidencePerDocument = 5) {
   if (view === "full") {
     return row;
   }
@@ -237,13 +411,13 @@ function shapeResearchMergedRow(row, view, excerptChars) {
   }
 
   if (Array.isArray(row.evidence)) {
-    summary.evidence = row.evidence.slice(0, 5);
+    summary.evidence = row.evidence.slice(0, evidencePerDocument);
   }
 
   return summary;
 }
 
-function normalizeResearchTitleHit(query, row, contextChars) {
+function normalizeResearchTitleHit(query, row, contextChars, sourceRank) {
   if (!row?.id) {
     return null;
   }
@@ -267,11 +441,12 @@ function normalizeResearchTitleHit(query, row, contextChars) {
     scoreContribution: confidence,
     source: "titles",
     query,
+    sourceRank,
     context: undefined,
   };
 }
 
-function normalizeResearchSemanticHit(query, row, contextChars) {
+function normalizeResearchSemanticHit(query, row, contextChars, sourceRank) {
   const doc = row?.document;
   if (!doc?.id) {
     return null;
@@ -298,11 +473,20 @@ function normalizeResearchSemanticHit(query, row, contextChars) {
     scoreContribution: confidence,
     source: "semantic",
     query,
+    sourceRank,
     context: context ? (context.length > contextChars ? `${context.slice(0, contextChars)}...` : context) : undefined,
   };
 }
 
-function mergeResearchHits(rawHits, seenIds = []) {
+function mergeResearchHits(rawHits, seenIds = [], options = {}) {
+  const modeConfig = getResearchModeConfig(options.precisionMode || "balanced");
+  const totalQueries = Math.max(1, Number(options.totalQueries || 1));
+  const enabledSourceCount = Math.max(1, Number(options.enabledSourceCount || 2));
+  const rrfK = Math.max(1, toInteger(options.rrfK, 60));
+  const minScore = Number.isFinite(Number(options.minScore))
+    ? clamp(Number(options.minScore), 0, 1)
+    : modeConfig.minScore;
+
   const seenSet = new Set((seenIds || []).map((id) => String(id)));
   const mergedMap = new Map();
   let skippedSeen = 0;
@@ -317,9 +501,15 @@ function mergeResearchHits(rawHits, seenIds = []) {
     }
 
     const existing = mergedMap.get(hit.id);
+    const source = String(hit.source || "semantic");
+    const sourceWeight = modeConfig.sourceWeights[source] || 1;
+    const sourceRank = Number.isFinite(Number(hit.sourceRank)) ? Math.max(1, Number(hit.sourceRank)) : 1;
+    const rrfContribution = sourceWeight / (rrfK + sourceRank);
+    const contribution = clamp(Number(hit.scoreContribution || 0), 0, 1);
     const evidenceRow = {
       query: hit.query,
       source: hit.source,
+      sourceRank,
       ranking: hit.ranking,
       scoreContribution: hit.scoreContribution,
       context: hit.context,
@@ -336,7 +526,11 @@ function mergeResearchHits(rawHits, seenIds = []) {
         urlId: hit.urlId,
         text: hit.text,
         ranking: hit.ranking,
-        score: Number(hit.scoreContribution || 0),
+        score: contribution,
+        confidenceMax: contribution,
+        confidenceSum: contribution,
+        confidenceCount: 1,
+        rrf: rrfContribution,
         queryMatches: 1,
         sources: [hit.source],
         queries: [hit.query],
@@ -352,7 +546,11 @@ function mergeResearchHits(rawHits, seenIds = []) {
       existing.queries.push(hit.query);
       existing.queryMatches += 1;
     }
-    existing.score = Math.max(existing.score, Number(hit.scoreContribution || 0));
+    existing.score = Math.max(existing.score, contribution);
+    existing.confidenceMax = Math.max(existing.confidenceMax || 0, contribution);
+    existing.confidenceSum = Number(existing.confidenceSum || 0) + contribution;
+    existing.confidenceCount = Number(existing.confidenceCount || 0) + 1;
+    existing.rrf = Number(existing.rrf || 0) + rrfContribution;
     existing.evidence.push(evidenceRow);
     if (existing.ranking === undefined && hit.ranking !== undefined) {
       existing.ranking = hit.ranking;
@@ -365,16 +563,42 @@ function mergeResearchHits(rawHits, seenIds = []) {
     }
   }
 
-  const merged = Array.from(mergedMap.values()).map((row) => {
-    const rankingSignal = normalizeSearchRanking(row.ranking);
-    const queryBonus = Math.min(0.24, Math.max(0, row.queryMatches - 1) * 0.08);
-    const sourceBonus = row.sources.length > 1 ? 0.06 : 0;
-    const finalScore = Math.max(0, Math.min(1.5, row.score + rankingSignal * 0.2 + queryBonus + sourceBonus));
-    return {
-      ...row,
-      score: Number(finalScore.toFixed(4)),
-    };
-  });
+  const mergedBase = Array.from(mergedMap.values());
+  const maxRrf = mergedBase.reduce((max, row) => Math.max(max, Number(row.rrf || 0)), 0) || 1;
+  const scoreWeights = modeConfig.scoreWeights;
+
+  const merged = mergedBase
+    .map((row) => {
+      const rankingSignal = normalizeSearchRanking(row.ranking);
+      const confidenceSignal = clamp(
+        Math.max(
+          Number(row.confidenceMax || 0),
+          row.confidenceCount > 0 ? Number(row.confidenceSum || 0) / row.confidenceCount : 0
+        ),
+        0,
+        1
+      );
+      const rrfSignal = clamp(Number(row.rrf || 0) / maxRrf, 0, 1);
+      const queryCoverage = clamp(Number(row.queryMatches || 0) / totalQueries, 0, 1);
+      const sourceCoverage = clamp(Number(row.sources?.length || 0) / enabledSourceCount, 0, 1);
+      const recency = recencySignal(row.updatedAt);
+
+      const finalScore = clamp(
+        scoreWeights.confidence * Math.max(confidenceSignal, rankingSignal * 0.55) +
+          scoreWeights.rrf * rrfSignal +
+          scoreWeights.queryCoverage * queryCoverage +
+          scoreWeights.sourceCoverage * sourceCoverage +
+          scoreWeights.recency * recency,
+        0,
+        1
+      );
+
+      return {
+        ...row,
+        score: Number(finalScore.toFixed(4)),
+      };
+    })
+    .filter((row) => row.score >= minScore);
 
   merged.sort((a, b) => {
     if (b.score !== a.score) {
@@ -396,7 +620,13 @@ function mergeResearchHits(rawHits, seenIds = []) {
     return String(a.title || "").localeCompare(String(b.title || ""));
   });
 
-  return { merged, skippedSeen };
+  return {
+    merged,
+    skippedSeen,
+    precisionMode: modeConfig.precisionMode,
+    minScore,
+    rrfK,
+  };
 }
 
 async function researchSingleQuery(ctx, query, args, maxAttempts, contextChars) {
@@ -445,10 +675,10 @@ async function researchSingleQuery(ctx, query, args, maxAttempts, contextChars) 
   const semanticRows = settled.find((item) => item.source === "semantic")?.rows || [];
 
   const normalizedTitleHits = titleRows
-    .map((row) => normalizeResearchTitleHit(query, row, contextChars))
+    .map((row, index) => normalizeResearchTitleHit(query, row, contextChars, index + 1))
     .filter(Boolean);
   const normalizedSemanticHits = semanticRows
-    .map((row) => normalizeResearchSemanticHit(query, row, contextChars))
+    .map((row, index) => normalizeResearchSemanticHit(query, row, contextChars, index + 1))
     .filter(Boolean);
 
   const allHits = [...normalizedTitleHits, ...normalizedSemanticHits];
@@ -481,65 +711,118 @@ async function searchResearchTool(ctx, args) {
   const excerptChars = toInteger(args.excerptChars, 220);
   const concurrency = Math.max(1, toInteger(args.concurrency, 4));
   const view = args.view || "summary";
+  const perQueryView =
+    args.perQueryView && ["ids", "summary", "full"].includes(String(args.perQueryView))
+      ? String(args.perQueryView)
+      : view;
   const maxDocuments = Math.max(1, toInteger(args.maxDocuments, 40));
   const expandLimit = Math.max(1, toInteger(args.expandLimit, 8));
   const seenIds = ensureStringArray(args.seenIds, "seenIds") || [];
+  const perQueryHitLimit = Math.max(1, toInteger(args.perQueryHitLimit, 6));
+  const evidencePerDocument = Math.max(1, toInteger(args.evidencePerDocument, 5));
+  const suggestedQueryLimit = Math.max(1, toInteger(args.suggestedQueryLimit, 6));
+  const includePerQuery = args.includePerQuery !== false;
+  const includeCoverage = args.includeCoverage !== false;
+  const includeExpanded = args.includeExpanded !== false;
+  const includeBacklinks = args.includeBacklinks === true;
+  const backlinksLimit = Math.max(1, toInteger(args.backlinksLimit, 5));
+  const backlinksConcurrency = Math.max(1, toInteger(args.backlinksConcurrency, 4));
+
+  const precisionMode = normalizeResearchPrecisionMode(args.precisionMode || "balanced");
+  const modeConfig = getResearchModeConfig(precisionMode);
+  const diversityLambda = Number.isFinite(Number(args.diversityLambda))
+    ? clamp(Number(args.diversityLambda), 0, 1)
+    : modeConfig.mmrLambda;
+  const diversify = args.diversify !== false;
 
   const perQueryRaw = await mapLimit(queries, concurrency, async (query) =>
     researchSingleQuery(ctx, query, args, maxAttempts, contextChars)
   );
 
   const allHits = perQueryRaw.flatMap((item) => item.result.hits || []);
-  const { merged: mergedAll, skippedSeen } = mergeResearchHits(allHits, seenIds);
-  const merged = mergedAll.slice(0, maxDocuments);
-
-  const expandedIds = merged.slice(0, expandLimit).map((item) => item.id);
-  const hydration = await fetchDocumentsByIds(ctx, expandedIds, {
-    maxAttempts,
-    concurrency: Math.max(1, toInteger(args.hydrateConcurrency, 4)),
+  const mergeMeta = mergeResearchHits(allHits, seenIds, {
+    precisionMode,
+    minScore: args.minScore,
+    totalQueries: queries.length,
+    enabledSourceCount: (includeTitleSearch ? 1 : 0) + (includeSemanticSearch ? 1 : 0),
+    rrfK: args.rrfK,
   });
+  const mergedAll = mergeMeta.merged;
+  const merged = diversify
+    ? diversifyRankedRows(mergedAll, maxDocuments, diversityLambda)
+    : mergedAll.slice(0, maxDocuments);
 
-  const expanded = expandedIds
-    .map((id) => {
-      const doc = hydration.byId.get(id);
-      if (!doc) {
-        return null;
-      }
-      const mergedRow = merged.find((row) => row.id === id);
-      if (!mergedRow) {
-        return null;
-      }
-      if (view === "ids") {
-        return {
-          id: doc.id,
-          title: doc.title,
-          score: mergedRow.score,
-          queryMatches: mergedRow.queryMatches,
-        };
-      }
-      if (view === "full") {
-        return {
-          id: doc.id,
-          score: mergedRow.score,
-          queryMatches: mergedRow.queryMatches,
-          evidence: mergedRow.evidence,
-          document: doc,
-        };
-      }
-      return {
-        id: doc.id,
-        title: doc.title,
-        score: mergedRow.score,
-        queryMatches: mergedRow.queryMatches,
-        evidence: mergedRow.evidence.slice(0, 5),
-        document: normalizeDocumentRow(doc, "summary", excerptChars),
+  const expandedIds = includeExpanded ? merged.slice(0, expandLimit).map((item) => item.id) : [];
+  const hydration = includeExpanded
+    ? await fetchDocumentsByIds(ctx, expandedIds, {
+        maxAttempts,
+        concurrency: Math.max(1, toInteger(args.hydrateConcurrency, 4)),
+      })
+    : {
+        byId: new Map(),
+        items: [],
       };
-    })
-    .filter(Boolean);
+  const backlinks = includeExpanded && includeBacklinks && expandedIds.length > 0
+    ? await fetchBacklinksByDocumentIds(ctx, expandedIds, {
+        maxAttempts,
+        concurrency: backlinksConcurrency,
+        limit: backlinksLimit,
+        view: view === "ids" ? "ids" : "summary",
+        excerptChars,
+      })
+    : {
+        byId: new Map(),
+        items: [],
+      };
+
+  const expanded = includeExpanded
+    ? expandedIds
+        .map((id) => {
+          const doc = hydration.byId.get(id);
+          if (!doc) {
+            return null;
+          }
+          const mergedRow = merged.find((row) => row.id === id);
+          if (!mergedRow) {
+            return null;
+          }
+          const backlinkRows = includeBacklinks ? backlinks.byId.get(id) || [] : undefined;
+
+          if (view === "ids") {
+            return compactValue({
+              id: doc.id,
+              title: doc.title,
+              score: mergedRow.score,
+              queryMatches: mergedRow.queryMatches,
+              backlinks: backlinkRows,
+            });
+          }
+          if (view === "full") {
+            return compactValue({
+              id: doc.id,
+              score: mergedRow.score,
+              queryMatches: mergedRow.queryMatches,
+              evidence: mergedRow.evidence,
+              document: doc,
+              backlinks: backlinkRows,
+            });
+          }
+          return compactValue({
+            id: doc.id,
+            title: doc.title,
+            score: mergedRow.score,
+            queryMatches: mergedRow.queryMatches,
+            evidence: mergedRow.evidence.slice(0, evidencePerDocument),
+            document: normalizeDocumentRow(doc, "summary", excerptChars),
+            backlinks: backlinkRows,
+          });
+        })
+        .filter(Boolean)
+    : [];
 
   const perQuery = perQueryRaw.map((item) => {
     const compactHits =
-      view === "full"
+      perQueryView === "full"
         ? item.result.hits.map((hit) => ({
             ...hit,
           }))
@@ -571,7 +854,7 @@ async function searchResearchTool(ctx, args) {
                       ranking: hit.ranking,
                       context: hit.context,
                     },
-                view === "full" ? "summary" : view,
+                perQueryView,
                 contextChars
               )
             )
@@ -582,14 +865,16 @@ async function searchResearchTool(ctx, args) {
       titleHits: item.result.titleHits,
       semanticHits: item.result.semanticHits,
       totalHits: item.result.totalHits,
-      hits: compactHits,
+      hits: compactHits.slice(0, perQueryHitLimit),
     };
   });
 
-  const mergedOut = merged.map((row) => shapeResearchMergedRow(row, view, excerptChars));
+  const mergedOut = merged.map((row) =>
+    shapeResearchMergedRow(row, view, excerptChars, evidencePerDocument)
+  );
 
   const nextSeenIds = [...new Set([...seenIds, ...merged.map((item) => item.id)])];
-  const suggestedQueries = buildFollowUpQueries(merged, queries, 6);
+  const suggestedQueries = buildFollowUpQueries(merged, queries, suggestedQueryLimit);
 
   return {
     tool: "search.research",
@@ -598,22 +883,36 @@ async function searchResearchTool(ctx, args) {
     result: {
       question: args.question,
       queries,
-      perQuery,
+      ...(includePerQuery ? { perQuery } : {}),
       merged: mergedOut,
-      expanded,
-      coverage: {
-        includeTitleSearch,
-        includeSemanticSearch,
-        queryCount: queries.length,
-        seenInputCount: seenIds.length,
-        seenSkippedCount: skippedSeen,
-        rawHitCount: allHits.length,
-        mergedCount: mergedAll.length,
-        returnedMergedCount: merged.length,
-        expandedRequested: expandedIds.length,
-        expandedOk: hydration.items.filter((item) => item.ok).length,
-        expandedFailed: hydration.items.filter((item) => !item.ok).length,
-      },
+      ...(includeExpanded ? { expanded } : {}),
+      ...(includeCoverage
+        ? {
+            coverage: {
+              includeTitleSearch,
+              includeSemanticSearch,
+              precisionMode: mergeMeta.precisionMode,
+              minScoreApplied: mergeMeta.minScore,
+              rrfK: mergeMeta.rrfK,
+              diversified: diversify,
+              diversityLambda: diversify ? diversityLambda : undefined,
+              queryCount: queries.length,
+              seenInputCount: seenIds.length,
+              seenSkippedCount: mergeMeta.skippedSeen,
+              rawHitCount: allHits.length,
+              mergedCount: mergedAll.length,
+              returnedMergedCount: merged.length,
+              perQueryHitLimit,
+              evidencePerDocument,
+              expandedRequested: expandedIds.length,
+              expandedOk: hydration.items.filter((item) => item.ok).length,
+              expandedFailed: hydration.items.filter((item) => !item.ok).length,
+              backlinksRequested: includeBacklinks ? backlinks.items.length : 0,
+              backlinksOk: includeBacklinks ? backlinks.items.filter((item) => item.ok).length : 0,
+              backlinksFailed: includeBacklinks ? backlinks.items.filter((item) => !item.ok).length : 0,
+            },
+          }
+        : {}),
       next: {
         seenIds: nextSeenIds,
         suggestedQueries,
@@ -664,6 +963,137 @@ function computeConfidence({ query, title, source, ranking }) {
   }
 
   return Math.max(0, Math.min(1, Number(confidence.toFixed(4))));
+}
+
+function safeParseUrl(value) {
+  try {
+    return new URL(String(value || ""));
+  } catch {
+    return null;
+  }
+}
+
+function maybeExtractUrlIdHint(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const match = raw.match(/-([A-Za-z0-9]{6,})$/);
+  if (match?.[1]) {
+    return String(match[1]);
+  }
+  if (/^[A-Za-z0-9]{6,}$/.test(raw)) {
+    return raw;
+  }
+  return "";
+}
+
+function extractHashUrlIdHint(hashValue) {
+  const match = String(hashValue || "").match(/(?:^#|[#/])d-([A-Za-z0-9_-]{6,})/i);
+  return match?.[1] ? String(match[1]) : "";
+}
+
+function parseOutlineReferenceUrl(rawValue, profileBaseUrl) {
+  const input = String(rawValue || "").trim();
+  const profileUrl = safeParseUrl(profileBaseUrl);
+  const parsed = safeParseUrl(input);
+  if (!parsed) {
+    return {
+      input,
+      validUrl: false,
+      host: "",
+      path: "",
+      shareId: "",
+      titleQuery: "",
+      urlIdHints: [],
+      matchesProfileHost: null,
+      fallbackQuery: input,
+    };
+  }
+
+  const path = parsed.pathname.replace(/\/+$/, "");
+  const segments = path.split("/").filter(Boolean);
+  const lowerSegments = segments.map((segment) => segment.toLowerCase());
+  const shareIndex = lowerSegments.indexOf("share");
+  const shareId = shareIndex >= 0 && segments[shareIndex + 1] ? String(segments[shareIndex + 1]) : "";
+
+  const docIndex = lowerSegments.indexOf("doc");
+  const rawDocSegment = docIndex >= 0 && segments[docIndex + 1] ? String(segments[docIndex + 1]) : "";
+  const hashUrlId = extractHashUrlIdHint(parsed.hash);
+  const docUrlId = maybeExtractUrlIdHint(rawDocSegment);
+
+  const urlIdHints = uniqueStrings([docUrlId, hashUrlId]);
+
+  let titleQuery = "";
+  if (rawDocSegment) {
+    titleQuery = rawDocSegment;
+    if (docUrlId && titleQuery.endsWith(`-${docUrlId}`)) {
+      titleQuery = titleQuery.slice(0, -(docUrlId.length + 1));
+    }
+    titleQuery = titleQuery.replace(/[-_]+/g, " ").trim();
+  }
+
+  const fallbackQuery =
+    titleQuery ||
+    (segments.length > 0
+      ? segments[segments.length - 1].replace(/[-_]+/g, " ").trim()
+      : input);
+
+  return {
+    input,
+    validUrl: true,
+    host: parsed.host,
+    path,
+    shareId,
+    titleQuery,
+    urlIdHints,
+    matchesProfileHost: profileUrl ? parsed.host.toLowerCase() === profileUrl.host.toLowerCase() : null,
+    fallbackQuery,
+  };
+}
+
+function compareIsoDesc(a, b) {
+  const aTs = Number.isFinite(Date.parse(a || "")) ? Date.parse(a) : 0;
+  const bTs = Number.isFinite(Date.parse(b || "")) ? Date.parse(b) : 0;
+  if (bTs !== aTs) {
+    return bTs - aTs;
+  }
+  return 0;
+}
+
+function shapeResolveUrlCandidate(candidate, view, excerptChars) {
+  const base = makeCandidateView(candidate, view, excerptChars);
+  if (!base || view === "ids") {
+    return base;
+  }
+  return compactValue({
+    ...base,
+    matchedQueries: candidate.matchedQueries,
+    matchingReasons: candidate.matchingReasons,
+    rawConfidence: candidate.rawConfidence,
+    urlIdHintMatched: candidate.urlIdHintMatched,
+  });
+}
+
+function buildCandidateFromDocument(document, { confidence = 1, source = "explicit", ranking, context } = {}) {
+  if (!document?.id) {
+    return null;
+  }
+  return {
+    id: String(document.id),
+    title: document.title,
+    collectionId: document.collectionId,
+    parentDocumentId: document.parentDocumentId,
+    updatedAt: document.updatedAt,
+    publishedAt: document.publishedAt,
+    urlId: document.urlId,
+    text: document.text,
+    ranking: Number.isFinite(Number(ranking)) ? Number(ranking) : undefined,
+    confidence: clamp(Number(confidence), 0, 1),
+    sources: [source],
+    context,
+    document,
+  };
 }
 
 function normalizeStatusFilter(statusFilter) {
@@ -893,6 +1323,432 @@ async function documentsResolveTool(ctx, args) {
   };
 }
 
+async function resolveSingleUrlReference(ctx, rawUrl, args) {
+  const parsed = parseOutlineReferenceUrl(rawUrl, ctx.profile?.baseUrl);
+  const limit = Math.max(1, toInteger(args.limit, 8));
+  const strict = !!args.strict;
+  const strictThreshold = Number.isFinite(Number(args.strictThreshold))
+    ? Number(args.strictThreshold)
+    : 0.82;
+  const view = args.view || "summary";
+  const excerptChars = toInteger(args.excerptChars, 220);
+  const candidateMap = new Map();
+  const warnings = [];
+  let shareLookupAttempted = false;
+
+  if (parsed.validUrl && args.strictHost === true && parsed.matchesProfileHost === false) {
+    warnings.push("host_mismatch_skipped");
+    return {
+      url: parsed.input,
+      parsed,
+      bestMatch: null,
+      candidates: [],
+      stats: {
+        queryCount: 0,
+        candidateCount: 0,
+        strict,
+        strictThreshold,
+        shareLookupAttempted,
+      },
+      warnings,
+    };
+  }
+
+  if (parsed.validUrl && parsed.shareId) {
+    shareLookupAttempted = true;
+    try {
+      const shareInfo = await ctx.client.call(
+        "documents.info",
+        { shareId: parsed.shareId },
+        { maxAttempts: toInteger(args.maxAttempts, 2) }
+      );
+      const shareDoc = shareInfo.body?.data || null;
+      const shareCandidate = buildCandidateFromDocument(shareDoc, {
+        confidence: 1,
+        source: "share",
+        ranking: 1,
+      });
+      if (shareCandidate) {
+        candidateMap.set(shareCandidate.id, {
+          ...shareCandidate,
+          rawConfidence: shareCandidate.confidence,
+          matchingReasons: ["share_id_lookup"],
+          matchedQueries: [],
+          urlIdHintMatched: false,
+        });
+      }
+    } catch {
+      warnings.push("share_lookup_failed");
+    }
+  }
+
+  const queryHints = uniqueStrings([parsed.titleQuery, ...parsed.urlIdHints, parsed.fallbackQuery]);
+  for (const query of queryHints) {
+    const resolved = await resolveSingleQuery(ctx, query, {
+      ...args,
+      view: "full",
+      limit,
+      strict: false,
+    });
+
+    for (const candidate of resolved.candidates || []) {
+      const id = candidate?.id;
+      if (!id) {
+        continue;
+      }
+
+      const rawConfidence = clamp(Number(candidate.confidence || 0), 0, 1);
+      const reasons = [];
+      let confidence = rawConfidence;
+      let urlIdHintMatched = false;
+
+      if (parsed.urlIdHints.length > 0 && parsed.urlIdHints.includes(String(candidate.urlId || ""))) {
+        confidence = clamp(confidence + 0.24, 0, 1);
+        urlIdHintMatched = true;
+        reasons.push("url_id_hint");
+      }
+
+      if (parsed.titleQuery) {
+        const lexical = lexicalScore(parsed.titleQuery, candidate.title);
+        if (lexical >= 0.88) {
+          confidence = clamp(confidence + 0.06, 0, 1);
+          reasons.push("title_hint");
+        }
+      }
+
+      if (parsed.matchesProfileHost === true) {
+        confidence = clamp(confidence + 0.02, 0, 1);
+      }
+
+      const existing = candidateMap.get(id);
+      const nextRow = {
+        ...candidate,
+        confidence: Number(confidence.toFixed(4)),
+        rawConfidence,
+        matchingReasons: reasons,
+        matchedQueries: [query],
+        urlIdHintMatched,
+      };
+
+      if (!existing) {
+        candidateMap.set(id, nextRow);
+        continue;
+      }
+
+      existing.confidence = Math.max(Number(existing.confidence || 0), nextRow.confidence);
+      existing.rawConfidence = Math.max(Number(existing.rawConfidence || 0), nextRow.rawConfidence);
+      existing.matchingReasons = uniqueStrings([...(existing.matchingReasons || []), ...nextRow.matchingReasons]);
+      existing.matchedQueries = uniqueStrings([...(existing.matchedQueries || []), query]);
+      existing.sources = uniqueStrings([...(existing.sources || []), ...(nextRow.sources || [])]);
+      existing.urlIdHintMatched = existing.urlIdHintMatched || nextRow.urlIdHintMatched;
+      if (existing.ranking === undefined && nextRow.ranking !== undefined) {
+        existing.ranking = nextRow.ranking;
+      }
+      if (!existing.context && nextRow.context) {
+        existing.context = nextRow.context;
+      }
+      if (!existing.text && nextRow.text) {
+        existing.text = nextRow.text;
+      }
+      if (compareIsoDesc(existing.updatedAt, nextRow.updatedAt) > 0) {
+        existing.updatedAt = nextRow.updatedAt;
+        existing.publishedAt = nextRow.publishedAt;
+      }
+    }
+  }
+
+  const candidates = Array.from(candidateMap.values()).sort((a, b) => {
+    const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+    if (confidenceDiff !== 0) {
+      return confidenceDiff;
+    }
+    const rankingDiff = Number(b.ranking || 0) - Number(a.ranking || 0);
+    if (rankingDiff !== 0) {
+      return rankingDiff;
+    }
+    const updatedCmp = compareIsoDesc(a.updatedAt, b.updatedAt);
+    if (updatedCmp !== 0) {
+      return updatedCmp;
+    }
+    return String(a.title || "").localeCompare(String(b.title || ""));
+  });
+
+  const strictCandidates = strict ? candidates.filter((item) => Number(item.confidence || 0) >= strictThreshold) : candidates;
+  const trimmedCandidates = strictCandidates.slice(0, limit);
+  const bestMatch = trimmedCandidates[0] || null;
+
+  return {
+    url: parsed.input,
+    parsed,
+    bestMatch: bestMatch ? shapeResolveUrlCandidate(bestMatch, view, excerptChars) : null,
+    candidates: trimmedCandidates.map((item) => shapeResolveUrlCandidate(item, view, excerptChars)),
+    stats: {
+      queryCount: queryHints.length,
+      candidateCount: trimmedCandidates.length,
+      strict,
+      strictThreshold,
+      shareLookupAttempted,
+    },
+    warnings,
+  };
+}
+
+async function documentsResolveUrlsTool(ctx, args) {
+  const rawUrls = ensureStringArray(args.urls, "urls") || (args.url ? [String(args.url)] : []);
+  const urls = uniqueStrings(rawUrls);
+  if (urls.length === 0) {
+    throw new CliError("documents.resolve_urls requires args.url or args.urls[]");
+  }
+
+  const concurrency = Math.max(1, toInteger(args.concurrency, 4));
+  const perUrl = await mapLimit(urls, concurrency, async (url) => resolveSingleUrlReference(ctx, url, args));
+
+  if (urls.length === 1 && !args.forceGroupedResult) {
+    return {
+      tool: "documents.resolve_urls",
+      profile: ctx.profile.id,
+      url: perUrl[0].url,
+      result: perUrl[0],
+    };
+  }
+
+  const mergedBestMatches = perUrl
+    .map((item) => item.bestMatch)
+    .filter(Boolean)
+    .sort((a, b) => Number(b.confidence || 0) - Number(a.confidence || 0));
+
+  return {
+    tool: "documents.resolve_urls",
+    profile: ctx.profile.id,
+    urlCount: perUrl.length,
+    result: {
+      perUrl,
+      mergedBestMatches,
+    },
+  };
+}
+
+function canonicalClusterSimilarity(a, b) {
+  const aUrlId = String(a?.urlId || "");
+  const bUrlId = String(b?.urlId || "");
+  if (aUrlId && bUrlId && aUrlId === bUrlId) {
+    return {
+      score: 1,
+      reason: "url_id_exact",
+    };
+  }
+  const lexicalForward = lexicalScore(a?.title, b?.title);
+  const lexicalBackward = lexicalScore(b?.title, a?.title);
+  const lexical = Math.max(lexicalForward, lexicalBackward);
+  const jaccard = tokenJaccardSimilarity(a?.title, b?.title);
+  const score = Math.max(jaccard, lexical);
+  return {
+    score,
+    reason: lexical >= jaccard ? "title_lexical" : "title_similarity",
+  };
+}
+
+function shapeCanonicalCandidate(candidate, view, excerptChars) {
+  return makeCandidateView(candidate, view, excerptChars);
+}
+
+async function documentsCanonicalizeCandidatesTool(ctx, args) {
+  const queries = uniqueStrings(ensureStringArray(args.queries, "queries") || (args.query ? [String(args.query)] : []));
+  const ids = uniqueStrings(ensureStringArray(args.ids, "ids") || []);
+  if (queries.length === 0 && ids.length === 0) {
+    throw new CliError("documents.canonicalize_candidates requires args.query/args.queries[] or args.ids[]");
+  }
+
+  const candidateMap = new Map();
+  const limit = Math.max(1, toInteger(args.limit, 8));
+  const strict = !!args.strict;
+  const strictThreshold = Number.isFinite(Number(args.strictThreshold))
+    ? Number(args.strictThreshold)
+    : 0.82;
+  const view = args.view || "summary";
+  const excerptChars = toInteger(args.excerptChars, 220);
+  const maxAttempts = toInteger(args.maxAttempts, 2);
+  const titleSimilarityThreshold = Number.isFinite(Number(args.titleSimilarityThreshold))
+    ? clamp(Number(args.titleSimilarityThreshold), 0, 1)
+    : 0.82;
+
+  if (ids.length > 0) {
+    const hydrated = await fetchDocumentsByIds(ctx, ids, {
+      maxAttempts,
+      concurrency: Math.max(1, toInteger(args.hydrateConcurrency, 4)),
+    });
+    for (const [id, doc] of hydrated.byId.entries()) {
+      const candidate = buildCandidateFromDocument(doc, {
+        confidence: 1,
+        source: "explicit",
+        ranking: 1,
+      });
+      if (!candidate) {
+        continue;
+      }
+      candidate.matchedQueries = [];
+      candidate.rawConfidence = candidate.confidence;
+      candidateMap.set(id, candidate);
+    }
+  }
+
+  const queryResults = await mapLimit(queries, Math.max(1, toInteger(args.concurrency, 4)), async (query) =>
+    resolveSingleQuery(ctx, query, {
+      ...args,
+      strict: false,
+      limit,
+      view: "full",
+      maxAttempts,
+    })
+  );
+
+  for (const group of queryResults) {
+    for (const candidate of group.candidates || []) {
+      const id = candidate?.id;
+      if (!id) {
+        continue;
+      }
+      const existing = candidateMap.get(id);
+      if (!existing) {
+        candidateMap.set(id, {
+          ...candidate,
+          rawConfidence: candidate.confidence,
+          matchedQueries: [group.query],
+        });
+        continue;
+      }
+      existing.confidence = Math.max(Number(existing.confidence || 0), Number(candidate.confidence || 0));
+      existing.rawConfidence = Math.max(Number(existing.rawConfidence || 0), Number(candidate.confidence || 0));
+      existing.sources = uniqueStrings([...(existing.sources || []), ...(candidate.sources || [])]);
+      existing.matchedQueries = uniqueStrings([...(existing.matchedQueries || []), group.query]);
+      if (existing.ranking === undefined && candidate.ranking !== undefined) {
+        existing.ranking = candidate.ranking;
+      }
+      if (!existing.text && candidate.text) {
+        existing.text = candidate.text;
+      }
+      if (compareIsoDesc(existing.updatedAt, candidate.updatedAt) > 0) {
+        existing.updatedAt = candidate.updatedAt;
+        existing.publishedAt = candidate.publishedAt;
+      }
+    }
+  }
+
+  const candidateRows = Array.from(candidateMap.values())
+    .filter((row) => (!strict ? true : Number(row.confidence || 0) >= strictThreshold))
+    .sort((a, b) => {
+      const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+      if (confidenceDiff !== 0) {
+        return confidenceDiff;
+      }
+      const updatedCmp = compareIsoDesc(a.updatedAt, b.updatedAt);
+      if (updatedCmp !== 0) {
+        return updatedCmp;
+      }
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    });
+
+  const clusters = [];
+  for (const candidate of candidateRows) {
+    let bestCluster = null;
+    let bestScore = -1;
+    let bestReason = "";
+    for (const cluster of clusters) {
+      const similarity = canonicalClusterSimilarity(candidate, cluster.canonical);
+      if (similarity.score >= titleSimilarityThreshold && similarity.score > bestScore) {
+        bestCluster = cluster;
+        bestScore = similarity.score;
+        bestReason = similarity.reason;
+      }
+    }
+
+    if (!bestCluster) {
+      clusters.push({
+        canonical: candidate,
+        members: [{ ...candidate, similarity: 1, similarityReason: "seed" }],
+      });
+      continue;
+    }
+
+    bestCluster.members.push({
+      ...candidate,
+      similarity: Number(bestScore.toFixed(4)),
+      similarityReason: bestReason,
+    });
+  }
+
+  for (const cluster of clusters) {
+    cluster.members.sort((a, b) => {
+      const aExplicit = (a.sources || []).includes("explicit");
+      const bExplicit = (b.sources || []).includes("explicit");
+      if (aExplicit !== bExplicit) {
+        return aExplicit ? -1 : 1;
+      }
+      const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+      if (confidenceDiff !== 0) {
+        return confidenceDiff;
+      }
+      const updatedCmp = compareIsoDesc(a.updatedAt, b.updatedAt);
+      if (updatedCmp !== 0) {
+        return updatedCmp;
+      }
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    });
+    cluster.canonical = cluster.members[0];
+  }
+
+  clusters.sort((a, b) => {
+    const confidenceDiff = Number(b.canonical?.confidence || 0) - Number(a.canonical?.confidence || 0);
+    if (confidenceDiff !== 0) {
+      return confidenceDiff;
+    }
+    return String(a.canonical?.title || "").localeCompare(String(b.canonical?.title || ""));
+  });
+
+  const canonical = clusters.map((cluster) =>
+    compactValue({
+      ...shapeCanonicalCandidate(cluster.canonical, view, excerptChars),
+      memberCount: cluster.members.length,
+      duplicateIds: cluster.members.slice(1).map((member) => member.id),
+    })
+  );
+
+  const clusterRows =
+    view === "ids"
+      ? clusters.map((cluster) => ({
+          canonicalId: cluster.canonical.id,
+          memberIds: cluster.members.map((member) => member.id),
+          memberCount: cluster.members.length,
+        }))
+      : clusters.map((cluster) => ({
+          canonical: shapeCanonicalCandidate(cluster.canonical, view, excerptChars),
+          members: cluster.members.map((member) =>
+            compactValue({
+              ...shapeCanonicalCandidate(member, view, excerptChars),
+              similarity: member.similarity,
+              similarityReason: member.similarityReason,
+            })
+          ),
+        }));
+
+  return {
+    tool: "documents.canonicalize_candidates",
+    profile: ctx.profile.id,
+    result: {
+      queryCount: queries.length,
+      requestedIdCount: ids.length,
+      candidateCount: candidateRows.length,
+      clusterCount: clusters.length,
+      duplicateClusterCount: clusters.filter((cluster) => cluster.members.length > 1).length,
+      strict,
+      strictThreshold,
+      titleSimilarityThreshold,
+      canonical,
+      clusters: clusterRows,
+    },
+  };
+}
+
 function shapeTreeNode(doc, children, view, depth) {
   if (view === "full") {
     return {
@@ -1032,23 +1888,39 @@ async function collectionsTreeTool(ctx, args) {
   };
 }
 
-async function fetchDocumentsByIds(ctx, ids, { maxAttempts, concurrency }) {
+async function fetchDocumentsByIds(ctx, ids, { maxAttempts, concurrency, cache }) {
   const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const useCache = cache instanceof Map ? cache : null;
   const items = await mapLimit(uniqueIds, Math.max(1, concurrency), async (id) => {
-    try {
-      const res = await ctx.client.call("documents.info", { id }, { maxAttempts });
-      return {
-        id,
-        ok: true,
-        document: res.body?.data || null,
-      };
-    } catch (err) {
-      return {
-        id,
-        ok: false,
-        error: err?.message || String(err),
-      };
+    if (useCache && useCache.has(id)) {
+      return Promise.resolve(useCache.get(id));
     }
+
+    const fetchPromise = (async () => {
+      try {
+        const res = await ctx.client.call("documents.info", { id }, { maxAttempts });
+        return {
+          id,
+          ok: true,
+          document: res.body?.data || null,
+        };
+      } catch (err) {
+        return {
+          id,
+          ok: false,
+          error: err?.message || String(err),
+        };
+      }
+    })();
+
+    if (useCache) {
+      useCache.set(id, fetchPromise);
+    }
+    const item = await fetchPromise;
+    if (useCache) {
+      useCache.set(id, item);
+    }
+    return item;
   });
 
   const byId = new Map();
@@ -1061,7 +1933,51 @@ async function fetchDocumentsByIds(ctx, ids, { maxAttempts, concurrency }) {
   return { byId, items };
 }
 
-async function expandSingleQuery(ctx, query, args) {
+async function fetchBacklinksByDocumentIds(ctx, ids, options = {}) {
+  const uniqueIds = [...new Set(ids.filter(Boolean))];
+  const maxAttempts = toInteger(options.maxAttempts, 2);
+  const limit = Math.max(1, toInteger(options.limit, 5));
+  const concurrency = Math.max(1, toInteger(options.concurrency, 4));
+  const view = options.view || "summary";
+  const excerptChars = toInteger(options.excerptChars, 180);
+
+  const items = await mapLimit(uniqueIds, concurrency, async (id) => {
+    try {
+      const res = await ctx.client.call(
+        "documents.list",
+        {
+          backlinkDocumentId: id,
+          limit,
+          offset: 0,
+          sort: "updatedAt",
+          direction: "DESC",
+        },
+        { maxAttempts }
+      );
+      const rows = Array.isArray(res.body?.data) ? res.body.data : [];
+      return {
+        id,
+        ok: true,
+        backlinks: rows.map((row) => normalizeDocumentRow(row, view, excerptChars)).filter(Boolean),
+      };
+    } catch (err) {
+      return {
+        id,
+        ok: false,
+        backlinks: [],
+        error: err?.message || String(err),
+      };
+    }
+  });
+
+  const byId = new Map();
+  for (const item of items) {
+    byId.set(item.id, item.backlinks || []);
+  }
+  return { byId, items };
+}
+
+async function expandSingleQuery(ctx, query, args, hydrationCache) {
   const mode = args.mode === "titles" ? "titles" : "semantic";
   const endpoint = mode === "titles" ? "documents.search_titles" : "documents.search";
   const limit = Math.max(1, toInteger(args.limit, 8));
@@ -1098,6 +2014,7 @@ async function expandSingleQuery(ctx, query, args) {
   const hydrate = await fetchDocumentsByIds(ctx, topIds, {
     maxAttempts,
     concurrency: Math.max(1, toInteger(args.hydrateConcurrency, 4)),
+    cache: hydrationCache,
   });
 
   const view = args.view || "summary";
@@ -1169,8 +2086,9 @@ async function searchExpandTool(ctx, args) {
     throw new CliError("search.expand requires args.query or args.queries[]");
   }
 
+  const hydrationCache = new Map();
   const perQuery = await mapLimit(queries, Math.max(1, toInteger(args.concurrency, 4)), async (query) =>
-    expandSingleQuery(ctx, query, args)
+    expandSingleQuery(ctx, query, args, hydrationCache)
   );
 
   if (queries.length === 1 && !args.forceGroupedResult) {
@@ -1233,6 +2151,51 @@ export const NAVIGATION_TOOLS = {
     ],
     handler: documentsResolveTool,
   },
+  "documents.resolve_urls": {
+    signature:
+      "documents.resolve_urls(args: { url?: string; urls?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictHost?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; forceGroupedResult?: boolean; maxAttempts?: number; })",
+    description:
+      "Resolve document URLs (doc/share links) into confidence-ranked document candidates with URL-id/host-aware boosts.",
+    usageExample: {
+      tool: "documents.resolve_urls",
+      args: {
+        urls: [
+          "https://handbook.example.com/doc/event-tracking-data-A7hLXuHZJl",
+          "https://handbook.example.com/doc/campaign-detail-page-GWK1uA8w35#d-GWK1uA8w35",
+        ],
+        strict: true,
+        strictThreshold: 0.85,
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Use strictHost=true when links should belong to the currently selected profile host only.",
+      "Use strict=true for automation paths that should avoid weak URL matches.",
+      "Start with view=ids, then hydrate selected IDs with documents.info for low-token loops.",
+    ],
+    handler: documentsResolveUrlsTool,
+  },
+  "documents.canonicalize_candidates": {
+    signature:
+      "documents.canonicalize_candidates(args: { query?: string; queries?: string[]; ids?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictThreshold?: number; titleSimilarityThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; maxAttempts?: number; })",
+    description:
+      "Canonicalize noisy/duplicate candidate sets into stable clusters with one preferred canonical document per cluster.",
+    usageExample: {
+      tool: "documents.canonicalize_candidates",
+      args: {
+        queries: ["campaign detail", "campaign tracking event"],
+        strict: true,
+        titleSimilarityThreshold: 0.8,
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Feed this tool with multi-query retrieval inputs before answer generation to reduce duplicate/noisy context.",
+      "Use strict=true + strictThreshold when low-confidence matches should be dropped from canonical clusters.",
+      "Inspect duplicateIds/memberCount to detect ambiguous sources before applying changes.",
+    ],
+    handler: documentsCanonicalizeCandidatesTool,
+  },
   "collections.tree": {
     signature:
       "collections.tree(args: { collectionId: string; includeDrafts?: boolean; maxDepth?: number; view?: 'summary'|'full'; pageSize?: number; maxPages?: number; })",
@@ -1271,15 +2234,16 @@ export const NAVIGATION_TOOLS = {
     bestPractices: [
       "Use low `expandLimit` (2-5) to minimize payload while preserving answer quality.",
       "Use `queries[]` for multi-intent retrieval in one request.",
+      "For multi-query runs, duplicate document hydration is automatically cached within the same tool call.",
       "Prefer `view=summary` unless a full markdown body is strictly needed.",
     ],
     handler: searchExpandTool,
   },
   "search.research": {
     signature:
-      "search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })",
+      "search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; precisionMode?: 'balanced'|'precision'|'recall'; minScore?: number; diversify?: boolean; diversityLambda?: number; rrfK?: number; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; perQueryView?: 'ids'|'summary'|'full'; perQueryHitLimit?: number; evidencePerDocument?: number; suggestedQueryLimit?: number; includePerQuery?: boolean; includeExpanded?: boolean; includeCoverage?: boolean; includeBacklinks?: boolean; backlinksLimit?: number; backlinksConcurrency?: number; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })",
     description:
-      "Run multi-query, multi-source research retrieval with evidence merging, hydration, and follow-up cursor support for multi-turn QA.",
+      "Run multi-query, multi-source research retrieval with weighted reranking, optional diversification, hydration, and follow-up cursor support for multi-turn QA.",
     usageExample: {
       tool: "search.research",
       args: {
@@ -1287,14 +2251,21 @@ export const NAVIGATION_TOOLS = {
         queries: ["incident comms", "escalation matrix"],
         includeTitleSearch: true,
         includeSemanticSearch: true,
+        precisionMode: "precision",
         limitPerQuery: 8,
+        perQueryHitLimit: 4,
+        evidencePerDocument: 3,
         expandLimit: 5,
+        includeBacklinks: true,
+        backlinksLimit: 3,
         view: "summary",
       },
     },
     bestPractices: [
       "Pass prior `next.seenIds` into `seenIds` for follow-up turns to avoid repetition.",
-      "Use both title+semantic modes for broad recall, then narrow with `collectionId`.",
+      "Use `precisionMode=precision` for answer-grade retrieval and `precisionMode=recall` for exploration.",
+      "Set `perQueryView=ids` + `perQueryHitLimit` to reduce token cost while preserving traceability.",
+      "Enable `includeBacklinks` when one-call context gathering is more important than raw latency.",
       "Keep `expandLimit` small and raise only when answer confidence is insufficient.",
     ],
     handler: searchResearchTool,

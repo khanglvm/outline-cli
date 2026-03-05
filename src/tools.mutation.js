@@ -202,6 +202,58 @@ function previewHunks(hunks, limit = 8, perHunkLineLimit = 12) {
   }));
 }
 
+function buildDiffPayload(diff, args = {}) {
+  const includeFullHunks = !!args.includeFullHunks;
+  return {
+    stats: diff.stats,
+    hunks: includeFullHunks
+      ? diff.hunks
+      : previewHunks(diff.hunks, toInteger(args.hunkLimit, 8), toInteger(args.hunkLineLimit, 12)),
+    truncated: !includeFullHunks,
+  };
+}
+
+function normalizeRevisionDiffMeta(revision, view = "summary") {
+  if (!revision || typeof revision !== "object") {
+    return null;
+  }
+  if (view === "full") {
+    return revision;
+  }
+  return compactValue({
+    id: revision.id,
+    documentId: revision.documentId,
+    title: revision.title,
+    createdAt: revision.createdAt,
+    createdBy: revision.createdBy
+      ? {
+          id: revision.createdBy.id,
+          name: revision.createdBy.name,
+        }
+      : undefined,
+  });
+}
+
+function resolveRevisionDocumentId(revision) {
+  if (typeof revision?.documentId === "string" && revision.documentId) {
+    return revision.documentId;
+  }
+  if (typeof revision?.document?.id === "string" && revision.document.id) {
+    return revision.document.id;
+  }
+  return undefined;
+}
+
+function resolveRevisionText(revision) {
+  if (typeof revision?.text === "string") {
+    return revision.text;
+  }
+  if (typeof revision?.document?.text === "string") {
+    return revision.document.text;
+  }
+  return "";
+}
+
 function parseUnifiedPatch(patchText) {
   const lines = splitLines(patchText);
   const hunks = [];
@@ -1112,7 +1164,7 @@ async function documentsDiffTool(ctx, args) {
   const current = info.body?.data;
   const currentText = current?.text || "";
   const diff = computeLineDiff(currentText, args.proposedText);
-  const includeFullHunks = !!args.includeFullHunks;
+  const payload = buildDiffPayload(diff, args);
 
   return {
     tool: "documents.diff",
@@ -1122,9 +1174,76 @@ async function documentsDiffTool(ctx, args) {
       id: args.id,
       revision: current?.revision,
       title: current?.title,
-      stats: diff.stats,
-      hunks: includeFullHunks ? diff.hunks : previewHunks(diff.hunks, toInteger(args.hunkLimit, 8), toInteger(args.hunkLineLimit, 12)),
-      truncated: !includeFullHunks,
+      stats: payload.stats,
+      hunks: payload.hunks,
+      truncated: payload.truncated,
+    },
+  };
+}
+
+async function revisionsDiffTool(ctx, args) {
+  if (!args.id) {
+    throw new CliError("revisions.diff requires args.id");
+  }
+  if (!args.baseRevisionId) {
+    throw new CliError("revisions.diff requires args.baseRevisionId");
+  }
+  if (!args.targetRevisionId) {
+    throw new CliError("revisions.diff requires args.targetRevisionId");
+  }
+
+  const maxAttempts = toInteger(args.maxAttempts, 2);
+  const [baseRes, targetRes] = await Promise.all([
+    ctx.client.call("revisions.info", { id: args.baseRevisionId }, { maxAttempts }),
+    ctx.client.call("revisions.info", { id: args.targetRevisionId }, { maxAttempts }),
+  ]);
+
+  const baseRevision = baseRes.body?.data;
+  const targetRevision = targetRes.body?.data;
+
+  if (!baseRevision || typeof baseRevision !== "object") {
+    throw new CliError("revisions.diff could not hydrate baseRevisionId via revisions.info");
+  }
+  if (!targetRevision || typeof targetRevision !== "object") {
+    throw new CliError("revisions.diff could not hydrate targetRevisionId via revisions.info");
+  }
+
+  const baseDocumentId = resolveRevisionDocumentId(baseRevision);
+  const targetDocumentId = resolveRevisionDocumentId(targetRevision);
+  if (baseDocumentId && baseDocumentId !== args.id) {
+    throw new CliError("revisions.diff base revision does not belong to args.id", {
+      code: "REVISION_DOCUMENT_MISMATCH",
+      id: args.id,
+      baseRevisionId: args.baseRevisionId,
+      revisionDocumentId: baseDocumentId,
+    });
+  }
+  if (targetDocumentId && targetDocumentId !== args.id) {
+    throw new CliError("revisions.diff target revision does not belong to args.id", {
+      code: "REVISION_DOCUMENT_MISMATCH",
+      id: args.id,
+      targetRevisionId: args.targetRevisionId,
+      revisionDocumentId: targetDocumentId,
+    });
+  }
+
+  const diff = computeLineDiff(resolveRevisionText(baseRevision), resolveRevisionText(targetRevision));
+  const payload = buildDiffPayload(diff, args);
+  const view = args.view === "full" ? "full" : "summary";
+
+  return {
+    tool: "revisions.diff",
+    profile: ctx.profile.id,
+    result: {
+      ok: true,
+      id: args.id,
+      baseRevisionId: args.baseRevisionId,
+      targetRevisionId: args.targetRevisionId,
+      baseRevision: normalizeRevisionDiffMeta(baseRevision, view),
+      targetRevision: normalizeRevisionDiffMeta(targetRevision, view),
+      stats: payload.stats,
+      hunks: payload.hunks,
+      truncated: payload.truncated,
     },
   };
 }
@@ -1610,6 +1729,26 @@ export const MUTATION_TOOLS = {
       "Use summary view for fast planning loops.",
     ],
     handler: revisionsListTool,
+  },
+  "revisions.diff": {
+    signature:
+      "revisions.diff(args: { id: string; baseRevisionId: string; targetRevisionId: string; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number; view?: 'summary'|'full'; maxAttempts?: number })",
+    description: "Compute line-level diff between two revisions by hydrating both with revisions.info.",
+    usageExample: {
+      tool: "revisions.diff",
+      args: {
+        id: "doc-id",
+        baseRevisionId: "revision-id-older",
+        targetRevisionId: "revision-id-newer",
+        view: "summary",
+      },
+    },
+    bestPractices: [
+      "Pass adjacent revisions first to isolate rollback root causes.",
+      "Use preview hunks first; set includeFullHunks=true only when needed.",
+      "Verify revision metadata before applying restore or patch actions.",
+    ],
+    handler: revisionsDiffTool,
   },
   "revisions.restore": {
     signature:

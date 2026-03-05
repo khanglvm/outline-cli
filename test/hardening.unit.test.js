@@ -8,6 +8,7 @@ import { CliError } from "../src/errors.js";
 import { ResultStore } from "../src/result-store.js";
 import { TOOL_ARG_SCHEMAS, validateToolArgs } from "../src/tool-arg-schemas.js";
 import { EXTENDED_TOOLS } from "../src/tools.extended.js";
+import { MUTATION_TOOLS } from "../src/tools.mutation.js";
 
 test("validateToolArgs rejects unknown args by default", () => {
   assert.throws(
@@ -652,6 +653,169 @@ test("documents.apply_patch accepts optional expectedRevision and validates boun
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.expectedRevision"));
+      return true;
+    }
+  );
+});
+
+test("revisions.diff is exposed as a first-class mutation wrapper with deterministic payload", async () => {
+  const contract = MUTATION_TOOLS["revisions.diff"];
+  assert.ok(contract);
+  assert.equal(typeof contract.handler, "function");
+  assert.equal(contract.usageExample?.tool, "revisions.diff");
+
+  const calls = [];
+  const revisionsById = {
+    "rev-base": {
+      id: "rev-base",
+      documentId: "doc-1",
+      title: "Incident RCA",
+      text: "alpha\nbravo\ncharlie",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      createdBy: { id: "user-1", name: "Alice" },
+    },
+    "rev-target": {
+      id: "rev-target",
+      documentId: "doc-1",
+      title: "Incident RCA",
+      text: "alpha\nbeta\ncharlie\ndelta",
+      createdAt: "2026-03-02T00:00:00.000Z",
+      createdBy: { id: "user-2", name: "Bob" },
+    },
+  };
+
+  const ctx = {
+    profile: { id: "profile-hardening" },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        assert.equal(method, "revisions.info");
+        return {
+          body: {
+            data: revisionsById[body.id],
+          },
+        };
+      },
+    },
+  };
+
+  const output = await contract.handler(ctx, {
+    id: "doc-1",
+    baseRevisionId: "rev-base",
+    targetRevisionId: "rev-target",
+    hunkLimit: 6,
+    hunkLineLimit: 8,
+    view: "summary",
+  });
+
+  assert.deepEqual(calls, [
+    {
+      method: "revisions.info",
+      body: { id: "rev-base" },
+      options: { maxAttempts: 2 },
+    },
+    {
+      method: "revisions.info",
+      body: { id: "rev-target" },
+      options: { maxAttempts: 2 },
+    },
+  ]);
+
+  assert.equal(output.tool, "revisions.diff");
+  assert.equal(output.profile, "profile-hardening");
+  assert.deepEqual(output.result, {
+    ok: true,
+    id: "doc-1",
+    baseRevisionId: "rev-base",
+    targetRevisionId: "rev-target",
+    baseRevision: {
+      id: "rev-base",
+      documentId: "doc-1",
+      title: "Incident RCA",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      createdBy: { id: "user-1", name: "Alice" },
+    },
+    targetRevision: {
+      id: "rev-target",
+      documentId: "doc-1",
+      title: "Incident RCA",
+      createdAt: "2026-03-02T00:00:00.000Z",
+      createdBy: { id: "user-2", name: "Bob" },
+    },
+    stats: {
+      added: 2,
+      removed: 1,
+      changed: 1,
+      unchanged: 2,
+      totalCurrentLines: 3,
+      totalProposedLines: 4,
+    },
+    hunks: [
+      {
+        kind: "change",
+        oldStart: 2,
+        newStart: 2,
+        lines: [
+          { type: "remove", line: "bravo" },
+          { type: "add", line: "beta" },
+        ],
+        truncated: false,
+      },
+      {
+        kind: "add",
+        oldStart: 4,
+        newStart: 4,
+        lines: [{ type: "add", line: "delta" }],
+        truncated: false,
+      },
+    ],
+    truncated: true,
+  });
+});
+
+test("revisions.diff schema validates valid and invalid inputs with deterministic issues", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("revisions.diff", {
+      id: "doc-1",
+      baseRevisionId: "rev-1",
+      targetRevisionId: "rev-2",
+      includeFullHunks: false,
+      hunkLimit: 8,
+      hunkLineLimit: 12,
+      view: "summary",
+      maxAttempts: 2,
+    })
+  );
+
+  assert.throws(
+    () => validateToolArgs("revisions.diff", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.deepEqual(
+        err.details?.issues?.map((issue) => issue.path),
+        ["args.id", "args.baseRevisionId", "args.targetRevisionId"]
+      );
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("revisions.diff", {
+        id: "doc-1",
+        baseRevisionId: "rev-1",
+        targetRevisionId: "rev-2",
+        hunkLimit: 0,
+        view: "ids",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.deepEqual(
+        err.details?.issues?.map((issue) => issue.path),
+        ["args.hunkLimit", "args.view"]
+      );
       return true;
     }
   );

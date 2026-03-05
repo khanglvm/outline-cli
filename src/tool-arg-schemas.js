@@ -534,6 +534,19 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
   },
+  "revisions.diff": {
+    required: ["id", "baseRevisionId", "targetRevisionId"],
+    properties: {
+      id: { type: "string" },
+      baseRevisionId: { type: "string" },
+      targetRevisionId: { type: "string" },
+      includeFullHunks: { type: "boolean" },
+      hunkLimit: { type: "number", min: 1 },
+      hunkLineLimit: { type: "number", min: 1 },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+  },
   "revisions.restore": {
     required: ["id", "revisionId"],
     properties: {

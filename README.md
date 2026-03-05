@@ -409,7 +409,7 @@ npx ./bin/outline-cli.js invoke documents.diff \
   --args '{"id":"doc-id","proposedText":"# Title\n\nUpdated body"}'
 
 npx ./bin/outline-cli.js invoke documents.apply_patch \
-  --args '{"id":"doc-id","mode":"replace","patch":"# Title\n\nReplaced body","performAction":true}'
+  --args '{"id":"doc-id","mode":"replace","patch":"# Title\n\nReplaced body","expectedRevision":12,"performAction":true}'
 
 npx ./bin/outline-cli.js invoke documents.batch_update \
   --args '{"updates":[{"id":"doc-1","title":"Renamed"},{"id":"doc-2","text":"\n\nPatch","editMode":"append"}],"continueOnError":true,"performAction":true}'
@@ -439,6 +439,34 @@ npx ./bin/outline-cli.js invoke documents.delete \
 npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","limit":5}'
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
+
+### UC-09 operator sequence: draft -> revision inspect -> diff -> rollback-safe recovery
+
+```bash
+# 1) Read draft and capture its revision
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"id":"postmortem-doc-id","view":"summary"}'
+
+# 2) Apply patch guarded by expectedRevision (precondition)
+npx ./bin/outline-cli.js invoke documents.apply_patch \
+  --args '{"id":"postmortem-doc-id","mode":"unified","patch":"@@ -1,1 +1,1 @@\n-Old\n+New","expectedRevision":12,"performAction":true,"view":"summary"}'
+
+# 3) Hydrate revision candidates for RCA review
+npx ./bin/outline-cli.js invoke revisions.list \
+  --args '{"documentId":"postmortem-doc-id","limit":10,"view":"summary"}'
+npx ./bin/outline-cli.js invoke revisions.info \
+  --args '{"id":"revision-id","view":"full"}'
+
+# 4) Optional (if your build exposes the contract): compare two revisions directly
+npx ./bin/outline-cli.js invoke revisions.diff \
+  --args '{"id":"postmortem-doc-id","baseRevisionId":"revision-base-id","targetRevisionId":"revision-target-id","hunkLimit":8,"hunkLineLimit":12}'
+
+# 5) Roll back safely to the chosen revision
+npx ./bin/outline-cli.js invoke revisions.restore \
+  --args '{"id":"postmortem-doc-id","revisionId":"revision-base-id","performAction":true,"view":"summary"}'
+```
+
+If `documents.apply_patch` receives a stale `expectedRevision`, it returns deterministic `code: "revision_conflict"` and does not mutate the document.
 
 ### 12. UC-03: meeting notes + decision logs
 

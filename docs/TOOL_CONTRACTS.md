@@ -534,7 +534,7 @@ outline-cli tools contract all --pretty
 
 ## `documents.apply_patch`
 
-- Signature: `documents.apply_patch(args: { id: string; patch: string; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })`
+- Signature: `documents.apply_patch(args: { id: string; patch: string; mode?: 'unified'|'replace'; expectedRevision?: number; title?: string; view?: 'summary'|'full'; performAction?: boolean })`
 - Usage example:
 
 ```json
@@ -542,12 +542,14 @@ outline-cli tools contract all --pretty
   "tool": "documents.apply_patch",
   "args": {
     "id": "doc-id",
+    "expectedRevision": 7,
     "mode": "unified",
     "patch": "@@ -1,1 +1,1 @@\n-Old\n+New"
   }
 }
 ```
 
+- Best practice (AI): pass `expectedRevision` to make patch application concurrency-safe; stale revisions deterministically return `code: "revision_conflict"` and skip mutation.
 - Best practice (AI): use unified patches for minimal edits; fallback to replace mode only when full rewrite is intended.
 
 ## `documents.batch_update`
@@ -691,6 +693,28 @@ outline-cli tools contract all --pretty
 ```
 
 - Best practice (AI): hydrate a specific revision from `revisions.list` before restore so recovery targets are explicit and auditable.
+
+## `revisions.diff`
+
+- Availability: optional UC-09 helper; contract may be unavailable in older deployments/builds.
+- Signature: `revisions.diff(args: { id: string; baseRevisionId: string; targetRevisionId: string; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "revisions.diff",
+  "args": {
+    "id": "doc-id",
+    "baseRevisionId": "revision-base-id",
+    "targetRevisionId": "revision-target-id",
+    "hunkLimit": 8,
+    "hunkLineLimit": 12
+  }
+}
+```
+
+- Best practice (AI): hydrate candidate revisions first (`revisions.info`) so the compared pair is explicit and auditable.
+- Best practice (AI): keep hunk limits low for operator review loops, then re-run with fuller hunks only when needed.
 
 ## `shares.list`
 

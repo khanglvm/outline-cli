@@ -1937,6 +1937,302 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
       }
     });
 
+    await t.test("UC-09 postmortem/RCA rollback safety", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+
+      const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const hasRevisionsList = hasToolContract("revisions.list");
+      const hasRevisionsInfo = hasToolContract("revisions.info");
+      const hasRevisionsRestore = hasToolContract("revisions.restore");
+      const hasRevisionsDiff = hasToolContract("revisions.diff");
+      const hasApplyPatch = hasToolContract("documents.apply_patch");
+      const hasDelete = hasToolContract("documents.delete");
+
+      await t.test("revision hydration + rollback assertions", async (t) => {
+        if (!hasRevisionsList || !hasRevisionsInfo || !hasRevisionsRestore) {
+          t.skip("revisions.list/revisions.info/revisions.restore required for UC-09 rollback flow");
+          return;
+        }
+
+        const rollbackKeepTag = `uc09-rollback-keep-${Date.now()}`;
+        const rollbackDropTag = `uc09-rollback-drop-${Date.now()}`;
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Rollback Keep\n- ${rollbackKeepTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Rollback Drop\n- ${rollbackDropTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const revisionsList = await invokeTool(tmpDir, configPath, "revisions.list", {
+          documentId: state.createdDocumentId,
+          limit: 20,
+          sort: "createdAt",
+          direction: "DESC",
+          view: "summary",
+        });
+        assert.equal(revisionsList.tool, "revisions.list");
+        const revisionRows = Array.isArray(revisionsList.result?.data) ? revisionsList.result.data : null;
+        if (!revisionRows || revisionRows.length < 2) {
+          t.diagnostic(`Unexpected revisions.list payload: ${JSON.stringify(revisionsList.result)}`);
+          t.skip("revision history is unavailable for deterministic rollback assertions");
+          return;
+        }
+
+        let rollbackRevisionId = null;
+        let hydratedRevisionCount = 0;
+        for (const row of revisionRows.slice(0, 12)) {
+          const candidateRevisionId = row?.id;
+          if (!candidateRevisionId) {
+            continue;
+          }
+
+          let revisionInfo;
+          try {
+            revisionInfo = await invokeTool(tmpDir, configPath, "revisions.info", {
+              id: candidateRevisionId,
+              view: "full",
+            });
+          } catch (err) {
+            t.diagnostic(`Skipping revision ${candidateRevisionId} hydration: ${err.message}`);
+            continue;
+          }
+
+          const revisionObject = extractResultObject(revisionInfo.result);
+          if (!revisionObject || typeof revisionObject !== "object") {
+            continue;
+          }
+          hydratedRevisionCount += 1;
+
+          const revisionTextCandidates = [
+            revisionObject?.text,
+            revisionObject?.document?.text,
+            revisionObject?.data?.text,
+            revisionObject?.content,
+            revisionObject?.markdown,
+          ];
+          const revisionText = revisionTextCandidates.find((value) => typeof value === "string");
+          if (!revisionText) {
+            continue;
+          }
+          if (revisionText.includes(rollbackKeepTag) && !revisionText.includes(rollbackDropTag)) {
+            rollbackRevisionId = candidateRevisionId;
+            break;
+          }
+        }
+
+        if (!rollbackRevisionId) {
+          t.diagnostic(
+            `UC-09 rollback target not found via hydrated revisions (hydrated=${hydratedRevisionCount}, rows=${revisionRows.length})`
+          );
+          t.skip("unable to deterministically select rollback target revision from hydrated payload");
+          return;
+        }
+
+        const restoreRes = await invokeTool(tmpDir, configPath, "revisions.restore", {
+          id: state.createdDocumentId,
+          revisionId: rollbackRevisionId,
+          performAction: true,
+          view: "summary",
+        });
+        assert.equal(restoreRes.tool, "revisions.restore");
+        assert.equal(restoreRes.result?.ok, true);
+
+        const afterRestore = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        const afterRestoreText = afterRestore.result?.data?.text || "";
+        assert.match(afterRestoreText, new RegExp(escapeRegex(rollbackKeepTag)));
+        assert.doesNotMatch(afterRestoreText, new RegExp(escapeRegex(rollbackDropTag)));
+      });
+
+      await t.test("revisions.diff assertions when contract available", async (t) => {
+        if (!hasRevisionsDiff) {
+          t.skip("revisions.diff contract not registered in this build");
+          return;
+        }
+        if (!hasRevisionsList) {
+          t.skip("revisions.list required to select diff inputs");
+          return;
+        }
+
+        const diffBaseTag = `uc09-diff-base-${Date.now()}`;
+        const diffTargetTag = `uc09-diff-target-${Date.now()}`;
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Diff Base\n- ${diffBaseTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Diff Target\n- ${diffTargetTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const revisionsList = await invokeTool(tmpDir, configPath, "revisions.list", {
+          documentId: state.createdDocumentId,
+          limit: 10,
+          sort: "createdAt",
+          direction: "DESC",
+          view: "summary",
+        });
+        const revisionRows = Array.isArray(revisionsList.result?.data) ? revisionsList.result.data : null;
+        if (!revisionRows || revisionRows.length < 2) {
+          t.diagnostic(`Unexpected revisions.list payload for revisions.diff: ${JSON.stringify(revisionsList.result)}`);
+          t.skip("insufficient revision history for revisions.diff assertion");
+          return;
+        }
+
+        const targetRevisionId = revisionRows[0]?.id;
+        const baseRevisionId = revisionRows[1]?.id;
+        if (!targetRevisionId || !baseRevisionId) {
+          t.skip("missing revision ids for revisions.diff assertion");
+          return;
+        }
+
+        let revisionsDiffRes;
+        try {
+          revisionsDiffRes = await invokeTool(tmpDir, configPath, "revisions.diff", {
+            id: state.createdDocumentId,
+            baseRevisionId,
+            targetRevisionId,
+            hunkLimit: 8,
+            hunkLineLimit: 12,
+          });
+        } catch (err) {
+          t.diagnostic(`Skipping revisions.diff assertion despite contract: ${err.message}`);
+          t.skip("revisions.diff endpoint behavior is deployment-dependent");
+          return;
+        }
+
+        assert.equal(revisionsDiffRes.tool, "revisions.diff");
+        assert.equal(revisionsDiffRes.result?.ok, true);
+        const diffPayload =
+          revisionsDiffRes.result?.data &&
+          typeof revisionsDiffRes.result.data === "object" &&
+          !Array.isArray(revisionsDiffRes.result.data)
+            ? revisionsDiffRes.result.data
+            : revisionsDiffRes.result;
+        const added = Number(diffPayload?.stats?.added ?? 0);
+        const removed = Number(diffPayload?.stats?.removed ?? 0);
+        const hasHunks = Array.isArray(diffPayload?.hunks) && diffPayload.hunks.length >= 1;
+        assert.ok(added + removed >= 1 || hasHunks, "revisions.diff should report at least one textual change");
+      });
+
+      await t.test("patch precondition mismatch returns revision_conflict", async (t) => {
+        if (!hasApplyPatch) {
+          t.skip("documents.apply_patch contract not registered in this build");
+          return;
+        }
+
+        const beforePatchRead = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "summary",
+        });
+        const staleExpectedRevision = Number(beforePatchRead.result?.data?.revision);
+        assert.ok(Number.isFinite(staleExpectedRevision), "documents.info should return numeric revision");
+
+        const mutateBeforePatchTag = `uc09-patch-precondition-mutate-${Date.now()}`;
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Patch Precondition\n- ${mutateBeforePatchTag}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const blockedReplaceTag = `uc09-patch-precondition-blocked-${Date.now()}`;
+        const patchConflict = await invokeTool(tmpDir, configPath, "documents.apply_patch", {
+          id: state.createdDocumentId,
+          mode: "replace",
+          patch: `# ${state.marker}\n\n${blockedReplaceTag}`,
+          expectedRevision: staleExpectedRevision,
+          performAction: true,
+          view: "summary",
+        });
+
+        assert.equal(patchConflict.tool, "documents.apply_patch");
+        assert.equal(patchConflict.result?.ok, false);
+        assert.equal(patchConflict.result?.code, "revision_conflict");
+        assert.equal(Number(patchConflict.result?.expectedRevision), staleExpectedRevision);
+        const actualRevision = Number(patchConflict.result?.actualRevision);
+        assert.ok(Number.isFinite(actualRevision), "revision_conflict should include actualRevision");
+        assert.ok(actualRevision > staleExpectedRevision, "actualRevision should advance past stale expectedRevision");
+
+        const afterPatchConflict = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "full",
+        });
+        const afterPatchText = afterPatchConflict.result?.data?.text || "";
+        assert.match(afterPatchText, new RegExp(escapeRegex(mutateBeforePatchTag)));
+        assert.doesNotMatch(afterPatchText, new RegExp(escapeRegex(blockedReplaceTag)));
+      });
+
+      await t.test("stale delete-read-token is rejected after mutation", async (t) => {
+        if (!hasDelete) {
+          t.skip("documents.delete contract not registered in this build");
+          return;
+        }
+
+        const readForDelete = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "summary",
+          armDelete: true,
+        });
+        const readToken = readForDelete.result?.deleteReadReceipt?.token;
+        if (!readToken) {
+          t.diagnostic(`documents.info armDelete payload: ${JSON.stringify(readForDelete.result)}`);
+          t.skip("delete read token not available in this deployment");
+          return;
+        }
+
+        await invokeTool(tmpDir, configPath, "documents.update", {
+          id: state.createdDocumentId,
+          text: `\n\n## UC-09 Stale Delete Token\n- ${Date.now()}`,
+          editMode: "append",
+          performAction: true,
+          view: "summary",
+        });
+
+        const staleDeleteRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.delete", {
+          id: state.createdDocumentId,
+          readToken,
+          performAction: true,
+        });
+        assert.notEqual(staleDeleteRun.status, 0, "documents.delete should fail with stale read token");
+        const staleDeleteError = staleDeleteRun.stderrJson?.error || staleDeleteRun.stdoutJson?.error;
+        assert.equal(staleDeleteError?.type, "CliError");
+        assert.equal(staleDeleteError?.code, "DELETE_READ_TOKEN_STALE");
+        assert.match(String(staleDeleteError?.message || ""), /stale/i);
+
+        const expectedRevision = Number(
+          staleDeleteError?.expectedRevision ?? staleDeleteError?.details?.expectedRevision
+        );
+        const actualRevision = Number(staleDeleteError?.actualRevision ?? staleDeleteError?.details?.actualRevision);
+        if (Number.isFinite(expectedRevision) && Number.isFinite(actualRevision)) {
+          assert.ok(actualRevision > expectedRevision);
+        }
+
+        const stillExists = await invokeTool(tmpDir, configPath, "documents.info", {
+          id: state.createdDocumentId,
+          view: "summary",
+        });
+        assert.equal(stillExists.result?.data?.id, state.createdDocumentId);
+      });
+    });
+
     await t.test("UC-03 comments workflow (create/list/info/update/delete)", async (t) => {
       assert.ok(state.createdDocumentId, "created test document id is required");
 

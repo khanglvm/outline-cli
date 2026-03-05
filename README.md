@@ -1,6 +1,8 @@
 # outline-cli
 
-`outline-cli` (alias `outline-agent`) is a Node.js CLI for the Outline API, designed for both human operators and AI agents.
+`outline-cli` is a Node.js CLI for the Outline API, optimized for AI agents and automation workflows.
+
+It is built for deterministic, low-token, machine-readable operations first.
 
 It prioritizes deterministic, machine-friendly output:
 
@@ -23,7 +25,6 @@ Install globally (recommended):
 ```bash
 npm i -g @khanglvm/outline-cli
 outline-cli --help
-outline-agent --help
 ```
 
 Alternative (no global install):
@@ -247,6 +248,5 @@ Release prerequisites:
 
 ## Reference Docs
 
-- Tool contracts: [`docs/TOOL_CONTRACTS.md`](docs/TOOL_CONTRACTS.md)
 - Agent rules for this repo: [`AGENTS.md`](AGENTS.md)
 - Release script: [`scripts/release.mjs`](scripts/release.mjs)

@@ -263,6 +263,66 @@ function isSkippableMembershipError(envelope) {
   return err?.type === "ApiError" && [401, 403, 404, 405].includes(Number(err.status));
 }
 
+function getApiErrorStatus(envelope) {
+  const err = envelope?.error;
+  const status = Number(err?.status ?? err?.details?.status);
+  return Number.isFinite(status) ? status : null;
+}
+
+function isSkippableShareLifecycleError(envelope) {
+  const err = envelope?.error;
+  if (!err || err.type !== "ApiError") {
+    return false;
+  }
+
+  const status = getApiErrorStatus(envelope);
+  if ([401, 403, 404, 405, 501].includes(Number(status))) {
+    return true;
+  }
+
+  const text = `${err.message || ""} ${err.body?.error || ""}`.toLowerCase();
+  if (status === 400) {
+    return /share|sharing|public link|publish/i.test(text);
+  }
+
+  return false;
+}
+
+function isShareAccessDeniedRun(run) {
+  if (!run) {
+    return false;
+  }
+
+  if (run.status !== 0) {
+    const status = getApiErrorStatus(run.stderrJson);
+    if ([400, 401, 403, 404].includes(Number(status))) {
+      return true;
+    }
+    const err = run.stderrJson?.error;
+    const text = `${err?.message || ""} ${err?.body?.error || ""}`.toLowerCase();
+    return /not found|forbidden|unauthorized|share|revok|invalid/i.test(text);
+  }
+
+  const result = run.stdoutJson?.result;
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+
+  if (result.success === false) {
+    return true;
+  }
+
+  if ("data" in result && !result.data) {
+    return true;
+  }
+
+  return false;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function extractAnswerSignals(result) {
   const pickString = (...candidates) => {
     for (const candidate of candidates) {
@@ -322,6 +382,8 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     uc03CommentId: null,
     uc03CommentDeleted: false,
     uc03AdditionalDocumentIds: [],
+    uc05ShareId: null,
+    uc05ShareRevoked: false,
     faqResetCode: null,
     faqOwner: null,
     faqNoHitToken: null,
@@ -573,6 +635,189 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
       state.createdDocumentId = createDoc?.result?.data?.id;
       assert.ok(state.createdDocumentId, "documents.create must return id");
+    });
+
+    await t.test("UC-05 public help docs sharing lifecycle", async (t) => {
+      assert.ok(state.createdDocumentId, "created test document id is required");
+      assert.ok(state.marker, "created test marker is required");
+
+      const requiredTools = ["shares.create", "shares.update", "shares.info", "shares.revoke"];
+      const missing = requiredTools.filter((tool) => !hasToolContract(tool));
+      if (missing.length > 0) {
+        t.skip(`Missing share tools in this build: ${missing.join(", ")}`);
+        return;
+      }
+
+      const createRun = await invokeToolAnyStatus(tmpDir, configPath, "shares.create", {
+        documentId: state.createdDocumentId,
+        published: false,
+        includeChildDocuments: true,
+        view: "full",
+        performAction: true,
+      });
+
+      if (createRun.status !== 0) {
+        if (isSkippableShareLifecycleError(createRun.stderrJson)) {
+          t.diagnostic(`shares.create skipped payload: ${createRun.stderr || "<empty stderr>"}`);
+          t.skip("share creation unsupported/disabled in this deployment");
+          return;
+        }
+        assert.fail(`shares.create expected success, got status=${createRun.status}, stderr=${createRun.stderr || "<empty>"}`);
+      }
+
+      const createPayload = createRun.stdoutJson;
+      assert.ok(createPayload, `shares.create stdout must be valid JSON: ${createRun.stdout}`);
+      assert.equal(createPayload.tool, "shares.create");
+      assert.notEqual(createPayload.result?.success, false, "shares.create should not return success=false");
+
+      const createShareObject = extractResultObject(createPayload.result);
+      const shareId = pickStringId(
+        createShareObject?.id,
+        createShareObject?.shareId,
+        createPayload.result?.id,
+        createPayload.result?.shareId,
+        createPayload.result?.data?.id,
+        createPayload.result?.data?.shareId
+      );
+
+      if (!shareId) {
+        t.diagnostic(`shares.create payload missing share id: ${JSON.stringify(createPayload.result)}`);
+        t.skip("share id is not returned by this deployment");
+        return;
+      }
+      state.uc05ShareId = shareId;
+
+      const updateRun = await invokeToolAnyStatus(tmpDir, configPath, "shares.update", {
+        id: shareId,
+        published: true,
+        includeChildDocuments: true,
+        view: "full",
+        performAction: true,
+      });
+
+      if (updateRun.status !== 0) {
+        if (isSkippableShareLifecycleError(updateRun.stderrJson)) {
+          t.diagnostic(`shares.update skipped payload: ${updateRun.stderr || "<empty stderr>"}`);
+          t.skip("share update unsupported in this deployment");
+          return;
+        }
+        assert.fail(`shares.update expected success, got status=${updateRun.status}, stderr=${updateRun.stderr || "<empty>"}`);
+      }
+
+      const updatePayload = updateRun.stdoutJson;
+      assert.ok(updatePayload, `shares.update stdout must be valid JSON: ${updateRun.stdout}`);
+      assert.equal(updatePayload.tool, "shares.update");
+      assert.notEqual(updatePayload.result?.success, false, "shares.update should not return success=false");
+
+      const shareInfo = await invokeTool(tmpDir, configPath, "shares.info", {
+        id: shareId,
+        view: "full",
+      });
+      assert.equal(shareInfo.tool, "shares.info");
+      assert.ok(shareInfo.result && typeof shareInfo.result === "object");
+
+      const shareInfoObject = extractResultObject(shareInfo.result);
+      if (!shareInfoObject || typeof shareInfoObject !== "object") {
+        t.diagnostic(`Unexpected shares.info payload: ${JSON.stringify(shareInfo.result)}`);
+        t.skip("shares.info payload shape varies by deployment");
+        return;
+      }
+
+      const infoShareId = pickStringId(
+        shareInfoObject.id,
+        shareInfoObject.shareId,
+        shareInfo.result?.id,
+        shareInfo.result?.shareId
+      );
+      if (infoShareId) {
+        assert.equal(infoShareId, shareId);
+      }
+      if (Object.prototype.hasOwnProperty.call(shareInfoObject, "published")) {
+        assert.equal(shareInfoObject.published, true);
+      }
+
+      const sharedInfo = await invokeTool(tmpDir, configPath, "documents.info", {
+        shareId,
+        view: "summary",
+      });
+      assert.equal(sharedInfo.tool, "documents.info");
+      assert.ok(sharedInfo.result?.data && typeof sharedInfo.result.data === "object");
+      assert.equal(sharedInfo.result?.data?.id, state.createdDocumentId);
+      assert.equal(sharedInfo.result?.data?.title, state.marker);
+
+      let scopedSearch = null;
+      let scopedRows = [];
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        scopedSearch = await invokeTool(tmpDir, configPath, "documents.search", {
+          query: state.marker,
+          mode: "titles",
+          shareId,
+          limit: 5,
+          view: "summary",
+          merge: true,
+        });
+        assert.equal(scopedSearch.tool, "documents.search");
+        scopedRows = Array.isArray(scopedSearch.result?.data) ? scopedSearch.result.data : [];
+        if (scopedRows.some((row) => row && typeof row === "object" && row.id === state.createdDocumentId)) {
+          break;
+        }
+        if (attempt < 4) {
+          await wait(700);
+        }
+      }
+
+      const scopedMatch = scopedRows.some((row) => row && typeof row === "object" && row.id === state.createdDocumentId);
+      if (!scopedMatch) {
+        t.diagnostic(`Share-scoped search rows did not include suite doc: ${JSON.stringify(scopedRows)}`);
+        t.skip("share-scoped search visibility can lag by deployment indexing");
+        return;
+      }
+
+      const revokeRun = await invokeToolAnyStatus(tmpDir, configPath, "shares.revoke", {
+        id: shareId,
+        performAction: true,
+      });
+
+      if (revokeRun.status !== 0) {
+        if (isSkippableShareLifecycleError(revokeRun.stderrJson)) {
+          t.diagnostic(`shares.revoke skipped payload: ${revokeRun.stderr || "<empty stderr>"}`);
+          t.skip("share revoke unsupported in this deployment");
+          return;
+        }
+        assert.fail(`shares.revoke expected success, got status=${revokeRun.status}, stderr=${revokeRun.stderr || "<empty>"}`);
+      }
+
+      const revokePayload = revokeRun.stdoutJson;
+      assert.ok(revokePayload, `shares.revoke stdout must be valid JSON: ${revokeRun.stdout}`);
+      assert.equal(revokePayload.tool, "shares.revoke");
+      assert.notEqual(revokePayload.result?.success, false, "shares.revoke should not return success=false");
+      state.uc05ShareRevoked = true;
+
+      let denied = false;
+      let lastPostRevokeRun = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        lastPostRevokeRun = await invokeToolAnyStatus(tmpDir, configPath, "documents.info", {
+          shareId,
+          view: "summary",
+        });
+        if (isShareAccessDeniedRun(lastPostRevokeRun)) {
+          denied = true;
+          break;
+        }
+        if (attempt < 5) {
+          await wait(500);
+        }
+      }
+
+      assert.equal(
+        denied,
+        true,
+        `Expected revoked share to deny share-scoped read, last run=${JSON.stringify({
+          status: lastPostRevokeRun?.status,
+          stdout: lastPostRevokeRun?.stdout,
+          stderr: lastPostRevokeRun?.stderr,
+        })}`
+      );
     });
 
     await t.test("UC-04 internal FAQ wrappers", async (t) => {
@@ -1516,6 +1761,18 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
     if (Array.isArray(state.uc03AdditionalDocumentIds)) {
       for (const docId of state.uc03AdditionalDocumentIds) {
         await bestEffortDeleteDocument(docId);
+      }
+    }
+
+    if (state.uc05ShareId && !state.uc05ShareRevoked) {
+      try {
+        await invokeTool(tmpDir, configPath, "shares.revoke", {
+          id: state.uc05ShareId,
+          performAction: true,
+        });
+        state.uc05ShareRevoked = true;
+      } catch {
+        // share revoke may be unavailable or already revoked
       }
     }
 

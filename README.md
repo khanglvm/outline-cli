@@ -291,7 +291,36 @@ npx ./bin/outline-agent.js invoke collections.memberships \
   --args '{"id":"<collection-id>","limit":20,"view":"summary"}'
 ```
 
-### 8. Safe mutation and revision workflows
+### 8. Public help docs sharing playbook (UC-05)
+
+Publish/revoke public help docs with a deterministic share lifecycle on a known document id.
+
+```bash
+# 1) Create a share in unpublished state (safe default)
+npx ./bin/outline-cli.js invoke shares.create \
+  --args '{"documentId":"<help-doc-id>","published":false,"includeChildDocuments":true,"performAction":true,"view":"summary"}'
+
+# 2) Publish the share once link scope is confirmed
+npx ./bin/outline-cli.js invoke shares.update \
+  --args '{"id":"<share-id>","published":true,"includeChildDocuments":true,"performAction":true,"view":"summary"}'
+
+# 3) Verify share metadata + read through share context
+npx ./bin/outline-cli.js invoke shares.info \
+  --args '{"id":"<share-id>","view":"full"}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"shareId":"<share-id>","view":"summary"}'
+npx ./bin/outline-cli.js invoke documents.search \
+  --args '{"query":"help landing","mode":"titles","shareId":"<share-id>","limit":5,"view":"summary"}'
+
+# 4) Revoke and confirm public access no longer works
+npx ./bin/outline-cli.js invoke shares.revoke \
+  --args '{"id":"<share-id>","performAction":true}'
+npx ./bin/outline-cli.js invoke documents.info \
+  --args '{"shareId":"<share-id>","view":"summary"}'
+# expected: API error (forbidden/not_found) after revoke propagation
+```
+
+### 9. Safe mutation and revision workflows
 
 ```bash
 npx ./bin/outline-cli.js invoke documents.safe_update \
@@ -332,7 +361,7 @@ npx ./bin/outline-cli.js invoke revisions.list --args '{"documentId":"doc-id","l
 npx ./bin/outline-cli.js invoke revisions.restore --args '{"id":"doc-id","revisionId":"rev-id","performAction":true}'
 ```
 
-### 9. UC-03: meeting notes + decision logs
+### 10. UC-03: meeting notes + decision logs
 
 ```bash
 # 1) Turn a canonical meeting-note document into a reusable template
@@ -370,7 +399,7 @@ npx ./bin/outline-agent.js invoke revisions.restore \
   --args '{"id":"meeting-doc-id","revisionId":"revision-id","performAction":true}'
 ```
 
-### 10. Capability mapping and test cleanup
+### 11. Capability mapping and test cleanup
 
 ```bash
 npx ./bin/outline-cli.js invoke capabilities.map \
@@ -411,6 +440,11 @@ Delete flows require a short-lived read receipt from `documents.info` with `"arm
 - `revisions.list`
 - `revisions.info`
 - `revisions.restore`
+- `shares.list`
+- `shares.info`
+- `shares.create`
+- `shares.update`
+- `shares.revoke`
 - `templates.list`
 - `templates.info`
 - `templates.create`

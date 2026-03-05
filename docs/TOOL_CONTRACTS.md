@@ -563,6 +563,98 @@ outline-cli tools contract all --pretty
 
 - Best practice (AI): hydrate a specific revision from `revisions.list` before restore so recovery targets are explicit and auditable.
 
+## `shares.list`
+
+- Signature: `shares.list(args?: { query?: string; documentId?: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "shares.list",
+  "args": {
+    "documentId": "help-doc-id",
+    "limit": 10,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): scope by `documentId` and start with `view: "summary"` to keep share inventory deterministic.
+
+## `shares.info`
+
+- Signature: `shares.info(args: { id?: string; documentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number })`
+- Usage example:
+
+```json
+{
+  "tool": "shares.info",
+  "args": {
+    "id": "share-id",
+    "view": "full"
+  }
+}
+```
+
+- Best practice (AI): pass `id` when available; use `documentId` only when resolving current share state for a single doc.
+
+## `shares.create`
+
+- Signature: `shares.create(args: { documentId: string; includeChildDocuments?: boolean; published?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "shares.create",
+  "args": {
+    "documentId": "help-doc-id",
+    "published": false,
+    "includeChildDocuments": true,
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): create with `published: false` first, verify scope/read behavior, then publish via `shares.update`.
+
+## `shares.update`
+
+- Signature: `shares.update(args: { id: string; includeChildDocuments?: boolean; published?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "shares.update",
+  "args": {
+    "id": "share-id",
+    "published": true,
+    "includeChildDocuments": true,
+    "performAction": true,
+    "view": "summary"
+  }
+}
+```
+
+- Best practice (AI): always send explicit `published` and `includeChildDocuments` values to avoid accidental scope drift.
+
+## `shares.revoke`
+
+- Signature: `shares.revoke(args: { id: string; maxAttempts?: number; performAction?: boolean })`
+- Usage example:
+
+```json
+{
+  "tool": "shares.revoke",
+  "args": {
+    "id": "share-id",
+    "performAction": true
+  }
+}
+```
+
+- Best practice (AI): after revoke, run `documents.info` with the same `shareId` and require a denied/not-found result before considering revocation complete.
+
 ## `documents.templatize`
 
 - Signature: `documents.templatize(args: { id: string; collectionId?: string | null; publish?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })`

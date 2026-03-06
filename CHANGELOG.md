@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 - 2026-03-06
+
+- Changes since `v0.1.1`.
+- docs(readme): remove redundant quick-start copy prompt (28ab2cd)
+- feat(help): add quick-start-agent onboarding section (1d21814)
+- docs(readme): rewrite quick start as AI agent instructions (2b3065b)
+- docs(readme): remove duplicated intro wording (88eddcf)
+- docs: remove tracked docs directory and refine README intro (7235f95)
+- docs(readme): prioritize global install usage (052c31b)
+
 ## 0.1.1 - 2026-03-05
 
 - Initial tagged release notes.

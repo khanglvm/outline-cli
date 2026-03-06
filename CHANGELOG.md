@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3 - 2026-03-06
+
+- Changes since `v0.1.2`.
+- feat(ai-onboarding): add approval-gated npx skills install flow (9992856)
+
 ## 0.1.2 - 2026-03-06
 
 - Changes since `v0.1.1`.

@@ -3,64 +3,166 @@ import { CliError } from "./errors.js";
 const AI_SKILL_DATA_VERSION = "2026-03-05.1";
 const AI_HELP_SECTION_ID = "ai-skills";
 const QUICK_START_HELP_SECTION_ID = "quick-start-agent";
-const QUICK_START_HELP_VERSION = "2026-03-05.1";
+const QUICK_START_HELP_VERSION = "2026-03-06.3";
 
 const QUICK_START_AGENT_PLAYBOOK = {
   title: "outline-cli onboarding for non-expert users",
   audience: "AI agents assisting non-expert users in terminal setup and first usage.",
   objective:
-    "Install outline-cli globally, discover required setup commands, guide profile creation with follow-up questions, then demonstrate example use cases in natural language.",
+    "Verify existing outline-cli installation first, discover AI onboarding commands, explicitly offer optional outline-cli skill installation via npx skills (approval-gated), list existing profiles before creating one, then guide API-key setup with domain checks and provide natural-language starter prompts.",
   steps: [
     {
       step: 1,
-      title: "Install outline-cli globally",
-      command: "npm i -g @khanglvm/outline-cli",
-      successCheck: "outline-cli --help",
+      title: "Check current installation and help command availability",
+      commands: [
+        "outline-cli --version",
+        "outline-cli --help",
+        "outline-cli tools --help",
+        "outline-cli tools help --view summary",
+      ],
+      fallbackCommands: [
+        "npm i -g @khanglvm/outline-cli@latest",
+        "outline-cli --version",
+        "outline-cli tools help --view summary",
+      ],
+      successCheck: "tools help output includes the quick-start-agent section",
     },
     {
       step: 2,
+      title: "Load full onboarding guide for deterministic setup steps",
+      command: "outline-cli tools help quick-start-agent --view full",
+    },
+    {
+      step: 3,
+      title: "Suggest optional outline-cli skill installation via npx skills",
+      question:
+        "Would you like me to install the outline-cli skill now via npx skills for all currently supported local AI tools? This helps future AI sessions use the right workflow by default.",
+      commandTemplates: [
+        "npx skills add https://github.com/khanglvm/skills --skill outline-cli -y",
+      ],
+      decisionRules: [
+        "If user explicitly approves, run the command in headless mode exactly once so installation applies to currently supported local tools.",
+        "If user declines, skip installation and continue onboarding without blocking profile setup.",
+      ],
+      expectedSignals: [
+        "Successful install prints completion output from npx skills.",
+        "Failure should be reported with the exact command and next recovery step.",
+      ],
+    },
+    {
+      step: 4,
       title: "Inspect command surfaces before asking the user for inputs",
       commands: [
-        "outline-cli --help",
         "outline-cli profile --help",
-        "outline-cli tools --help",
         "outline-cli invoke --help",
       ],
     },
     {
-      step: 3,
-      title: "Ask follow-up questions for missing setup values",
+      step: 5,
+      title: "List existing profiles first and branch setup flow",
+      command: "outline-cli profile list --pretty",
+      decisionRules: [
+        "If one or more profiles exist, show them and ask whether to use an existing profile or create a new one.",
+        "If no profiles exist, continue with new profile setup questions.",
+      ],
+    },
+    {
+      step: 6,
+      title: "Ask for Outline base URL with beginner-friendly explanation",
+      question:
+        "What is your Outline base URL? This is the web address you open in your browser to use Outline.",
+      examples: [
+        "Official cloud: https://app.getoutline.com",
+        "Custom/self-hosted: https://docs.yourcompany.com",
+      ],
+      guidance: [
+        "Use https:// and do not include a trailing path.",
+        "If unsure, copy the URL from your browser while viewing your Outline workspace home.",
+      ],
+    },
+    {
+      step: 7,
+      title: "Validate the provided base URL before asking for API key",
+      commandTemplates: [
+        'curl -sS -o /dev/null -w "HTTP %{http_code}\\n" "<base-url>"',
+        'curl -sS -o /dev/null -w "API %{http_code}\\n" "<base-url>/api/auth.info"',
+      ],
+      expectedSignals: [
+        "Base URL check should return a reachable HTTP status (often 200/301/302).",
+        "API auth endpoint without token often returns 401/403, which still confirms domain + API route are reachable.",
+      ],
+    },
+    {
+      step: 8,
+      title: "Guide user to create API key in Outline UI",
+      apiKeySettingsUrlTemplate: "<base-url>/settings/api",
+      fallbackNavigation: "In Outline UI: Settings → API Keys",
+      apiKeyConfigTemplate: [
+        "Name: outline-cli-<profile-id-or-your-name>",
+        "Expiration date: choose your policy (for example 90 days or no expiry if policy allows)",
+        "Scopes: leave empty for same permissions as your user, or restrict to needed endpoints",
+      ],
+      scopeExamples: [
+        "Read-focused starter scope: *.info documents.search collections.list",
+        "Document automation scope: documents.* collections.info",
+      ],
+      requiredUserAction:
+        "Create the key, then copy the generated token value (typically starts with ol_api_) and share it with the agent for profile setup.",
+    },
+    {
+      step: 9,
+      title: "Ask follow-up questions for remaining setup values (one at a time)",
       questions: [
-        "What is your Outline base URL?",
         "What is your Outline API key?",
         "What profile id do you want? (default to prod if user has no preference)",
       ],
     },
     {
-      step: 4,
-      title: "Guide profile setup and set it as default",
+      step: 10,
+      title: "Guide profile setup (API key mode) and set it as default",
       command:
-        'outline-cli profile add <profile-id> --base-url <base-url> --api-key "<api-key>" --set-default',
+        'outline-cli profile add <profile-id> --base-url <base-url> --auth-type apiKey --api-key "<api-key>" --set-default',
     },
     {
-      step: 5,
+      step: 11,
       title: "Verify profile authentication",
       command: "outline-cli profile test <profile-id> --pretty",
     },
     {
-      step: 6,
-      title: "Show example use cases in plain language and run one command per example",
+      step: 12,
+      title: "Show natural-language prompts for what the AI agent can do with outline-cli",
+      minimumPromptCount: 10,
+      naturalLanguagePrompts: [
+        "Find our onboarding checklist in Outline.",
+        "List recent documents in the Engineering collection.",
+        "Show me a summary of document <document-id>.",
+        "Create a draft release notes document with today's date.",
+        "Append a short status update to document <document-id>.",
+        "Find documents mentioning incident response in the last month.",
+        "Show who can access document <document-id>.",
+        "Compare two documents and list key differences.",
+        "Generate a TODO list from document <document-id>.",
+        "Find stale docs that have not been updated recently.",
+      ],
       commandTemplates: [
         'outline-cli invoke documents.search --args \'{"query":"onboarding checklist","mode":"semantic","limit":5,"view":"summary"}\' --pretty',
+        'outline-cli invoke documents.list --args \'{"limit":5,"view":"summary"}\' --pretty',
         'outline-cli invoke documents.info --args \'{"id":"<document-id>","view":"summary"}\' --pretty',
       ],
     },
   ],
   interactionRules: [
     "Use short and clear explanations for beginners.",
+    "Always run installation/help discovery commands before setup questions.",
+    "Always suggest optional outline-cli skill installation via npx skills and ask for explicit approval before running install.",
+    "If approved, run npx skills installation in headless mode (`-y`, no tool-specific agent filter) and continue onboarding.",
+    "Always run profile list before profile add.",
+    "Prefer API key authentication for beginner onboarding unless the user explicitly requests another auth mode.",
+    "Explain base URL and API key steps in plain language, then validate the domain before requesting the API key.",
     "Ask one question at a time when required information is missing.",
     "If a command fails, explain the cause and provide the exact next command.",
     "Confirm each step completion before moving to the next step.",
+    "After setup, provide at least 10 natural-language prompts and run one command example.",
   ],
 };
 
@@ -707,11 +809,46 @@ function summarizeQuickStartPlaybook() {
     title: QUICK_START_AGENT_PLAYBOOK.title,
     audience: QUICK_START_AGENT_PLAYBOOK.audience,
     objective: QUICK_START_AGENT_PLAYBOOK.objective,
-    steps: QUICK_START_AGENT_PLAYBOOK.steps.map((row) => ({
-      step: row.step,
-      title: row.title,
-      command: row.command || null,
-    })),
+    steps: QUICK_START_AGENT_PLAYBOOK.steps.map((row) => {
+      const summaryRow = {
+        step: row.step,
+        title: row.title,
+      };
+      if (row.command) {
+        summaryRow.command = row.command;
+      }
+      if (Array.isArray(row.commands)) {
+        summaryRow.commands = row.commands;
+      }
+      if (Array.isArray(row.questions)) {
+        summaryRow.questions = row.questions;
+      }
+      if (row.question) {
+        summaryRow.question = row.question;
+      }
+      if (row.minimumPromptCount) {
+        summaryRow.minimumPromptCount = row.minimumPromptCount;
+      }
+      if (Array.isArray(row.commandTemplates)) {
+        summaryRow.commandTemplates = row.commandTemplates;
+      }
+      if (Array.isArray(row.decisionRules)) {
+        summaryRow.decisionRules = row.decisionRules;
+      }
+      if (Array.isArray(row.expectedSignals)) {
+        summaryRow.expectedSignals = row.expectedSignals;
+      }
+      if (row.apiKeySettingsUrlTemplate) {
+        summaryRow.apiKeySettingsUrlTemplate = row.apiKeySettingsUrlTemplate;
+      }
+      if (Array.isArray(row.apiKeyConfigTemplate)) {
+        summaryRow.apiKeyConfigTemplate = row.apiKeyConfigTemplate;
+      }
+      if (Array.isArray(row.scopeExamples)) {
+        summaryRow.scopeExamples = row.scopeExamples;
+      }
+      return summaryRow;
+    }),
     interactionRules: QUICK_START_AGENT_PLAYBOOK.interactionRules,
     nextCommand: "outline-cli tools help quick-start-agent --view full",
   };
@@ -850,7 +987,7 @@ export function listHelpSections() {
       id: QUICK_START_HELP_SECTION_ID,
       title: "AI setup onboarding",
       description:
-        "Copy-ready AI onboarding instructions to install outline-cli, guide profile setup, and demonstrate first use cases.",
+        "Copy-ready AI onboarding instructions to verify installation, guide API-key profile setup (including base URL + settings path), and provide natural-language starter prompts.",
       commandExample: "outline-cli tools help quick-start-agent --view full",
     },
     {

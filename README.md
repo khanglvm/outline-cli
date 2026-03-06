@@ -1,12 +1,6 @@
 # outline-cli
 
-An AI Agent-Optimized CLI for Outline ([`https://getoutline.com`](getoutline.com)).
-
-- Stable JSON envelopes
-- Token-efficient `ids` and `summary` views
-- Batch operations to reduce API round trips
-- Safe mutation gates (`performAction: true`)
-- Automatic large-result offload to temp files
+A CLI for Outline ([`https://getoutline.com`](https://getoutline.com)) - optimized for AI agents.
 
 ## Quick Start
 
@@ -16,10 +10,12 @@ Install globally:
 npm i -g @khanglvm/outline-cli
 ```
 
-Then run built-in AI onboarding guidance:
+## Get Started with AI Agents
 
-```bash
-outline-cli tools help quick-start-agent --view full
+After installing, paste this instruction into your AI coding assistant:
+
+```text
+Run `outline-cli tools help quick-start-agent --view full` and follow its instructions to help me get started with Outline CLI
 ```
 
 ## Day-to-Day Usage
@@ -32,7 +28,7 @@ outline-cli tools contract documents.search --pretty
 outline-cli tools contract all --result-mode inline
 ```
 
-Read document metadata by id:
+Read document metadata by ID:
 
 ```bash
 outline-cli invoke documents.info \
@@ -64,7 +60,7 @@ outline-cli batch --ops '[
 
 ## Safe Delete Flow
 
-Delete is guarded by read-token confirmation.
+Deletion is guarded by read-token confirmation.
 
 1. Arm-delete read:
 
@@ -103,7 +99,7 @@ outline-cli tmp gc --older-than-hours 24
 
 ## Profile Management
 
-Add password-mode profile:
+Add a password-mode profile:
 
 ```bash
 outline-cli profile add internal \
@@ -135,16 +131,21 @@ outline-cli profile enrich prod \
 
 Use this short operating pattern when an AI agent drives the CLI:
 
-1. Start with `tools contract all --result-mode inline`.
-2. Prefer `view:"ids"` or `view:"summary"` first; hydrate to `full` only when needed.
-3. Bundle independent reads into one `batch` call.
-4. For any mutation endpoint, explicitly set `performAction:true`.
-5. For delete, always run `documents.info` with `armDelete:true` first and pass the returned read token.
-6. If output is file-offloaded, read only the required fields via `tmp cat` + `jq`.
+1. Start with `outline-cli --version` and `tools help --view summary` to confirm onboarding help is available.
+2. Suggest installing the `outline-cli` skill via `npx skills` for all currently supported local AI tools; only run install after explicit user approval.
+3. If approved, run headless install without tool-specific filter: `npx skills add https://github.com/khanglvm/skills --skill outline-cli -y`.
+4. Prefer `view:"ids"` or `view:"summary"` first; hydrate to `full` only when needed.
+5. Bundle independent reads into one `batch` call.
+6. For any mutation endpoint, explicitly set `performAction:true`.
+7. For delete, always run `documents.info` with `armDelete:true` first and pass the returned read token.
+8. List existing profiles before creating one with `outline-cli profile list --pretty`.
+9. For new profiles, prefer API key mode and guide users through base URL + API key generation (`<base-url>/settings/api`) before `profile add`.
+10. If output is file-offloaded, read only the required fields via `tmp cat` + `jq`.
 
 For structured AI playbooks and scenario guides:
 
 ```bash
+outline-cli tools help --view summary
 outline-cli tools help quick-start-agent --view full
 outline-cli tools help ai-skills --view summary
 outline-cli tools help ai-skills --scenario UC-12
@@ -152,7 +153,7 @@ outline-cli tools help ai-skills --scenario UC-12
 
 ## Testing (Live Environment)
 
-Set test credentials in local env file:
+Set test credentials in a local env file:
 
 ```bash
 cp .env.test.example .env.test.local
@@ -166,7 +167,7 @@ npm run check
 npm test
 ```
 
-Test rule in this repository:
+Test rules in this repository:
 
 - Mutation tests create and clean up their own test documents.
 - Read-only tests may use site-wide data.
@@ -204,7 +205,7 @@ Release prerequisites:
 
 - Never commit real API keys.
 - Keep local secrets in untracked files such as `.env.test.local`.
-- Profile secrets are stored in OS keychain by default.
+- Profile secrets are stored in the OS keychain by default.
 
 ## Reference Docs
 

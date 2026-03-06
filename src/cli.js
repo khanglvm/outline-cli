@@ -789,8 +789,11 @@ export async function run(argv = process.argv) {
       if (
         sectionName === "quick-start-agent" ||
         sectionName === "quickstart-agent" ||
+        sectionName === "quick-start" ||
         sectionName === "quickstart" ||
-        sectionName === "setup"
+        sectionName === "setup" ||
+        sectionName === "agent" ||
+        sectionName === "onboarding"
       ) {
         await emitOutput(
           store,

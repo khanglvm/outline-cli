@@ -18,6 +18,34 @@ test("getQuickStartAgentHelp returns summary by default", () => {
   assert.equal(payload.view, "summary");
   assert.ok(Array.isArray(payload.steps));
   assert.ok(payload.steps.length >= 4);
+  assert.ok(
+    payload.steps.some(
+      (row) => Array.isArray(row.commands) && row.commands.includes("outline-cli --version")
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        typeof row.question === "string" &&
+        row.question.toLowerCase().includes("install the outline-cli skill")
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        Array.isArray(row.commandTemplates) &&
+        row.commandTemplates.some(
+          (cmd) => cmd.includes("npx skills add") && cmd.includes("--skill outline-cli -y") && !cmd.includes("--agent")
+        )
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        typeof row.question === "string" &&
+        row.question.toLowerCase().includes("base url")
+    )
+  );
   assert.equal(payload.nextCommand, "outline-cli tools help quick-start-agent --view full");
 });
 
@@ -26,7 +54,42 @@ test("getQuickStartAgentHelp returns full payload and validates view", () => {
   assert.equal(payload.section, "quick-start-agent");
   assert.equal(payload.view, "full");
   assert.ok(Array.isArray(payload.steps));
-  assert.ok(payload.steps.some((row) => row.command === "npm i -g @khanglvm/outline-cli"));
+  assert.ok(payload.steps.some((row) => row.command === "outline-cli profile list --pretty"));
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        row.command &&
+        row.command.includes("--auth-type apiKey") &&
+        row.command.includes("--api-key")
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        Array.isArray(row.commandTemplates) &&
+        row.commandTemplates.includes(
+          "npx skills add https://github.com/khanglvm/skills --skill outline-cli -y"
+        ) &&
+        Array.isArray(row.decisionRules) &&
+        row.decisionRules.some((rule) => rule.toLowerCase().includes("explicitly approves"))
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        row.apiKeySettingsUrlTemplate === "<base-url>/settings/api" &&
+        Array.isArray(row.apiKeyConfigTemplate) &&
+        row.apiKeyConfigTemplate.length >= 3
+    )
+  );
+  assert.ok(
+    payload.steps.some(
+      (row) =>
+        row.minimumPromptCount >= 10 &&
+        Array.isArray(row.naturalLanguagePrompts) &&
+        row.naturalLanguagePrompts.length >= 10
+    )
+  );
   assert.ok(Array.isArray(payload.interactionRules));
 
   assert.throws(

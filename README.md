@@ -1,6 +1,6 @@
 # outline-cli
 
-`outline-cli` is a Node.js CLI for the Outline API, optimized for AI agents and automation workflows with deterministic, low-token, machine-readable output.
+An AI Agent-Optimized CLI for Outline ([`https://getoutline.com`](getoutline.com)).
 
 - Stable JSON envelopes
 - Token-efficient `ids` and `summary` views
@@ -20,12 +20,6 @@ Then run built-in AI onboarding guidance:
 
 ```bash
 outline-cli tools help quick-start-agent --view full
-```
-
-Copy this one-liner to your AI agent:
-
-```text
-Install outline-cli globally, then run `outline-cli tools help quick-start-agent --view full` and follow that playbook with me step by step.
 ```
 
 ## Day-to-Day Usage

@@ -1,5 +1,6 @@
 import { CliError } from "./errors.js";
 import { compactValue, ensureStringArray, mapLimit, toInteger } from "./utils.js";
+import { summarizeSafeText } from "./summary-redaction.js";
 
 function normalizeDocumentRow(row, view = "summary", excerptChars = 220) {
   if (!row) {
@@ -29,7 +30,7 @@ function normalizeDocumentRow(row, view = "summary", excerptChars = 220) {
   }
 
   if (row.text) {
-    summary.excerpt = row.text.length > excerptChars ? `${row.text.slice(0, excerptChars)}...` : row.text;
+    summary.excerpt = summarizeSafeText(row.text, excerptChars);
   }
 
   return summary;
@@ -407,7 +408,7 @@ function shapeResearchMergedRow(row, view, excerptChars, evidencePerDocument = 5
   }
 
   if (row.text) {
-    summary.excerpt = row.text.length > excerptChars ? `${row.text.slice(0, excerptChars)}...` : row.text;
+    summary.excerpt = summarizeSafeText(row.text, excerptChars);
   }
 
   if (Array.isArray(row.evidence)) {

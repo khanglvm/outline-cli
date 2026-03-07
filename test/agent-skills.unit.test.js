@@ -54,7 +54,7 @@ test("getQuickStartAgentHelp returns full payload and validates view", () => {
   assert.equal(payload.section, "quick-start-agent");
   assert.equal(payload.view, "full");
   assert.ok(Array.isArray(payload.steps));
-  assert.ok(payload.steps.some((row) => row.command === "outline-cli profile list --pretty"));
+  assert.ok(payload.steps.some((row) => row.command === "outline-cli profile list"));
   assert.ok(
     payload.steps.some(
       (row) =>
@@ -77,7 +77,7 @@ test("getQuickStartAgentHelp returns full payload and validates view", () => {
   assert.ok(
     payload.steps.some(
       (row) =>
-        row.apiKeySettingsUrlTemplate === "<base-url>/settings/api" &&
+        row.apiKeySettingsUrlTemplate === "<base-url>/settings/api-and-apps" &&
         Array.isArray(row.apiKeyConfigTemplate) &&
         row.apiKeyConfigTemplate.length >= 3
     )

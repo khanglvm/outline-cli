@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { getAgentSkillHelp, getQuickStartAgentHelp, listHelpSections } from "./agent-skills.js";
 import {
   buildProfile,
@@ -21,8 +22,11 @@ import {
   removeProfileFromKeychain,
   secureProfileForStorage,
 } from "./secure-keyring.js";
-import { getToolContract, invokeTool, listTools } from "./tools.js";
+import { getToolContract, invokeTool, listTools, resolveToolInvocation } from "./tools.js";
 import { mapLimit, parseJsonArg, parseCsv, toInteger } from "./utils.js";
+
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require("../package.json");
 
 function configureSharedOutputOptions(command) {
   return command
@@ -44,23 +48,6 @@ function buildStoreFromOptions(opts) {
   });
 }
 
-async function getRuntime(opts, overrideProfileId) {
-  const configPath = path.resolve(opts.config || defaultConfigPath());
-  const config = await loadConfig(configPath);
-  const selectedProfile = getProfile(config, overrideProfileId || opts.profile);
-  const profile = hydrateProfileFromKeychain({
-    configPath,
-    profile: selectedProfile,
-  });
-  const client = new OutlineClient(profile);
-  return {
-    configPath,
-    config,
-    profile,
-    client,
-  };
-}
-
 function parseHeaders(input) {
   if (!input) {
     return {};
@@ -77,6 +64,130 @@ function parseHeaders(input) {
     headers[key] = value;
   }
   return headers;
+}
+
+function isBrokenPipeError(err) {
+  return err?.code === "EPIPE" || err?.errno === -32;
+}
+
+function safeWrite(stream, content, exitCode = 0) {
+  try {
+    return stream.write(content);
+  } catch (err) {
+    if (isBrokenPipeError(err)) {
+      process.exit(exitCode);
+    }
+    throw err;
+  }
+}
+
+function installBrokenPipeGuards() {
+  const handlePipeError = (exitCode) => (err) => {
+    if (isBrokenPipeError(err)) {
+      process.exit(exitCode);
+      return;
+    }
+    throw err;
+  };
+
+  process.stdout.on("error", handlePipeError(0));
+  process.stderr.on("error", handlePipeError(process.exitCode || 1));
+}
+
+const PROFILE_ROUTING_ARG_KEYS = [
+  "query",
+  "queries",
+  "question",
+  "questions",
+  "title",
+  "titles",
+  "description",
+  "name",
+  "keywords",
+  "collectionId",
+  "documentId",
+  "parentDocumentId",
+  "id",
+  "ids",
+  "url",
+  "shareId",
+  "email",
+];
+
+function collectRoutingHints(value, bucket, depth = 0) {
+  if (value === undefined || value === null || depth > 2) {
+    return;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed) {
+      bucket.push(normalizeUrlHint(trimmed) || trimmed);
+    }
+    return;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    bucket.push(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value.slice(0, 8)) {
+      collectRoutingHints(item, bucket, depth + 1);
+    }
+    return;
+  }
+  if (typeof value === "object") {
+    for (const [key, nested] of Object.entries(value).slice(0, 8)) {
+      if (PROFILE_ROUTING_ARG_KEYS.includes(key)) {
+        collectRoutingHints(nested, bucket, depth + 1);
+      }
+    }
+  }
+}
+
+function buildProfileRoutingQuery(context = {}) {
+  const bucket = [];
+  const tool = String(context.tool || "").trim();
+  if (tool) {
+    bucket.push(tool.replace(/[._]+/g, " "));
+  }
+  const args = context.args && typeof context.args === "object" ? context.args : {};
+  for (const key of PROFILE_ROUTING_ARG_KEYS) {
+    if (key in args) {
+      collectRoutingHints(args[key], bucket);
+    }
+  }
+  return [...new Set(bucket.map((item) => String(item || "").trim()).filter(Boolean))].join(" ");
+}
+
+function isLikelyReadOnlyToolName(tool, args = {}) {
+  if (args?.performAction === true) {
+    return false;
+  }
+  const name = String(tool || "").toLowerCase();
+  return !/(^|\.)(create|update|delete|remove|restore|duplicate|revoke|invite|suspend|activate|import|apply|rotate|cleanup|templatize|add_|remove_|permanent_delete|empty_trash|batch_update|safe_update)/.test(name);
+}
+
+async function getRuntime(opts, overrideProfileId, context = {}) {
+  const configPath = path.resolve(opts.config || defaultConfigPath());
+  const config = await loadConfig(configPath);
+  const selectedProfile = getProfile(config, overrideProfileId || opts.profile, {
+    query: buildProfileRoutingQuery(context),
+    allowAutoSelect: isLikelyReadOnlyToolName(context.tool, context.args),
+    suggestionLimit: 3,
+  });
+  const { selection: profileSelection, ...storedProfile } = selectedProfile;
+  const profile = hydrateProfileFromKeychain({
+    configPath,
+    profile: storedProfile,
+  });
+  const client = new OutlineClient(profile);
+  return {
+    configPath,
+    config,
+    profile,
+    client,
+    profileSelection,
+  };
 }
 
 const URL_HINT_PATH_MARKERS = new Set(["doc", "d", "share", "s"]);
@@ -144,7 +255,7 @@ function formatError(err) {
 }
 
 function writeNdjsonLine(value) {
-  process.stdout.write(`${JSON.stringify(value)}\n`);
+  safeWrite(process.stdout, `${JSON.stringify(value)}\n`);
 }
 
 function emitNdjson(payload) {
@@ -233,11 +344,12 @@ async function emitOutput(store, payload, opts, emitOptions = {}) {
 }
 
 export async function run(argv = process.argv) {
+  installBrokenPipeGuards();
   const program = new Command();
   program
     .name("outline-cli")
     .description("Agent-optimized CLI for Outline API")
-    .version("0.1.0")
+    .version(packageVersion)
     .showHelpAfterError(true);
 
   const profile = program.command("profile").description("Manage Outline profiles");
@@ -353,6 +465,11 @@ export async function run(argv = process.argv) {
     .command("list")
     .description("List configured profiles")
     .option("--config <path>", "Config file path", defaultConfigPath())
+    .option("--output <format>", "Output format: json|ndjson", "json")
+    .option("--result-mode <mode>", "Result mode: auto|inline|file", "auto")
+    .option("--inline-max-bytes <n>", "Max inline JSON payload size", "12000")
+    .option("--tmp-dir <path>", "Directory for large result files")
+    .option("--pretty", "Pretty-print JSON output", false)
     .action(async (opts) => {
       const configPath = path.resolve(opts.config || defaultConfigPath());
       const config = await loadConfig(configPath);
@@ -360,16 +477,13 @@ export async function run(argv = process.argv) {
         ...redactProfile(item),
         isDefault: config.defaultProfile === item.id,
       }));
-      const store = new ResultStore({ pretty: true });
-      await store.emit(
-        {
-          ok: true,
-          configPath,
-          defaultProfile: config.defaultProfile,
-          profiles,
-        },
-        { mode: "inline", pretty: true, label: "profile-list" }
-      );
+      const store = buildStoreFromOptions(opts);
+      await emitOutput(store, {
+        ok: true,
+        configPath,
+        defaultProfile: config.defaultProfile,
+        profiles,
+      }, opts, { mode: opts.resultMode, label: "profile-list", pretty: !!opts.pretty });
     });
 
   profile
@@ -377,40 +491,44 @@ export async function run(argv = process.argv) {
     .description("Suggest best-matching profile(s) by id/name/base-url/description/keywords")
     .option("--config <path>", "Config file path", defaultConfigPath())
     .option("--limit <n>", "Max number of profile matches to return", "5")
+    .option("--output <format>", "Output format: json|ndjson", "json")
+    .option("--result-mode <mode>", "Result mode: auto|inline|file", "auto")
+    .option("--inline-max-bytes <n>", "Max inline JSON payload size", "12000")
+    .option("--tmp-dir <path>", "Directory for large result files")
+    .option("--pretty", "Pretty-print JSON output", false)
     .action(async (query, opts) => {
       const configPath = path.resolve(opts.config || defaultConfigPath());
       const config = await loadConfig(configPath);
       const result = suggestProfiles(config, query, { limit: toInteger(opts.limit, 5) });
-      const store = new ResultStore({ pretty: true });
-      await store.emit(
-        {
-          ok: true,
-          configPath,
-          defaultProfile: config.defaultProfile,
-          ...result,
-          bestMatch: result.matches[0] || null,
-        },
-        { mode: "inline", pretty: true, label: "profile-suggest" }
-      );
+      const store = buildStoreFromOptions(opts);
+      await emitOutput(store, {
+        ok: true,
+        configPath,
+        defaultProfile: config.defaultProfile,
+        ...result,
+        bestMatch: result.matches[0] || null,
+      }, opts, { mode: opts.resultMode, label: "profile-suggest", pretty: !!opts.pretty });
     });
 
   profile
     .command("show [id]")
     .description("Show one profile (redacted)")
     .option("--config <path>", "Config file path", defaultConfigPath())
+    .option("--output <format>", "Output format: json|ndjson", "json")
+    .option("--result-mode <mode>", "Result mode: auto|inline|file", "auto")
+    .option("--inline-max-bytes <n>", "Max inline JSON payload size", "12000")
+    .option("--tmp-dir <path>", "Directory for large result files")
+    .option("--pretty", "Pretty-print JSON output", false)
     .action(async (id, opts) => {
       const configPath = path.resolve(opts.config || defaultConfigPath());
       const config = await loadConfig(configPath);
       const profileData = getProfile(config, id);
-      const store = new ResultStore({ pretty: true });
-      await store.emit(
-        {
-          ok: true,
-          configPath,
-          profile: redactProfile(profileData),
-        },
-        { mode: "inline", pretty: true, label: "profile-show" }
-      );
+      const store = buildStoreFromOptions(opts);
+      await emitOutput(store, {
+        ok: true,
+        configPath,
+        profile: redactProfile(profileData),
+      }, opts, { mode: opts.resultMode, label: "profile-show", pretty: !!opts.pretty });
     });
 
   profile
@@ -726,6 +844,7 @@ export async function run(argv = process.argv) {
   tools
     .command("contract [name]")
     .description("Show tool contract (signature, usage, best practices)")
+    .option("--pretty", "Pretty-print JSON output", false)
     .action(async (name, opts, cmd) => {
       const merged = { ...cmd.parent.opts(), ...opts };
       const store = buildStoreFromOptions(merged);
@@ -826,11 +945,21 @@ export async function run(argv = process.argv) {
   );
 
   invoke.action(async (tool, opts) => {
-    const runtime = await getRuntime(opts);
-    const store = buildStoreFromOptions(opts);
     const args = (await parseJsonArg({ json: opts.args, file: opts.argsFile, name: "args" })) || {};
+    const resolution = resolveToolInvocation(tool, args);
+    const runtime = await getRuntime(opts, undefined, {
+      tool: resolution.resolvedName,
+      args: resolution.args,
+    });
+    const store = buildStoreFromOptions(opts);
     const result = await invokeTool(runtime, tool, args);
-    await emitOutput(store, result, opts, {
+    const output = runtime.profileSelection?.autoSelected
+      ? {
+        ...result,
+        profileRouting: runtime.profileSelection,
+      }
+      : result;
+    await emitOutput(store, output, opts, {
       label: `tool-${tool.replace(/\./g, "-")}`,
       mode: opts.resultMode,
     });
@@ -858,19 +987,25 @@ export async function run(argv = process.argv) {
     const store = buildStoreFromOptions(opts);
     const clientCache = new Map();
 
-    async function runtimeForProfile(profileId) {
-      const selected = getProfile(config, profileId || opts.profile);
-      if (!clientCache.has(selected.id)) {
+    async function runtimeForProfile(profileId, context = {}) {
+      const selected = getProfile(config, profileId || opts.profile, {
+        query: buildProfileRoutingQuery(context),
+        allowAutoSelect: isLikelyReadOnlyToolName(context.tool, context.args),
+        suggestionLimit: 3,
+      });
+      const { selection: profileSelection, ...storedProfile } = selected;
+      if (!clientCache.has(storedProfile.id)) {
         const hydrated = hydrateProfileFromKeychain({
           configPath,
-          profile: selected,
+          profile: storedProfile,
         });
-        clientCache.set(selected.id, {
+        clientCache.set(storedProfile.id, {
           profile: hydrated,
           client: new OutlineClient(hydrated),
+          profileSelection,
         });
       }
-      return clientCache.get(selected.id);
+      return clientCache.get(storedProfile.id);
     }
 
     const parallel = toInteger(opts.parallel, 4);
@@ -882,7 +1017,11 @@ export async function run(argv = process.argv) {
         if (!operation.tool) {
           throw new CliError(`Operation at index ${index} is missing tool`);
         }
-        const runtime = await runtimeForProfile(operation.profile);
+        const resolution = resolveToolInvocation(operation.tool, operation.args || {});
+        const runtime = await runtimeForProfile(operation.profile, {
+          tool: resolution.resolvedName,
+          args: resolution.args,
+        });
         const payload = await invokeTool(runtime, operation.tool, operation.args || {});
         const mode = (opts.itemEnvelope || "compact").toLowerCase();
         const compactResult =
@@ -898,9 +1037,11 @@ export async function run(argv = process.argv) {
         return {
           index,
           tool: operation.tool,
+          ...(payload?.tool && payload.tool !== operation.tool ? { resolvedTool: payload.tool } : {}),
           profile: runtime.profile.id,
           ok: true,
           result: mode === "full" ? payload : compactResult,
+          ...(runtime.profileSelection?.autoSelected ? { profileRouting: runtime.profileSelection } : {}),
           ...(mode === "full" || Object.keys(compactMeta).length === 0 ? {} : { meta: compactMeta }),
         };
       } catch (err) {
@@ -948,7 +1089,7 @@ export async function run(argv = process.argv) {
       const merged = { ...cmd.parent.opts(), ...opts };
       const store = buildStoreFromOptions(merged);
       const content = await store.read(file);
-      process.stdout.write(content.content);
+      safeWrite(process.stdout, content.content);
     });
 
   tmp
@@ -976,7 +1117,7 @@ export async function run(argv = process.argv) {
     await program.parseAsync(argv);
   } catch (err) {
     const output = formatError(err);
-    process.stderr.write(`${JSON.stringify(output, null, 2)}\n`);
+    safeWrite(process.stderr, `${JSON.stringify(output, null, 2)}\n`, process.exitCode || 1);
     process.exitCode = process.exitCode || 1;
   }
 }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CliError } from "./errors.js";
 
 export const CONFIG_VERSION = 1;
 
@@ -479,6 +480,45 @@ export function suggestProfiles(config, query, options = {}) {
   };
 }
 
+function isHighConfidenceProfileMatch(top, second, options = {}) {
+  if (!top) {
+    return false;
+  }
+
+  const minScore = Number.isFinite(Number(options.minScore)) ? Number(options.minScore) : 1.7;
+  const minGap = Number.isFinite(Number(options.minGap)) ? Number(options.minGap) : 0.55;
+  const exactSignals = new Set(["id_exact", "name_exact", "keyword_exact", "host"]);
+  const hasExactSignal = Array.isArray(top.matchedOn) && top.matchedOn.some((item) => exactSignals.has(item));
+  const gap = top.score - Number(second?.score || 0);
+
+  if (top.score >= 3.2) {
+    return true;
+  }
+  if (top.score >= minScore && gap >= minGap) {
+    return true;
+  }
+  if (hasExactSignal && top.score >= 1.2 && gap >= 0.35) {
+    return true;
+  }
+
+  return false;
+}
+
+function formatProfileSelectionError(config, message, options = {}) {
+  const availableProfiles = Object.keys(config?.profiles || {});
+  const query = String(options.query || "").trim();
+  const suggestionLimit = Number.isFinite(Number(options.suggestionLimit))
+    ? Math.max(1, Number(options.suggestionLimit))
+    : 3;
+  const suggestions = query ? suggestProfiles(config, query, { limit: suggestionLimit }).matches : [];
+
+  return new CliError(message, {
+    code: "PROFILE_SELECTION_REQUIRED",
+    availableProfiles,
+    ...(query ? { query, suggestions } : {}),
+  });
+}
+
 export function suggestProfileMetadata(input = {}, options = {}) {
   const id = String(input.id || "").trim();
   const name = String(input.name || id || "").trim();
@@ -566,13 +606,17 @@ export function listProfiles(config) {
   }));
 }
 
-export function getProfile(config, explicitId) {
+export function getProfile(config, explicitId, options = {}) {
   const profiles = config?.profiles || {};
 
   if (explicitId) {
     const profile = profiles[explicitId];
     if (!profile) {
-      throw new Error(`Profile not found: ${explicitId}`);
+      throw new CliError(`Profile not found: ${explicitId}`, {
+        code: "PROFILE_NOT_FOUND",
+        profileId: explicitId,
+        availableProfiles: Object.keys(profiles),
+      });
     }
     return {
       id: explicitId,
@@ -583,7 +627,11 @@ export function getProfile(config, explicitId) {
   if (config.defaultProfile) {
     const profile = profiles[config.defaultProfile];
     if (!profile) {
-      throw new Error(`Profile not found: ${config.defaultProfile}`);
+      throw new CliError(`Profile not found: ${config.defaultProfile}`, {
+        code: "PROFILE_NOT_FOUND",
+        profileId: config.defaultProfile,
+        availableProfiles: Object.keys(profiles),
+      });
     }
     return {
       id: config.defaultProfile,
@@ -601,12 +649,44 @@ export function getProfile(config, explicitId) {
   }
 
   if (profileIds.length > 1) {
-    throw new Error(
-      "Profile selection required: multiple profiles are saved and no default profile is set. Use --profile <id> or `outline-cli profile use <id>`."
+    const query = String(options.query || "").trim();
+    const allowAutoSelect = options.allowAutoSelect !== false;
+    const suggestionLimit = Number.isFinite(Number(options.suggestionLimit))
+      ? Math.max(1, Number(options.suggestionLimit))
+      : 3;
+
+    if (allowAutoSelect && query) {
+      const suggestions = suggestProfiles(config, query, { limit: suggestionLimit }).matches;
+      const top = suggestions[0];
+      const second = suggestions[1];
+
+      if (isHighConfidenceProfileMatch(top, second, options)) {
+        return {
+          id: top.id,
+          ...profiles[top.id],
+          selection: {
+            autoSelected: true,
+            query,
+            score: top.score,
+            matchedOn: top.matchedOn,
+          },
+        };
+      }
+    }
+
+    throw formatProfileSelectionError(
+      config,
+      "Profile selection required: multiple profiles are saved and no default profile is set. Use --profile <id> or `outline-cli profile use <id>`.",
+      {
+        query,
+        suggestionLimit,
+      }
     );
   }
 
-  throw new Error("No profiles configured. Use `outline-cli profile add <id> ...` first.");
+  throw new CliError("No profiles configured. Use `outline-cli profile add <id> ...` first.", {
+    code: "PROFILE_NOT_CONFIGURED",
+  });
 }
 
 export function redactProfile(profile) {

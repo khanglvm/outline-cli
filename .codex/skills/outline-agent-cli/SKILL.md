@@ -13,22 +13,30 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
 - Accept `outline-agent` only when the user explicitly uses that alias.
 - Prefer `invoke`/`batch` with structured JSON arguments instead of ad-hoc shell parsing.
 
-## Session Bootstrap (Always)
-1. Verify CLI availability:
+## Session Bootstrap (Only When Needed)
+1. Verify CLI availability or existing setup only when the session is new or commands are failing:
    ```bash
    outline-cli --version
+   outline-cli profile list
    ```
-2. Confirm available tooling/help:
+2. Load onboarding/help only when setup is missing, auth is failing, or you truly do not know the tool surface yet:
    ```bash
-   outline-cli tools help --view summary
+   outline-cli tools help quick-start-agent --view full
    outline-cli tools contract all --result-mode inline
    ```
-3. Confirm profile access before mutations:
+3. Confirm profile access before mutations or when auth is suspicious:
    ```bash
-   outline-cli profile list --pretty
    outline-cli profile test
    outline-cli invoke auth.info --args '{"view":"summary"}'
    ```
+
+## Native First-Call Workflow
+1. For knowledge lookup, prefer one-call retrieval tools first:
+   - `search.research` for multi-query evidence gathering.
+   - `documents.answer` for scoped question answering.
+   - `documents.search` for direct title/semantic lookup.
+2. Use `batch` for independent reads instead of sequential loops.
+3. Open `tools help` or `tools contract` only after a validation failure or when the needed capability is still unclear.
 
 ## Retrieval Workflow (Default Read Path)
 1. Resolve candidates cheaply with `view:"ids"` or `view:"summary"`:
@@ -99,7 +107,8 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
 - Never run mutating calls without explicit `performAction:true`.
 - Never delete without a fresh `readToken` from `documents.info armDelete:true`.
 - Never default to `view:"full"` for discovery/exploration.
-- Never assume a profile; verify with `profile list/test` and `auth.info`.
+- Do not read onboarding/help docs when a working profile already exists and the task can be attempted directly.
+- If a direct call fails due to unknown tool or validation issues, use the CLI's error suggestions before falling back to docs.
 - Never send oversized inline markdown when `--args-file` is cleaner and less error-prone.
 
 # Examples

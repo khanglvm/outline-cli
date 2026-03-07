@@ -1789,11 +1789,6 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         });
 
         if (run.status !== 0) {
-          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
-            t.diagnostic(`documents.answer unsupported payload: ${run.stderr || "<empty stderr>"}`);
-            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
-            return;
-          }
           assert.fail(`documents.answer expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
         }
 
@@ -1805,11 +1800,17 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         assert.equal(payload.result?.question, happyQuestion);
 
         const signals = extractAnswerSignals(payload.result);
-        assert.ok(
-          signals.answerText.length > 0,
-          `documents.answer happy path should include answer text: ${JSON.stringify(payload.result)}`
-        );
-        assert.ok(Array.isArray(signals.citations), "documents.answer envelope should expose citations array");
+        if (payload.result?.fallbackUsed) {
+          assert.equal(payload.result?.unsupported, true);
+          assert.ok(Array.isArray(signals.citations), "documents.answer fallback should expose citations/documents array");
+          assert.ok(signals.citations.length > 0, `documents.answer fallback should include retrieved docs: ${JSON.stringify(payload.result)}`);
+        } else {
+          assert.ok(
+            signals.answerText.length > 0,
+            `documents.answer happy path should include answer text: ${JSON.stringify(payload.result)}`
+          );
+          assert.ok(Array.isArray(signals.citations), "documents.answer envelope should expose citations array");
+        }
       });
 
       await t.test("documents.answer no-hit path assertions", async (t) => {
@@ -1826,11 +1827,6 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         });
 
         if (run.status !== 0) {
-          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
-            t.diagnostic(`documents.answer unsupported payload: ${run.stderr || "<empty stderr>"}`);
-            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
-            return;
-          }
           assert.fail(`documents.answer no-hit expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
         }
 
@@ -1840,10 +1836,15 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         assert.equal(payload.result?.question, noHitQuestion);
 
         const signals = extractAnswerSignals(payload.result);
-        assert.ok(
-          signals.noAnswerReason.length > 0 || signals.citations.length === 0 || noHitPattern.test(signals.answerText),
-          `documents.answer no-hit should include explicit no-hit signal: ${JSON.stringify(payload.result)}`
-        );
+        if (payload.result?.fallbackUsed) {
+          assert.equal(payload.result?.unsupported, true);
+          assert.ok(signals.noAnswerReason.length > 0, `documents.answer fallback no-hit should include reason: ${JSON.stringify(payload.result)}`);
+        } else {
+          assert.ok(
+            signals.noAnswerReason.length > 0 || signals.citations.length === 0 || noHitPattern.test(signals.answerText),
+            `documents.answer no-hit should include explicit no-hit signal: ${JSON.stringify(payload.result)}`
+          );
+        }
       });
 
       await t.test("documents.answer_batch mixed questions keep per-item isolation", async (t) => {
@@ -1865,11 +1866,6 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
         });
 
         if (run.status !== 0) {
-          if (isApiNotFoundErrorEnvelope(run.stderrJson)) {
-            t.diagnostic(`documents.answer_batch unsupported payload: ${run.stderr || "<empty stderr>"}`);
-            t.skip("documents.answerQuestion endpoint unsupported by this Outline deployment");
-            return;
-          }
           assert.fail(`documents.answer_batch expected success, got status=${run.status}, stderr=${run.stderr || "<empty>"}`);
         }
 

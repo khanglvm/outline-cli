@@ -15,16 +15,23 @@ npm i -g @khanglvm/outline-cli
 After installing, paste this instruction into your AI coding assistant:
 
 ```text
-Run `outline-cli tools help quick-start-agent --view full` and follow its instructions to help me get started with Outline CLI
+Use `outline-cli` directly for my task. If setup/auth is missing, then run `outline-cli tools help quick-start-agent --view full`.
 ```
 
 ## Day-to-Day Usage
+
+Native one-call retrieval first:
+
+```bash
+outline-cli invoke search.research \
+  --args '{"question":"How do I find onboarding docs?","queries":["onboarding","engineering handbook"],"precisionMode":"precision","limitPerQuery":5,"view":"summary"}'
+```
 
 Discover tools and contracts:
 
 ```bash
 outline-cli tools list
-outline-cli tools contract documents.search --pretty
+outline-cli tools contract documents.search
 outline-cli tools contract all --result-mode inline
 ```
 
@@ -33,6 +40,20 @@ Read document metadata by ID:
 ```bash
 outline-cli invoke documents.info \
   --args '{"id":"<document-id>","view":"summary"}'
+```
+
+List only collection root pages:
+
+```bash
+outline-cli invoke documents.list \
+  --args '{"collectionId":"<collection-id>","rootOnly":true,"view":"summary"}'
+```
+
+Ask a question with shorthand tool naming; unsupported AI deployments fall back to retrieval and return a suggested next call:
+
+```bash
+outline-cli invoke docs.answer \
+  --args '{"question":"Where is the onboarding checklist?","limit":3}'
 ```
 
 Create a document:
@@ -131,21 +152,21 @@ outline-cli profile enrich prod \
 
 Use this short operating pattern when an AI agent drives the CLI:
 
-1. Start with `outline-cli --version` and `tools help --view summary` to confirm onboarding help is available.
-2. Suggest installing the `outline-cli` skill via `npx skills` for all currently supported local AI tools; only run install after explicit user approval.
-3. If approved, run headless install without tool-specific filter: `npx skills add https://github.com/khanglvm/skills --skill outline-cli -y`.
-4. Prefer `view:"ids"` or `view:"summary"` first; hydrate to `full` only when needed.
-5. Bundle independent reads into one `batch` call.
-6. For any mutation endpoint, explicitly set `performAction:true`.
-7. For delete, always run `documents.info` with `armDelete:true` first and pass the returned read token.
-8. List existing profiles before creating one with `outline-cli profile list --pretty`.
-9. For new profiles, prefer API key mode and guide users through base URL + API key generation (`<base-url>/settings/api`) before `profile add`.
-10. If output is file-offloaded, read only the required fields via `tmp cat` + `jq`.
+1. Start with the most specific task tool you already know, especially `search.research`, `documents.search`, `documents.info`, or `batch`.
+2. Use `view:"ids"` or `view:"summary"` first; hydrate to `full` only when needed.
+3. Bundle independent reads into one `batch` call.
+4. Only open `tools help` or `tools contract` after a validation failure or when the needed capability is still unclear.
+5. Suggest installing the `outline-cli` skill via `npx skills` for all currently supported local AI tools; only run install after explicit user approval.
+6. If approved, run headless install without tool-specific filter: `npx skills add https://github.com/khanglvm/skills --skill outline-cli -y`.
+7. For any mutation endpoint, explicitly set `performAction:true`.
+8. For delete, always run `documents.info` with `armDelete:true` first and pass the returned read token.
+9. List existing profiles before creating one with `outline-cli profile list`.
+10. For new profiles, prefer API key mode and guide users through base URL + API key generation (`<base-url>/settings/api-and-apps`) before `profile add`.
+11. If output is file-offloaded, read only the required fields via `tmp cat` + `jq`.
 
 For structured AI playbooks and scenario guides:
 
 ```bash
-outline-cli tools help --view summary
 outline-cli tools help quick-start-agent --view full
 outline-cli tools help ai-skills --view summary
 outline-cli tools help ai-skills --scenario UC-12

@@ -11,7 +11,7 @@ outline-cli tools contract all --result-mode inline
 ```bash
 outline-cli --version
 outline-cli tools help --view summary
-outline-cli profile list --pretty
+outline-cli profile list
 outline-cli profile test
 outline-cli invoke auth.info --args '{"view":"summary"}'
 ```

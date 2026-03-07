@@ -74,6 +74,17 @@ test("profile selection supports explicit, default, and single-profile fallback 
     ]);
     assert.equal(addAlpha.stdoutJson?.defaultProfile, null, "first add should not auto-set default");
 
+    const profileListJson = runCli([
+      "profile",
+      "list",
+      "--config",
+      configPath,
+      "--output",
+      "json",
+    ]);
+    assert.equal(profileListJson.stdoutJson?.ok, true);
+    assert.equal(profileListJson.stdoutJson?.profiles?.length, 1);
+
     const singleFallback = runCli([
       "invoke",
       "no.such.tool",
@@ -105,10 +116,9 @@ test("profile selection supports explicit, default, and single-profile fallback 
       "--args",
       "{}",
     ], { expectCode: 1 });
-    assert.match(
-      ambiguous.stderrJson?.error?.message || "",
-      /Profile selection required: multiple profiles are saved and no default profile is set/
-    );
+    assert.match(ambiguous.stderrJson?.error?.message || "", /Unknown tool: no\.such\.tool/);
+    assert.equal(ambiguous.stderrJson?.error?.code, "UNKNOWN_TOOL");
+    assert.ok(Array.isArray(ambiguous.stderrJson?.error?.suggestions));
 
     const explicitProfile = runCli([
       "invoke",

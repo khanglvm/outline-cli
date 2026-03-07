@@ -1,35 +1,33 @@
 import { CliError } from "./errors.js";
 
-const AI_SKILL_DATA_VERSION = "2026-03-05.1";
+const AI_SKILL_DATA_VERSION = "2026-03-07.1";
 const AI_HELP_SECTION_ID = "ai-skills";
 const QUICK_START_HELP_SECTION_ID = "quick-start-agent";
-const QUICK_START_HELP_VERSION = "2026-03-06.3";
+const QUICK_START_HELP_VERSION = "2026-03-07.1";
 
 const QUICK_START_AGENT_PLAYBOOK = {
   title: "outline-cli onboarding for non-expert users",
   audience: "AI agents assisting non-expert users in terminal setup and first usage.",
   objective:
-    "Verify existing outline-cli installation first, discover AI onboarding commands, explicitly offer optional outline-cli skill installation via npx skills (approval-gated), list existing profiles before creating one, then guide API-key setup with domain checks and provide natural-language starter prompts.",
+    "Use this guide only for first-time setup or when profile/auth access is missing. For normal work, prefer direct task execution with search.research, documents.search, documents.info, and batch before reading onboarding docs.",
   steps: [
     {
       step: 1,
-      title: "Check current installation and help command availability",
+      title: "Confirm whether onboarding help is actually needed",
       commands: [
         "outline-cli --version",
-        "outline-cli --help",
-        "outline-cli tools --help",
-        "outline-cli tools help --view summary",
+        "outline-cli profile list",
       ],
       fallbackCommands: [
         "npm i -g @khanglvm/outline-cli@latest",
         "outline-cli --version",
-        "outline-cli tools help --view summary",
+        "outline-cli profile list",
       ],
-      successCheck: "tools help output includes the quick-start-agent section",
+      successCheck: "If version and profile list both work, skip onboarding help and proceed directly to the user's task.",
     },
     {
       step: 2,
-      title: "Load full onboarding guide for deterministic setup steps",
+      title: "Load full onboarding guide only when setup is missing or broken",
       command: "outline-cli tools help quick-start-agent --view full",
     },
     {
@@ -60,7 +58,7 @@ const QUICK_START_AGENT_PLAYBOOK = {
     {
       step: 5,
       title: "List existing profiles first and branch setup flow",
-      command: "outline-cli profile list --pretty",
+      command: "outline-cli profile list",
       decisionRules: [
         "If one or more profiles exist, show them and ask whether to use an existing profile or create a new one.",
         "If no profiles exist, continue with new profile setup questions.",
@@ -95,8 +93,8 @@ const QUICK_START_AGENT_PLAYBOOK = {
     {
       step: 8,
       title: "Guide user to create API key in Outline UI",
-      apiKeySettingsUrlTemplate: "<base-url>/settings/api",
-      fallbackNavigation: "In Outline UI: Settings → API Keys",
+      apiKeySettingsUrlTemplate: "<base-url>/settings/api-and-apps",
+      fallbackNavigation: "In Outline UI: Settings → API & Apps",
       apiKeyConfigTemplate: [
         "Name: outline-cli-<profile-id-or-your-name>",
         "Expiration date: choose your policy (for example 90 days or no expiry if policy allows)",
@@ -153,7 +151,8 @@ const QUICK_START_AGENT_PLAYBOOK = {
   ],
   interactionRules: [
     "Use short and clear explanations for beginners.",
-    "Always run installation/help discovery commands before setup questions.",
+    "Do not open onboarding help for routine tasks when a working profile already exists.",
+    "For routine read tasks, start with search.research, documents.search, documents.info, or batch before reading contracts/help.",
     "Always suggest optional outline-cli skill installation via npx skills and ask for explicit approval before running install.",
     "If approved, run npx skills installation in headless mode (`-y`, no tool-specific agent filter) and continue onboarding.",
     "Always run profile list before profile add.",
@@ -168,6 +167,7 @@ const QUICK_START_AGENT_PLAYBOOK = {
 
 const AI_GLOBAL_GUIDANCE = {
   principles: [
+    "Start with the best-fit task tool first; open help/contracts only after validation fails or capability is unclear.",
     "Use ids/summary views first, then hydrate only selected records.",
     "Prefer batch operations (queries, ids, or batch command) before multi-call loops.",
     "For heavy retrieval, use search.research with precisionMode + perQueryView/perQueryHitLimit to control token cost.",
@@ -987,7 +987,7 @@ export function listHelpSections() {
       id: QUICK_START_HELP_SECTION_ID,
       title: "AI setup onboarding",
       description:
-        "Copy-ready AI onboarding instructions to verify installation, guide API-key profile setup (including base URL + settings path), and provide natural-language starter prompts.",
+        "First-time AI setup only: verify installation, guide API-key profile setup, and provide starter prompts when no working profile exists.",
       commandExample: "outline-cli tools help quick-start-agent --view full",
     },
     {

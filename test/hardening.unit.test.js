@@ -24,6 +24,26 @@ test("validateToolArgs rejects unknown args by default", () => {
   );
 });
 
+test("validateToolArgs exposes accepted args and closest suggestions", () => {
+  assert.throws(
+    () => validateToolArgs("auth.info", { vew: "summary", unexpected: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.deepEqual(err.details?.requiredArgs, []);
+      assert.ok(Array.isArray(err.details?.acceptedArgs));
+      assert.ok(err.details.acceptedArgs.includes("view"));
+      assert.ok(err.details.acceptedArgs.includes("compact"));
+      assert.deepEqual(err.details?.unknownArgs, ["vew", "unexpected"]);
+      const typoIssue = err.details?.issues?.find((issue) => issue.path === "args.vew");
+      assert.deepEqual(typoIssue?.suggestions, ["view"]);
+      assert.equal(err.details?.suggestedArgs, undefined);
+      assert.match(err.details?.validationHint || "", /Accepted args:/);
+      return true;
+    }
+  );
+});
+
 test("validateToolArgs supports allowUnknown opt-out", () => {
   const toolName = "__test.allow_unknown";
   TOOL_ARG_SCHEMAS[toolName] = {
@@ -1651,8 +1671,13 @@ test("shares lifecycle schemas enforce deterministic selectors and update requir
     }
   );
 
+  assert.equal(
+    validateToolArgs("shares.update", { id: "share-1", published: "true" }).published,
+    true
+  );
+
   assert.throws(
-    () => validateToolArgs("shares.update", { id: "share-1", published: "true" }),
+    () => validateToolArgs("shares.update", { id: "share-1", published: "yes" }),
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.published"));

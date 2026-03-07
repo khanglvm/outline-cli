@@ -12,6 +12,7 @@ import { MUTATION_TOOLS } from "./tools.mutation.js";
 import { PLATFORM_TOOLS } from "./tools.platform.js";
 import { EXTENDED_TOOLS } from "./tools.extended.js";
 import { validateToolArgs } from "./tool-arg-schemas.js";
+import { summarizeSafeText } from "./summary-redaction.js";
 import {
   compactValue,
   ensureStringArray,
@@ -51,7 +52,7 @@ function normalizeSearchRow(row, view = "summary", contextChars = 320) {
   }
 
   const doc = row.document || row;
-  const context = row.context || "";
+  const context = typeof row.context === "string" ? row.context : "";
   const summary = {
     id: doc.id,
     title: doc.title,
@@ -61,7 +62,7 @@ function normalizeSearchRow(row, view = "summary", contextChars = 320) {
     publishedAt: doc.publishedAt,
     urlId: doc.urlId,
     ranking: row.ranking,
-    context: context.length > contextChars ? `${context.slice(0, contextChars)}...` : context,
+    context: summarizeSafeText(context, contextChars),
   };
 
   if (view === "ids") {
@@ -100,7 +101,7 @@ function normalizeDocumentRow(row, view = "summary", excerptChars = 280) {
   }
 
   if (row.text) {
-    summary.excerpt = row.text.length > excerptChars ? `${row.text.slice(0, excerptChars)}...` : row.text;
+    summary.excerpt = summarizeSafeText(row.text, excerptChars);
   }
 
   return summary;
@@ -381,11 +382,14 @@ async function documentsListTool(ctx, args) {
     collectionId: args.collectionId,
     userId: args.userId,
     backlinkDocumentId: args.backlinkDocumentId,
-    parentDocumentId: Object.prototype.hasOwnProperty.call(args, "parentDocumentId")
-      ? args.parentDocumentId
-      : undefined,
     statusFilter: normalizeStatusFilter(args.statusFilter),
   }) || {};
+
+  if (Object.prototype.hasOwnProperty.call(args, "parentDocumentId")) {
+    body.parentDocumentId = args.parentDocumentId;
+  } else if (args.rootOnly === true) {
+    body.parentDocumentId = null;
+  }
 
   const res = await ctx.client.call("documents.list", body, {
     maxAttempts: toInteger(args.maxAttempts, 2),
@@ -846,7 +850,7 @@ export const TOOLS = {
   },
   "documents.list": {
     signature:
-      "documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; parentDocumentId?: string | null; userId?: string; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })",
+      "documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; parentDocumentId?: string | null; rootOnly?: boolean; userId?: string; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })",
     description: "List documents with filtering and pagination.",
     usageExample: {
       tool: "documents.list",
@@ -859,7 +863,7 @@ export const TOOLS = {
     },
     bestPractices: [
       "Use small page sizes (10-25) and iterate with offset.",
-      "Set parentDocumentId=null to list only collection root pages.",
+      "Use rootOnly=true (or parentDocumentId=null) to list only collection root pages.",
       "Use summary view unless the full document body is required.",
     ],
     handler: documentsListTool,
@@ -1007,6 +1011,216 @@ export const TOOLS = {
   ...PLATFORM_TOOLS,
 };
 
+const TOOL_ALIAS_DEFS = [
+  {
+    aliases: [
+      "documents.search_titles",
+      "documents.searchtitles",
+      "documents.search-titles",
+      "documents.search titles",
+    ],
+    name: "documents.search",
+    argPatch: { mode: "titles" },
+    reason: "mapped Outline title-search endpoint to wrapped documents.search with mode=titles",
+  },
+  { aliases: ["docs.search"], name: "documents.search", reason: "mapped shorthand docs.* alias to documents.*" },
+  { aliases: ["docs.list"], name: "documents.list", reason: "mapped shorthand docs.* alias to documents.*" },
+  { aliases: ["docs.info"], name: "documents.info", reason: "mapped shorthand docs.* alias to documents.*" },
+  { aliases: ["docs.answer"], name: "documents.answer", reason: "mapped shorthand docs.* alias to documents.*" },
+  { aliases: ["docs.answer_batch"], name: "documents.answer_batch", reason: "mapped shorthand docs.* alias to documents.*" },
+];
+
+function toSnakeCase(value) {
+  return String(value || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2");
+}
+
+function canonicalizeToolName(value, options = {}) {
+  const hyphenMode = options.hyphenMode || "underscore";
+  let normalized = toSnakeCase(value).trim().toLowerCase();
+  normalized = normalized.replace(/[/:\s]+/g, ".");
+  normalized = hyphenMode === "dot"
+    ? normalized.replace(/-+/g, ".")
+    : normalized.replace(/-+/g, "_");
+  normalized = normalized.replace(/\.+/g, ".").replace(/^\.+|\.+$/g, "");
+  normalized = normalized.replace(/_+/g, "_");
+  return normalized;
+}
+
+function toolNameVariants(name) {
+  const raw = String(name || "").trim();
+  return [...new Set([
+    raw,
+    raw.toLowerCase(),
+    canonicalizeToolName(raw, { hyphenMode: "underscore" }),
+    canonicalizeToolName(raw, { hyphenMode: "dot" }),
+  ].filter(Boolean))];
+}
+
+function buildCanonicalToolMap() {
+  const byCanonical = new Map();
+  for (const toolName of Object.keys(TOOLS)) {
+    for (const variant of toolNameVariants(toolName)) {
+      const existing = byCanonical.get(variant) || [];
+      existing.push(toolName);
+      byCanonical.set(variant, existing);
+    }
+  }
+  return byCanonical;
+}
+
+function buildAliasMap() {
+  const aliasMap = new Map();
+  for (const def of TOOL_ALIAS_DEFS) {
+    for (const alias of def.aliases) {
+      for (const variant of toolNameVariants(alias)) {
+        aliasMap.set(variant, def);
+      }
+    }
+  }
+  return aliasMap;
+}
+
+const CANONICAL_TOOL_MAP = buildCanonicalToolMap();
+const TOOL_ALIAS_MAP = buildAliasMap();
+
+function levenshteinDistance(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  const rows = left.length + 1;
+  const cols = right.length + 1;
+  const matrix = Array.from({ length: rows }, () => Array(cols).fill(0));
+
+  for (let i = 0; i < rows; i += 1) {
+    matrix[i][0] = i;
+  }
+  for (let j = 0; j < cols; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[rows - 1][cols - 1];
+}
+
+function suggestionScore(input, candidate) {
+  const requested = canonicalizeToolName(input, { hyphenMode: "underscore" });
+  const option = canonicalizeToolName(candidate, { hyphenMode: "underscore" });
+  const requestedParts = requested.split(".").filter(Boolean);
+  const optionParts = option.split(".").filter(Boolean);
+  const distance = levenshteinDistance(requested, option);
+  let score = 1 / (1 + distance);
+
+  if (requested === option) {
+    score += 10;
+  }
+  if (requested.startsWith(option) || option.startsWith(requested)) {
+    score += 1.5;
+  }
+  if (requested.includes(option) || option.includes(requested)) {
+    score += 0.8;
+  }
+  if (requestedParts[0] && requestedParts[0] === optionParts[0]) {
+    score += 0.5;
+  }
+  if (requestedParts.at(-1) && requestedParts.at(-1) === optionParts.at(-1)) {
+    score += 0.9;
+  }
+
+  return Number(score.toFixed(4));
+}
+
+export function listToolSuggestions(name, limit = 5) {
+  return Object.keys(TOOLS)
+    .map((toolName) => ({
+      name: toolName,
+      score: suggestionScore(name, toolName),
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return a.name.localeCompare(b.name);
+    })
+    .filter((row, index) => row.score >= 0.22 || index < Math.min(limit, 3))
+    .slice(0, limit);
+}
+
+export function resolveToolInvocation(name, args = {}) {
+  const requestedName = String(name || "").trim();
+  if (TOOLS[requestedName]) {
+    return {
+      requestedName,
+      resolvedName: requestedName,
+      args,
+      autoCorrected: false,
+    };
+  }
+
+  for (const variant of toolNameVariants(requestedName)) {
+    const alias = TOOL_ALIAS_MAP.get(variant);
+    if (alias) {
+      const nextArgs = { ...(args || {}) };
+      const injectedArgs = [];
+      for (const [key, value] of Object.entries(alias.argPatch || {})) {
+        if (nextArgs[key] === undefined) {
+          nextArgs[key] = value;
+          injectedArgs.push(key);
+        }
+      }
+
+      return {
+        requestedName,
+        resolvedName: alias.name,
+        args: nextArgs,
+        autoCorrected: true,
+        reason: alias.reason,
+        injectedArgs,
+      };
+    }
+  }
+
+  const candidates = new Set();
+  for (const variant of toolNameVariants(requestedName)) {
+    const matches = CANONICAL_TOOL_MAP.get(variant) || [];
+    for (const match of matches) {
+      candidates.add(match);
+    }
+  }
+
+  if (candidates.size === 1) {
+    const [resolvedName] = [...candidates];
+    return {
+      requestedName,
+      resolvedName,
+      args,
+      autoCorrected: true,
+      reason: "normalized separators/casing to a known wrapped tool",
+      injectedArgs: [],
+    };
+  }
+
+  const suggestions = listToolSuggestions(requestedName);
+  throw new CliError(`Unknown tool: ${requestedName}`, {
+    code: "UNKNOWN_TOOL",
+    requestedTool: requestedName,
+    suggestions,
+    hint: suggestions.length > 0
+      ? `Try ${suggestions.map((row) => row.name).join(", ")}`
+      : "Run `outline-cli tools list` to inspect available tools.",
+  });
+}
+
 export function listTools() {
   return Object.entries(TOOLS).map(([name, def]) => ({
     name,
@@ -1026,31 +1240,73 @@ export function getToolContract(name) {
     }));
   }
 
-  const def = TOOLS[name];
-  if (!def) {
-    throw new CliError(`Unknown tool: ${name}`);
-  }
+  const resolution = resolveToolInvocation(name, {});
+  const def = TOOLS[resolution.resolvedName];
 
   return {
-    name,
+    name: resolution.resolvedName,
     signature: def.signature,
     description: def.description,
     usageExample: def.usageExample,
     bestPractices: def.bestPractices,
+    ...(resolution.autoCorrected
+      ? {
+        requestedName: resolution.requestedName,
+        autoCorrected: true,
+        reason: resolution.reason,
+        injectedArgs: resolution.injectedArgs,
+      }
+      : {}),
   };
 }
 
 export async function invokeTool(ctx, name, args = {}) {
-  const tool = TOOLS[name];
-  if (!tool) {
-    throw new CliError(`Unknown tool: ${name}`);
+  const resolution = resolveToolInvocation(name, args);
+  const tool = TOOLS[resolution.resolvedName];
+  let normalizedArgs;
+
+  try {
+    normalizedArgs = validateToolArgs(resolution.resolvedName, resolution.args);
+  } catch (err) {
+    if (err instanceof CliError && err.details?.code === "ARG_VALIDATION_FAILED") {
+      err.details = {
+        ...err.details,
+        toolSignature: tool.signature,
+        usageExample: tool.usageExample,
+        contractHint:
+          "Run `outline-cli tools contract " + resolution.resolvedName + " --result-mode inline` for the full contract.",
+        ...(resolution.autoCorrected
+          ? {
+            requestedTool: resolution.requestedName,
+            toolResolution: {
+              autoCorrected: true,
+              resolvedTool: resolution.resolvedName,
+              reason: resolution.reason,
+              injectedArgs: resolution.injectedArgs,
+            },
+          }
+          : {}),
+      };
+    }
+    throw err;
   }
 
-  validateToolArgs(name, args);
+  const result = await tool.handler(ctx, normalizedArgs);
+  const enriched = resolution.autoCorrected
+    ? {
+      ...result,
+      requestedTool: resolution.requestedName,
+      toolResolution: {
+        autoCorrected: true,
+        resolvedTool: resolution.resolvedName,
+        reason: resolution.reason,
+        injectedArgs: resolution.injectedArgs,
+      },
+    }
+    : result;
 
-  const result = await tool.handler(ctx, args);
-  if (args.compact ?? true) {
-    return compactValue(result) || {};
+  if (normalizedArgs.compact ?? true) {
+    return compactValue(enriched) || {};
   }
-  return result;
+  return enriched;
 }

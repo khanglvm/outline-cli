@@ -3,8 +3,8 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   version: 1,
   algorithm: "sha256",
   signatureAlgorithm: "sha256-salted-manifest-v1",
-  signature: "03f876687f3972f11cce73da3da5f5f5266536bdce151a03326a813082240016",
-  generatedAt: "2026-03-06T04:21:12.443Z",
+  signature: "38904b946e77086fd9574bec97dc7732c6a55e876440389a43f33cddf0de6325",
+  generatedAt: "2026-03-07T10:28:02.960Z",
   files: [
   {
     "path": "src/action-gate.js",
@@ -12,19 +12,19 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/agent-skills.js",
-    "sha256": "12d54830ec84d9e8815cd28915070453175520416c83983de2496c1734acd7a2"
+    "sha256": "d40e94a4b61922d3ee8a43ed89d5e9ce1562a2cdffd37e2f396c2a18b9a481fc"
   },
   {
     "path": "src/cli.js",
-    "sha256": "7959970b8e2d0d81de0c2e35201274f0d16744aaa2a73f001decfdad45c85522"
+    "sha256": "2b6b17a71c15954c2663397d57afde2b8825ed368bb7f71833f6191662eff079"
   },
   {
     "path": "src/config-store.js",
-    "sha256": "e0d62083c694f84895a93752738accbbd98830157227f06380ccdf8e421508fd"
+    "sha256": "3773d59d74502c75b7375c194b4f0e2c39fb43e95f739e6e4878aa1b0957a511"
   },
   {
     "path": "src/entry-integrity.js",
-    "sha256": "3463fc3a3c6d0aead8e889ecce7c323b64b09ef54c772c52ff8b7266eb8c0d69"
+    "sha256": "5f66c29e57f53f11fc1751c9a8bd41c318001e3fb6562ee6f3a593f31849e45e"
   },
   {
     "path": "src/errors.js",
@@ -43,24 +43,28 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
     "sha256": "370d904265733f7d6b0f47b3213c7f026c95e59bc18d364dff96be90dbd7f479"
   },
   {
+    "path": "src/summary-redaction.js",
+    "sha256": "ddd3562334e704de5d9f6068726e311a98564e7e46bcdb56d9aade7e63b65bd3"
+  },
+  {
     "path": "src/tool-arg-schemas.js",
-    "sha256": "de6f389349d6688296a8e66d2d612937f31b4fc2a0efdca085d36ec5b09cab26"
+    "sha256": "51f8727255e5b2b0a4cce78495cfaed9bb1869a7ef104b22dbc170604f878feb"
   },
   {
     "path": "src/tools.extended.js",
-    "sha256": "8f29601301c7942cce8884c689916a78a22231e5f6691ecebfe09d9d4f87d6c3"
+    "sha256": "0c5317ca0b28a0b7110d9e6c81d8ca6ccd705e9b303de2f29e03f847b31df310"
   },
   {
     "path": "src/tools.js",
-    "sha256": "bfcb36045abecc758237ce9441d7e5994a4467893b09d48557749a90de424401"
+    "sha256": "96cfbb14cac2baa5221dc4e9294a0520f81c3e22a0c69ee648cd6c2354e1512e"
   },
   {
     "path": "src/tools.mutation.js",
-    "sha256": "013cee7d9815f868cca8990af39abe385239fa0f324054477d681e479605e903"
+    "sha256": "15fa3d146d99f55bc16d814ffd9360127b99eca2f9271cf751c6e5c7e4234317"
   },
   {
     "path": "src/tools.navigation.js",
-    "sha256": "8cd6ad37db2ef4d8a2ddd2eea408c8ab50b5649b620680cef07bd8f3ecea7e89"
+    "sha256": "f7118e91c2edd0e6b57591d41fe7707c68eef51cde77918495bb4ee166139339"
   },
   {
     "path": "src/tools.platform.js",

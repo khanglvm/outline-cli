@@ -52,6 +52,7 @@ export async function assertEntryIntegrity(rootDir = REPO_ROOT) {
   if (files.length === 0) {
     throw new CliError("Entry integrity manifest is empty", {
       code: "ENTRY_INTEGRITY_MANIFEST_EMPTY",
+      hint: "Run `npm run integrity:refresh` to regenerate local integrity metadata.",
     });
   }
 
@@ -62,6 +63,7 @@ export async function assertEntryIntegrity(rootDir = REPO_ROOT) {
       expected: manifest.signature,
       actual: computedSignature,
       keyId: ENTRY_INTEGRITY_BINDING.keyId,
+      hint: "Run `npm run integrity:refresh` after local source edits, or set `OUTLINE_CLI_SKIP_INTEGRITY_CHECK=1` for local smoke runs.",
     });
   }
 
@@ -93,6 +95,7 @@ export async function assertEntryIntegrity(rootDir = REPO_ROOT) {
       code: "ENTRY_SUBMODULE_INTEGRITY_FAILED",
       mismatchCount: mismatches.length,
       mismatches,
+      hint: "Run `npm run integrity:refresh` after local source edits, or set `OUTLINE_CLI_SKIP_INTEGRITY_CHECK=1` for local smoke runs.",
     });
   }
 

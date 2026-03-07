@@ -6,6 +6,7 @@ import {
   getDocumentDeleteReadReceipt,
 } from "./action-gate.js";
 import { compactValue, mapLimit, toInteger } from "./utils.js";
+import { summarizeSafeText } from "./summary-redaction.js";
 
 function normalizeDocumentSummary(doc, view = "summary", excerptChars = 220) {
   if (!doc) {
@@ -28,7 +29,7 @@ function normalizeDocumentSummary(doc, view = "summary", excerptChars = 220) {
   };
 
   if (doc.text) {
-    summary.excerpt = doc.text.length > excerptChars ? `${doc.text.slice(0, excerptChars)}...` : doc.text;
+    summary.excerpt = summarizeSafeText(doc.text, excerptChars);
   }
 
   return summary;

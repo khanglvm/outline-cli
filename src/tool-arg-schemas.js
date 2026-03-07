@@ -11,12 +11,8 @@ const TYPES = {
   "string|string[]": (v) => typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x === "string")),
 };
 
-function fail(tool, issues) {
-  throw new CliError(`Invalid args for ${tool}`, {
-    code: "ARG_VALIDATION_FAILED",
-    tool,
-    issues,
-  });
+function fail(tool, issues, spec = {}, args = undefined) {
+  throw new CliError(`Invalid args for ${tool}`, buildValidationDetails(tool, spec, issues, args));
 }
 
 function ensureObject(tool, args) {
@@ -25,7 +21,248 @@ function ensureObject(tool, args) {
   }
 }
 
-function validateSpec(tool, args, spec) {
+function levenshteinDistance(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  const rows = left.length + 1;
+  const cols = right.length + 1;
+  const matrix = Array.from({ length: rows }, () => Array(cols).fill(0));
+
+  for (let i = 0; i < rows; i += 1) {
+    matrix[i][0] = i;
+  }
+  for (let j = 0; j < cols; j += 1) {
+    matrix[0][j] = j;
+  }
+
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+
+  return matrix[rows - 1][cols - 1];
+}
+
+function buildAcceptedArgList(spec = {}) {
+  const accepted = new Set(Object.keys(spec.properties || {}));
+  accepted.add("compact");
+  return [...accepted].sort();
+}
+
+function suggestClosestArgNames(key, acceptedArgs) {
+  const raw = String(key || "").trim();
+  if (!raw) {
+    return [];
+  }
+
+  return acceptedArgs
+    .map((candidate) => ({
+      candidate,
+      distance: levenshteinDistance(raw.toLowerCase(), String(candidate).toLowerCase()),
+    }))
+    .filter((row) => row.distance <= 3)
+    .sort((a, b) => a.distance - b.distance || a.candidate.localeCompare(b.candidate))
+    .slice(0, 3)
+    .map((row) => row.candidate);
+}
+
+function enrichIssuesWithArgSuggestions(issues, acceptedArgs) {
+  return issues.map((issue) => {
+    if (!issue || issue.message !== "is not allowed" || typeof issue.path !== "string") {
+      return issue;
+    }
+    const key = issue.path.startsWith("args.") ? issue.path.slice(5) : issue.path;
+    const suggestions = suggestClosestArgNames(key, acceptedArgs);
+    return suggestions.length > 0 ? { ...issue, suggestions } : issue;
+  });
+}
+
+function extractArgKeyFromIssue(issue) {
+  if (!issue || typeof issue.path !== "string") {
+    return null;
+  }
+  return issue.path.startsWith("args.") ? issue.path.slice(5) : issue.path;
+}
+
+function applySuggestedArgFixes(args, issues) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+
+  const next = { ...args };
+  let changed = false;
+
+  for (const issue of issues) {
+    if (!issue || issue.message !== "is not allowed") {
+      continue;
+    }
+    const key = extractArgKeyFromIssue(issue);
+    const target = Array.isArray(issue.suggestions) && issue.suggestions.length > 0
+      ? issue.suggestions[0]
+      : null;
+    if (!key || !target || !(key in next) || key === target) {
+      continue;
+    }
+    if (target in next && next[target] !== next[key]) {
+      continue;
+    }
+    if (!(target in next)) {
+      next[target] = next[key];
+    }
+    delete next[key];
+    changed = true;
+  }
+
+  return changed ? next : undefined;
+}
+
+function buildSuggestedArgs(spec, args, enrichedIssues) {
+  const candidate = applySuggestedArgFixes(args, enrichedIssues);
+  if (!candidate) {
+    return undefined;
+  }
+
+  const normalized = normalizeArgsForSpec(candidate, spec);
+  const remainingIssues = collectValidationIssues(normalized, spec);
+  return remainingIssues.length === 0 ? normalized : undefined;
+}
+
+function buildValidationDetails(tool, spec, issues, args = undefined) {
+  const acceptedArgs = buildAcceptedArgList(spec);
+  const enrichedIssues = enrichIssuesWithArgSuggestions(issues, acceptedArgs);
+  const requiredArgs = [...new Set(spec.required || [])].sort();
+  const unknownArgs = enrichedIssues
+    .filter((issue) => issue?.message === "is not allowed" && typeof issue.path === "string")
+    .map((issue) => issue.path.replace(/^args\./, ""));
+  const suggestedArgs = buildSuggestedArgs(spec, args, enrichedIssues);
+
+  return {
+    code: "ARG_VALIDATION_FAILED",
+    tool,
+    issues: enrichedIssues,
+    acceptedArgs,
+    requiredArgs,
+    unknownArgs,
+    suggestedArgs,
+    validationHint:
+      acceptedArgs.length > 0 ? `Accepted args: ${acceptedArgs.join(", ")}` : undefined,
+  };
+}
+
+function looksNumeric(value) {
+  return /^-?(?:\d+|\d+\.\d+)$/.test(String(value || "").trim());
+}
+
+function coerceScalarValue(types, value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+
+  if (types.includes("boolean") && /^(true|false)$/i.test(trimmed)) {
+    return trimmed.toLowerCase() === "true";
+  }
+  if (types.includes("null") && /^null$/i.test(trimmed)) {
+    return null;
+  }
+  if (types.includes("number") && looksNumeric(trimmed)) {
+    return Number(trimmed);
+  }
+  if (types.includes("object") && /^[{]/.test(trimmed)) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+  if (types.includes("array") && /^[[]/.test(trimmed)) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+  }
+
+  return value;
+}
+
+function coerceArrayValue(types, value) {
+  if (!Array.isArray(value)) {
+    if (types.includes("string[]") && typeof value === "string") {
+      return [value];
+    }
+    return value;
+  }
+
+  if (types.includes("string[]")) {
+    return value.map((item) => (typeof item === "string" ? item : String(item)));
+  }
+
+  return value;
+}
+
+function normalizeCrossFieldAliases(args, properties) {
+  const next = { ...args };
+
+  if (Array.isArray(next.query) && properties.queries && next.queries === undefined) {
+    next.queries = next.query.map((item) => String(item));
+    delete next.query;
+  }
+  if (Array.isArray(next.question) && properties.questions && next.questions === undefined) {
+    next.questions = next.question.map((item) => String(item));
+    delete next.question;
+  }
+  if (Array.isArray(next.id) && properties.ids && next.ids === undefined) {
+    next.ids = next.id.map((item) => String(item));
+    delete next.id;
+  }
+  if (typeof next.ids === "string" && properties.id && !properties.ids && next.id === undefined) {
+    next.id = next.ids;
+    delete next.ids;
+  }
+  if (typeof next.queries === "string" && properties.query && !properties.queries && next.query === undefined) {
+    next.query = next.queries;
+    delete next.queries;
+  }
+
+  return next;
+}
+
+function normalizeArgsForSpec(args, spec) {
+  const properties = spec.properties || {};
+  const next = normalizeCrossFieldAliases(args, properties);
+
+  for (const [key, rule] of Object.entries(properties)) {
+    if (!(key in next)) {
+      continue;
+    }
+
+    const types = Array.isArray(rule.type) ? rule.type : [rule.type];
+    let value = next[key];
+    value = coerceArrayValue(types, value);
+    value = coerceScalarValue(types, value);
+
+    if (Array.isArray(value) && types.includes("string[]")) {
+      value = value.map((item) => (typeof item === "string" ? item : String(item)));
+    }
+
+    next[key] = value;
+  }
+
+  return next;
+}
+
+function collectValidationIssues(args, spec) {
   const issues = [];
   const properties = spec.properties || {};
 
@@ -81,8 +318,14 @@ function validateSpec(tool, args, spec) {
     spec.custom(args, issues);
   }
 
+  return issues;
+}
+
+function validateSpec(tool, args, spec) {
+  const issues = collectValidationIssues(args, spec);
+
   if (issues.length > 0) {
-    fail(tool, issues);
+    fail(tool, issues, spec, args);
   }
 }
 
@@ -151,9 +394,18 @@ export const TOOL_ARG_SCHEMAS = {
       sort: { type: "string" },
       direction: { type: "string", enum: ["ASC", "DESC"] },
       parentDocumentId: { type: ["string", "null"] },
+      rootOnly: { type: "boolean" },
       backlinkDocumentId: { type: "string" },
       includePolicies: { type: "boolean" },
       ...SHARED_DOC_COMMON,
+    },
+    custom(args, issues) {
+      if (args.rootOnly === true && Object.prototype.hasOwnProperty.call(args, "parentDocumentId") && args.parentDocumentId !== null) {
+        issues.push({
+          path: "args.rootOnly",
+          message: "cannot be combined with a non-null args.parentDocumentId",
+        });
+      }
     },
   },
   "documents.backlinks": {
@@ -2245,6 +2497,7 @@ export const TOOL_ARG_SCHEMAS = {
       dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
       includePolicies: { type: "boolean" },
       includeEvidenceDocs: { type: "boolean" },
+      limit: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
@@ -2267,6 +2520,7 @@ export const TOOL_ARG_SCHEMAS = {
       dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
       includePolicies: { type: "boolean" },
       includeEvidenceDocs: { type: "boolean" },
+      limit: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
       concurrency: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
@@ -2338,9 +2592,11 @@ export const TOOL_ARG_SCHEMAS = {
 export function validateToolArgs(toolName, args = {}) {
   const spec = TOOL_ARG_SCHEMAS[toolName];
   if (!spec) {
-    return;
+    return args;
   }
 
   ensureObject(toolName, args);
-  validateSpec(toolName, args, spec);
+  const normalizedArgs = normalizeArgsForSpec(args, spec);
+  validateSpec(toolName, normalizedArgs, spec);
+  return normalizedArgs;
 }

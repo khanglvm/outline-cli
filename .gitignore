@@ -41,6 +41,8 @@ tmp/
 
 # Local docs / notes
 docs/
+!docs/
+!docs/TOOL_CONTRACTS.md
 
 # Local knowledge scratchpad (agent-generated notes)
 /tmp/knowledges/*.md

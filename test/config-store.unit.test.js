@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildProfile,
+  getProfile,
   normalizeBaseUrlWithHints,
   suggestProfileMetadata,
   suggestProfiles,
@@ -68,6 +69,37 @@ test("suggestProfiles ranks profiles by keywords/description/host signals", () =
   assert.equal(result.matches[0].id, "marketing");
   assert.ok(result.matches[0].score > result.matches[1].score);
   assert.ok(Array.isArray(result.matches[0].matchedOn));
+});
+
+test("getProfile can auto-select a strong read-only match when query context is provided", () => {
+  const config = {
+    version: 1,
+    profiles: {
+      engineering: {
+        name: "Engineering",
+        baseUrl: "https://wiki.example.com",
+        description: "Runbooks and incident policy",
+        keywords: ["incident", "runbook", "sre"],
+        auth: { type: "apiKey", apiKey: "ol_api_eng" },
+      },
+      marketing: {
+        name: "Acme Handbook",
+        baseUrl: "https://handbook.acme.example",
+        description: "Marketing campaign and event tracking handbook",
+        keywords: ["tracking", "campaign", "analytics"],
+        auth: { type: "apiKey", apiKey: "ol_api_marketing" },
+      },
+    },
+  };
+
+  const selected = getProfile(config, undefined, {
+    query: "documents search incident runbook sre",
+    allowAutoSelect: true,
+  });
+
+  assert.equal(selected.id, "engineering");
+  assert.equal(selected.selection?.autoSelected, true);
+  assert.equal(selected.selection?.query, "documents search incident runbook sre");
 });
 
 test("suggestProfileMetadata can generate and enrich metadata from hints", () => {

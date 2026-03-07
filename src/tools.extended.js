@@ -376,6 +376,87 @@ function parseQuestionItem(raw, index) {
   throw new CliError(`questions[${index}] must be string or object`);
 }
 
+function isAnswerEndpointUnsupported(err) {
+  if (!(err instanceof ApiError)) {
+    return false;
+  }
+  if (err.details?.status !== 404) {
+    return false;
+  }
+  const url = String(err.details?.url || "").toLowerCase();
+  const message = String(err.message || "").toLowerCase();
+  return url.includes("documents.answerquestion") || message.includes("answerquestion");
+}
+
+function normalizeFallbackAnswerHit(row, contextChars = 220) {
+  const doc = row?.document || row || {};
+  const context = typeof row?.context === "string" ? row.context : "";
+  return compactValue({
+    id: doc.id,
+    title: doc.title,
+    collectionId: doc.collectionId,
+    parentDocumentId: doc.parentDocumentId,
+    updatedAt: doc.updatedAt,
+    publishedAt: doc.publishedAt,
+    urlId: doc.urlId,
+    ranking: row?.ranking,
+    context: context.length > contextChars ? `${context.slice(0, contextChars)}...` : context,
+  });
+}
+
+async function buildAnswerFallbackResult(ctx, question, args = {}) {
+  const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
+  const contextChars = Math.max(80, toInteger(args.contextChars, 220));
+  const limit = Math.max(1, Math.min(8, toInteger(args.limit, 5)));
+  const body = compactValue({
+    query: question,
+    collectionId: args.collectionId,
+    documentId: args.documentId || args.id,
+    userId: args.userId,
+    shareId: args.shareId,
+    statusFilter: args.statusFilter,
+    limit,
+    offset: 0,
+    snippetMinWords: toInteger(args.snippetMinWords, 20),
+    snippetMaxWords: toInteger(args.snippetMaxWords, 30),
+  }) || {};
+
+  const res = await ctx.client.call("documents.search", body, { maxAttempts });
+  const payload = maybeDropPolicies(res.body, !!args.includePolicies);
+  const hits = Array.isArray(payload?.data) ? payload.data : [];
+  const documents = hits.slice(0, Math.min(5, limit)).map((row) => normalizeFallbackAnswerHit(row, contextChars));
+
+  return {
+    question,
+    answer: "",
+    noAnswerReason: "documents.answerQuestion is unsupported by this Outline deployment; returning ranked retrieval results instead.",
+    unsupported: true,
+    fallbackUsed: true,
+    fallbackTool: "documents.search",
+    fallbackSuggestion: {
+      tool: "documents.search",
+      args: compactValue({
+        query: question,
+        collectionId: args.collectionId,
+        documentId: args.documentId || args.id,
+        userId: args.userId,
+        shareId: args.shareId,
+        statusFilter: args.statusFilter,
+        limit,
+        view: "summary",
+      }),
+    },
+    documents,
+    retrieval: {
+      query: question,
+      result: compactValue({
+        ...payload,
+        data: hits.map((row) => normalizeFallbackAnswerHit(row, contextChars)),
+      }),
+    },
+  };
+}
+
 async function documentsAnswerTool(ctx, args = {}) {
   const question = String(args.question ?? args.query ?? "").trim();
   if (!question) {
@@ -383,23 +464,35 @@ async function documentsAnswerTool(ctx, args = {}) {
   }
 
   const body = {
-    ...buildBody(args, ["question", "query"]),
+    ...buildBody(args, ["question", "query", "limit"]),
     query: question,
   };
 
-  const res = await ctx.client.call("documents.answerQuestion", body, {
-    maxAttempts: toInteger(args.maxAttempts, 2),
-  });
-  const payload = maybeDropPolicies(res.body, !!args.includePolicies);
+  try {
+    const res = await ctx.client.call("documents.answerQuestion", body, {
+      maxAttempts: toInteger(args.maxAttempts, 2),
+    });
+    const payload = maybeDropPolicies(res.body, !!args.includePolicies);
 
-  return {
-    tool: "documents.answer",
-    profile: ctx.profile.id,
-    result:
-      payload && typeof payload === "object"
-        ? { question, ...payload }
-        : { question, data: payload },
-  };
+    return {
+      tool: "documents.answer",
+      profile: ctx.profile.id,
+      result:
+        payload && typeof payload === "object"
+          ? { question, ...payload }
+          : { question, data: payload },
+    };
+  } catch (err) {
+    if (!isAnswerEndpointUnsupported(err)) {
+      throw err;
+    }
+
+    return {
+      tool: "documents.answer",
+      profile: ctx.profile.id,
+      result: await buildAnswerFallbackResult(ctx, question, args),
+    };
+  }
 }
 
 async function documentsAnswerBatchTool(ctx, args = {}) {
@@ -415,7 +508,7 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
     throw new CliError("documents.answer_batch requires args.question or args.questions[]");
   }
 
-  const baseBody = buildBody(args, ["question", "questions", "query", "concurrency"]);
+  const baseBody = buildBody(args, ["question", "questions", "query", "concurrency", "limit"]);
   const includePolicies = !!args.includePolicies;
   const maxAttempts = toInteger(args.maxAttempts, 2);
   const concurrency = Math.max(1, Math.min(10, toInteger(args.concurrency, 3)));
@@ -441,6 +534,18 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
         result: payload,
       };
     } catch (err) {
+      if (parsed && isAnswerEndpointUnsupported(err)) {
+        return {
+          index,
+          ok: true,
+          question: parsed.question,
+          documentId: parsed.documentId,
+          result: await buildAnswerFallbackResult(ctx, parsed.question, {
+            ...args,
+            ...parsed.body,
+          }),
+        };
+      }
       if (err instanceof ApiError || err instanceof CliError) {
         return {
           index,
@@ -2972,7 +3077,7 @@ export const EXTENDED_TOOLS = {
   ...RPC_TOOLS,
   "documents.answer": {
     signature:
-      "documents.answer(args: { question?: string; query?: string; ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })",
+      "documents.answer(args: { question?: string; query?: string; limit?: number; ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })",
     description: "Answer a question using Outline AI over the selected document scope.",
     usageExample: {
       tool: "documents.answer",
@@ -2984,12 +3089,13 @@ export const EXTENDED_TOOLS = {
     bestPractices: [
       "Use question text that is specific enough to resolve citations quickly.",
       "Scope by collectionId or documentId to reduce latency and hallucination risk.",
+      "If the deployment lacks documents.answerQuestion, this wrapper returns fallback retrieval evidence and a concrete search suggestion instead of a raw 404.",
     ],
     handler: documentsAnswerTool,
   },
   "documents.answer_batch": {
     signature:
-      "documents.answer_batch(args: { question?: string; questions?: Array<string | { question?: string; query?: string; ...endpointArgs }>; ...endpointArgs; concurrency?: number; includePolicies?: boolean; maxAttempts?: number })",
+      "documents.answer_batch(args: { question?: string; questions?: Array<string | { question?: string; query?: string; ...endpointArgs }>; limit?: number; ...endpointArgs; concurrency?: number; includePolicies?: boolean; maxAttempts?: number })",
     description: "Run multiple documents.answerQuestion calls with per-item isolation.",
     usageExample: {
       tool: "documents.answer_batch",
@@ -3005,6 +3111,7 @@ export const EXTENDED_TOOLS = {
     bestPractices: [
       "Prefer small batches and low concurrency for predictable token and latency budgets.",
       "Use per-item statuses to retry only failures.",
+      "Unsupported answer endpoints degrade to per-item retrieval evidence rather than failing the whole batch.",
     ],
     handler: documentsAnswerBatchTool,
   },

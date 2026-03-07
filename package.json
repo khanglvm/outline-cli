@@ -1,6 +1,6 @@
 {
   "name": "@khanglvm/outline-cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Agent-optimized CLI for Outline API",
   "type": "module",
   "bin": {

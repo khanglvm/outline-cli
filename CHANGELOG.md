@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 - 2026-03-07
+
+- Changes since `v0.1.3`.
+- feat(cli): improve agent-first routing and retrieval (92d299a)
+
 ## 0.1.3 - 2026-03-06
 
 - Changes since `v0.1.2`.

@@ -7,6 +7,12 @@
     "outline-cli": "bin/outline-cli.js",
     "outline-agent": "bin/outline-cli.js"
   },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "start": "node ./bin/outline-cli.js",
     "check": "node ./bin/outline-cli.js --help",

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 - 2026-03-08
+
+- Changes since `v0.1.5`.
+- build(npm): whitelist published files (b2838fa)
+
 ## 0.1.5 - 2026-03-08
 
 - Changes since `v0.1.4`.

@@ -228,7 +228,6 @@ Release prerequisites:
 - Keep local secrets in untracked files such as `.env.test.local`.
 - Profile secrets are stored in the OS keychain by default.
 
-## Reference Docs
+## Changelog
 
-- Agent rules for this repo: [`AGENTS.md`](AGENTS.md)
-- Release script: [`scripts/release.mjs`](scripts/release.mjs)
+- Release history: [`CHANGELOG.md`](https://github.com/khanglvm/outline-cli/blob/main/CHANGELOG.md)

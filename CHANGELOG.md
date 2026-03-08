@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5 - 2026-03-08
+
+- Changes since `v0.1.4`.
+- docs(readme): link changelog (8762e4b)
+
 ## 0.1.4 - 2026-03-07
 
 - Changes since `v0.1.3`.

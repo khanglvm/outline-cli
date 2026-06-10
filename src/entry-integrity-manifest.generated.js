@@ -3,8 +3,8 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   version: 1,
   algorithm: "sha256",
   signatureAlgorithm: "sha256-salted-manifest-v1",
-  signature: "c69d41948b78c8ae35c0223377149ece8df5588863a010adf92a0b6ad11876d3",
-  generatedAt: "2026-03-08T04:29:38.219Z",
+  signature: "0743223c5b14c0b27c265cad72ffd81aa6061d853e6975d8353025578b406248",
+  generatedAt: "2026-06-10T08:50:54.694Z",
   files: [
   {
     "path": "src/action-gate.js",
@@ -12,7 +12,7 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/agent-skills.js",
-    "sha256": "d40e94a4b61922d3ee8a43ed89d5e9ce1562a2cdffd37e2f396c2a18b9a481fc"
+    "sha256": "6a23db3378050f5a2e46564bca921985708fddbc144316efd39654d0f2860693"
   },
   {
     "path": "src/cli.js",
@@ -32,7 +32,7 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/outline-client.js",
-    "sha256": "2fe343f3cb1773c53fd14fad784d3ef1f5ff0e2c4c43b4a752ca9b7d5421677c"
+    "sha256": "457900dfee7c521f0683a0344009621df720e72d8cdcb3b32b4efed1c3fdf9be"
   },
   {
     "path": "src/result-store.js",
@@ -48,11 +48,11 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/tool-arg-schemas.js",
-    "sha256": "51f8727255e5b2b0a4cce78495cfaed9bb1869a7ef104b22dbc170604f878feb"
+    "sha256": "e1256642373a8b619b9b690be422e8d7d660e1f67bac10ff9ca237950df0b73d"
   },
   {
     "path": "src/tools.extended.js",
-    "sha256": "0c5317ca0b28a0b7110d9e6c81d8ca6ccd705e9b303de2f29e03f847b31df310"
+    "sha256": "2861108ad0f2d42ad807f222f367557be3b2c6414a58006c89f9afe4bab85e22"
   },
   {
     "path": "src/tools.js",

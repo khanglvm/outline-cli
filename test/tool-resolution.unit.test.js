@@ -240,6 +240,60 @@ test("docs.answer alias accepts limit and falls back to deterministic retrieval"
   assert.match(payload.result?.noAnswerReason || "", /unsupported/i);
 });
 
+test("documents.answer fallback hydrates scoped document directly", async () => {
+  const calls = [];
+  const ctx = {
+    profile: { id: "prod" },
+    client: {
+      async call(method, body) {
+        calls.push({ method, body });
+        if (method === "documents.answerQuestion") {
+          throw new ApiError("Not Found", {
+            status: 404,
+            url: "https://example.com/api/documents.answerQuestion",
+          });
+        }
+        if (method === "documents.info") {
+          return {
+            body: {
+              ok: true,
+              status: 200,
+              data: {
+                id: body.id,
+                title: "Scoped FAQ",
+                collectionId: "col-1",
+                updatedAt: "2026-06-10T00:00:00.000Z",
+                publishedAt: "2026-06-10T00:00:00.000Z",
+                urlId: "scoped-faq",
+                text: "VPN reset code is stored here.",
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      },
+    },
+  };
+
+  const payload = await invokeTool(ctx, "documents.answer", {
+    question: "What is the VPN reset code?",
+    documentId: "doc-1",
+  });
+
+  assert.deepEqual(calls.map((call) => call.method), ["documents.answerQuestion", "documents.info"]);
+  assert.deepEqual(calls[1].body, { id: "doc-1" });
+  assert.equal(payload.result?.fallbackTool, "documents.info");
+  assert.deepEqual(payload.result?.fallbackSuggestion, {
+    tool: "documents.info",
+    args: {
+      id: "doc-1",
+      view: "summary",
+    },
+  });
+  assert.equal(payload.result?.documents?.[0]?.id, "doc-1");
+  assert.equal(payload.result?.documents?.[0]?.title, "Scoped FAQ");
+});
+
 test("documents.info summary redacts obvious credentials in excerpts", async () => {
   const ctx = {
     profile: { id: "prod" },

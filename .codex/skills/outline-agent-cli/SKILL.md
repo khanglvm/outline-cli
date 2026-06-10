@@ -1,6 +1,6 @@
 ---
 name: outline-agent-cli
-description: Use the local Outline CLI (`outline-cli`, legacy alias `outline-agent`) to interact with Outline workspaces through deterministic API calls. Trigger when tasks involve searching, listing, reading, creating, updating, patching, deleting, or batch-processing Outline documents/collections, especially when token-efficient `ids/summary` views, profile routing, action gates (`performAction`), delete read tokens, or temp-file offload are relevant.
+description: Use the local Outline CLI (`outline-cli`, legacy alias `outline-agent`) to search, read, update, and operate Outline workspaces through deterministic API calls. Trigger when tasks involve company docs/wiki/handbook lookup, specific document names, collections, comments, attachments/images/files, shares, templates, permissions, federated sync, or document create/update/delete workflows, especially when token-efficient `ids/summary` views, profile routing, action gates (`performAction`), delete read tokens, or temp-file offload are relevant.
 ---
 
 # Goal
@@ -38,6 +38,30 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
 2. Use `batch` for independent reads instead of sequential loops.
 3. Open `tools help` or `tools contract` only after a validation failure or when the needed capability is still unclear.
 
+## Capability Map
+- Retrieval and navigation:
+  - `documents.search`, `documents.list`, `documents.info`, `documents.resolve`, `documents.resolve_urls`, `documents.canonicalize_candidates`
+  - `collections.list`, `collections.info`, `collections.tree`
+  - `search.expand`, `search.research`
+- Embedded files and images:
+  - `documents.attachments`, `attachments.download`, `documents.download_attachments`
+- Safe document mutation:
+  - `documents.update`, `documents.safe_update`, `documents.diff`, `documents.apply_patch`, `documents.apply_patch_safe`, `documents.batch_update`
+  - `documents.plan_batch_update`, `documents.plan_terminology_refactor`, `documents.apply_batch_plan`
+- Lifecycle and collaboration:
+  - `revisions.*`, `shares.*`, `templates.*`, `documents.templatize`, `comments.*`, `events.list`
+- Knowledge and linkage workflows:
+  - `documents.answer`, `documents.answer_batch`
+  - `documents.backlinks`, `documents.graph_neighbors`, `documents.graph_report`
+  - `documents.issue_refs`, `documents.issue_ref_report`
+- Integration/admin wrappers:
+  - `federated.sync_manifest`, `federated.sync_probe`, `federated.permission_snapshot`, `capabilities.map`
+  - `users.*`, `groups.*`, `collections.*_memberships`, `documents.*_memberships`, `documents.users`
+  - `oauth_clients.*`, `oauth_authentications.*`, `oauthClients.delete`, `oauthAuthentications.delete`
+  - `webhooks.*`, `file_operations.*`, `documents.import_file`, `documents.create_from_template`, `documents.cleanup_test`
+- Escape hatch:
+  - `api.call` for JSON RPC endpoints that do not yet have dedicated tools. Do not use it for binary endpoints.
+
 ## Retrieval Workflow (Default Read Path)
 1. Resolve candidates cheaply with `view:"ids"` or `view:"summary"`:
    - `documents.search`, `documents.list`, `collections.list`, `documents.resolve`.
@@ -45,6 +69,11 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
    - `documents.info`, `collections.info`.
 3. Escalate to `view:"full"` only for final documents that truly need full body text.
 4. Keep `includePolicies:false` unless policy decisions are required.
+5. For embedded document files/images, use attachment-aware tools instead of raw binary endpoints:
+   - `documents.attachments` to list `/api/attachments.redirect?id=...` references.
+   - `attachments.download` to save one attachment/image locally.
+   - `documents.download_attachments` to save all embedded files from a document.
+   Do not call `attachments.redirect` through `api.call`; it returns binary bytes, not JSON.
 
 ## Mutation Workflow (Safe + Explicit)
 1. Read current state first (`documents.info`/`collections.info`).
@@ -99,9 +128,20 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
 ## Tool Selection Hints
 - Fuzzy title/semantic resolution: `documents.resolve`, `documents.resolve_urls`
 - Search + hydrate in one call: `search.expand`, `search.research`
+- Embedded images/files: `documents.attachments`, `attachments.download`, `documents.download_attachments`
 - Minimal diff planning before write: `documents.diff`, `documents.plan_batch_update`
 - Safer patch writes: `documents.apply_patch_safe`
 - Capability checks before multi-step plans: `capabilities.map`
+
+## Source References
+Every response that presents information retrieved from Outline must include source references linking back to the original document(s).
+
+Build links from available fields:
+- Prefer full document `url`: `{baseUrl}{url}`.
+- If only `urlId` is available: `{baseUrl}/doc/{urlId}`.
+- The `baseUrl` comes from the selected profile or `auth.info`/`profile test` team URL.
+
+Present a compact `Sources` section using document titles as link text. List each contributing document once.
 
 ## Constraints
 - Never run mutating calls without explicit `performAction:true`.
@@ -110,6 +150,7 @@ Execute Outline workflows with low-token, machine-readable CLI calls while keepi
 - Do not read onboarding/help docs when a working profile already exists and the task can be attempted directly.
 - If a direct call fails due to unknown tool or validation issues, use the CLI's error suggestions before falling back to docs.
 - Never send oversized inline markdown when `--args-file` is cleaner and less error-prone.
+- Never present Outline-derived facts without source references.
 
 # Examples
 
@@ -153,6 +194,19 @@ outline-cli invoke documents.delete --args '{
   "id": "doc-a",
   "readToken": "<deleteReadReceipt.token>",
   "performAction": true
+}'
+```
+
+## Example 4: Embedded image/file download
+```bash
+outline-cli invoke documents.attachments --args '{
+  "url": "https://handbook.example.com/doc/example-title-AbCdEf1234"
+}'
+
+outline-cli invoke documents.download_attachments --args '{
+  "url": "https://handbook.example.com/doc/example-title-AbCdEf1234",
+  "outputDir": "./outline-attachments",
+  "overwrite": true
 }'
 ```
 

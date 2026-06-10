@@ -39,6 +39,35 @@ export class OutlineClient {
     throw lastErr;
   }
 
+  async download(method, body = {}, options = {}) {
+    const apiMethod = method.startsWith("/") ? method.slice(1) : method;
+    const url = `${this.baseApiUrl}/${apiMethod}`;
+    const maxAttempts = Math.max(1, options.maxAttempts || 1);
+
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await this.#downloadOnce(url, body, options);
+      } catch (err) {
+        lastErr = err;
+        const shouldRetry =
+          err instanceof ApiError &&
+          (err.details.status === 429 || err.details.status >= 500) &&
+          attempt < maxAttempts;
+
+        if (!shouldRetry) {
+          throw err;
+        }
+
+        const retryAfter = Number(err.details.retryAfter || 0);
+        const waitMs = retryAfter > 0 ? retryAfter * 1000 : attempt * 400;
+        await sleep(waitMs);
+      }
+    }
+
+    throw lastErr;
+  }
+
   async #callOnce(url, body, options) {
     const bodyType = options.bodyType === "multipart" ? "multipart" : "json";
     const requestBody = this.#buildRequestBody(bodyType, body);
@@ -93,6 +122,70 @@ export class OutlineClient {
       status: res.status,
       headers: Object.fromEntries(res.headers.entries()),
       body: parsed,
+    };
+  }
+
+  async #downloadOnce(url, body, options) {
+    const requestBody = this.#buildRequestBody(options.bodyType === "multipart" ? "multipart" : "json", body);
+    const headers = await this.#buildHeaders(
+      {
+        Accept: "*/*",
+        ...(options.headers || {}),
+      },
+      { bodyType: options.bodyType === "multipart" ? "multipart" : "json" }
+    );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: requestBody,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        throw new ApiError(`Request timeout after ${this.timeoutMs}ms`, {
+          status: 408,
+          url,
+        });
+      }
+      throw new ApiError(`Network error: ${err.message}`, {
+        status: 503,
+        url,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let parsed;
+      try {
+        parsed = text ? JSON.parse(text) : {};
+      } catch {
+        parsed = { ok: false, message: text || res.statusText };
+      }
+
+      const status = parsed?.status || res.status;
+      const retryAfter = res.headers.get("retry-after");
+      throw new ApiError(parsed?.message || parsed?.error || res.statusText, {
+        status,
+        retryAfter,
+        body: parsed,
+        url,
+      });
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return {
+      ok: true,
+      status: res.status,
+      headers: Object.fromEntries(res.headers.entries()),
+      body: buffer,
+      url: res.url,
     };
   }
 

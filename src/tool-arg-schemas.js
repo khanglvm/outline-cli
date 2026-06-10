@@ -640,6 +640,61 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "documents.attachments": {
+    properties: {
+      id: { type: "string" },
+      documentId: { type: "string" },
+      url: { type: "string" },
+      shareId: { type: "string" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.documentId && !args.url && !args.shareId) {
+        issues.push({ path: "args.id", message: "or args.documentId, args.url, or args.shareId is required" });
+      }
+    },
+  },
+  "attachments.download": {
+    properties: {
+      id: { type: "string" },
+      attachmentId: { type: "string" },
+      url: { type: "string" },
+      path: { type: "string" },
+      outputDir: { type: "string" },
+      filePath: { type: "string" },
+      fileName: { type: "string" },
+      overwrite: { type: "boolean" },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.attachmentId && !args.url && !args.path) {
+        issues.push({ path: "args.id", message: "or args.attachmentId, args.url, or args.path is required" });
+      }
+      if (args.filePath && (args.outputDir || args.fileName)) {
+        issues.push({ path: "args.filePath", message: "cannot be combined with args.outputDir or args.fileName" });
+      }
+    },
+  },
+  "documents.download_attachments": {
+    properties: {
+      id: { type: "string" },
+      documentId: { type: "string" },
+      url: { type: "string" },
+      shareId: { type: "string" },
+      outputDir: { type: "string" },
+      overwrite: { type: "boolean" },
+      concurrency: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.id && !args.documentId && !args.url && !args.shareId) {
+        issues.push({ path: "args.id", message: "or args.documentId, args.url, or args.shareId is required" });
+      }
+      if (typeof args.concurrency === "number" && args.concurrency > 8) {
+        issues.push({ path: "args.concurrency", message: "must be <= 8" });
+      }
+    },
+  },
   "documents.info": {
     properties: {
       id: { type: "string" },

@@ -13,7 +13,7 @@ function usage() {
   process.stdout.write(
     [
       "Usage:",
-      "  node ./scripts/release.mjs [--bump <patch|minor|major|prepatch|preminor|premajor|prerelease> | --version <x.y.z>]",
+      "  node ./scripts/release.mjs [--bump <patch|minor|major|prepatch|preminor|premajor|prerelease> | --version <x.y.z> | --use-current-version]",
       "                             [--tag <dist-tag>] [--otp <code>] [--access <public|restricted>]",
       "                             [--no-publish] [--no-push] [--skip-check] [--skip-test] [--allow-dirty]",
       "",
@@ -21,6 +21,7 @@ function usage() {
       "  npm run release -- --bump patch",
       "  npm run release -- --version 0.2.0",
       "  npm run release -- --bump minor --tag next --no-publish --no-push",
+      "  npm run release -- --use-current-version --skip-test",
       "",
     ].join("\n")
   );
@@ -37,8 +38,9 @@ function parseArgs(argv) {
     return value;
   }
   const opts = {
-    bump: "patch",
+    bump: null,
     version: null,
+    useCurrentVersion: false,
     tag: "latest",
     otp: null,
     access: "public",
@@ -66,6 +68,10 @@ function parseArgs(argv) {
       opts.version = requireValue("--version", i);
       sawVersion = true;
       i += 1;
+      continue;
+    }
+    if (arg === "--use-current-version") {
+      opts.useCurrentVersion = true;
       continue;
     }
     if (arg === "--tag") {
@@ -111,16 +117,21 @@ function parseArgs(argv) {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  if (sawVersion && sawBump) {
-    throw new Error("Use either --version or --bump, not both.");
+  if (opts.help) {
+    return opts;
   }
 
-  if (!opts.version && !opts.bump) {
-    throw new Error("Missing version strategy. Provide --version <x.y.z> or --bump <type>.");
+  const selectedStrategies = [sawBump, sawVersion, opts.useCurrentVersion].filter(Boolean).length;
+  if (selectedStrategies > 1) {
+    throw new Error("Use exactly one of --bump, --version, or --use-current-version.");
+  }
+
+  if (!opts.version && !opts.bump && !opts.useCurrentVersion) {
+    throw new Error("Missing version strategy. Provide --version <x.y.z>, --bump <type>, or --use-current-version.");
   }
 
   const validBumps = new Set(["patch", "minor", "major", "prepatch", "preminor", "premajor", "prerelease"]);
-  if (!opts.version && !validBumps.has(opts.bump)) {
+  if (opts.bump && !validBumps.has(opts.bump)) {
     throw new Error(`Invalid --bump value: ${opts.bump}`);
   }
 
@@ -257,7 +268,15 @@ function ensureTagDoesNotExist(tagName) {
   }
 }
 
-function bumpVersion(opts) {
+function resolveReleaseVersion(opts, packageJsonPath) {
+  if (opts.useCurrentVersion) {
+    const currentVersion = readJson(packageJsonPath)?.version;
+    if (!currentVersion) {
+      throw new Error("Unable to resolve current version from package.json.");
+    }
+    return currentVersion;
+  }
+
   const arg = opts.version || opts.bump;
   const out = run("npm", ["version", arg, "--no-git-tag-version"], { capture: true });
   const newVersion = out.trim().replace(/^v/, "");
@@ -297,7 +316,7 @@ async function main() {
     throw new Error("Detached HEAD is not supported for release. Check out a branch.");
   }
 
-  const nextVersion = bumpVersion(opts);
+  const nextVersion = resolveReleaseVersion(opts, packageJsonPath);
   const releaseTag = `v${nextVersion}`;
   ensureTagDoesNotExist(releaseTag);
   await updateChangelog({

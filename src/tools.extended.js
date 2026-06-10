@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { ApiError, CliError } from "./errors.js";
 import { assertPerformAction } from "./action-gate.js";
-import { compactValue, ensureStringArray, mapLimit, toInteger } from "./utils.js";
+import { defaultTmpDir } from "./config-store.js";
+import { compactValue, ensureStringArray, mapLimit, sanitizeFileToken, toInteger } from "./utils.js";
 
 const CONTROL_ARG_KEYS = new Set([
   "performAction",
@@ -51,6 +53,201 @@ function appendMultipartValue(form, key, value) {
     return;
   }
   form.append(key, String(value));
+}
+
+const ATTACHMENT_REDIRECT_PATTERN =
+  /((?:https?:\/\/[^\s)"']+)?\/api\/attachments\.redirect\?[^)\s"']*?\bid=([0-9a-fA-F-]{36})[^)\s"']*)/g;
+
+const EXT_BY_CONTENT_TYPE = new Map([
+  ["image/png", ".png"],
+  ["image/jpeg", ".jpg"],
+  ["image/gif", ".gif"],
+  ["image/webp", ".webp"],
+  ["image/svg+xml", ".svg"],
+  ["application/pdf", ".pdf"],
+  ["text/plain", ".txt"],
+  ["text/markdown", ".md"],
+  ["application/json", ".json"],
+  ["application/zip", ".zip"],
+]);
+
+function getHeader(headers = {}, name) {
+  const target = String(name || "").toLowerCase();
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (String(key).toLowerCase() === target) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function contentTypeToExtension(contentType) {
+  const normalized = String(contentType || "").split(";")[0].trim().toLowerCase();
+  return EXT_BY_CONTENT_TYPE.get(normalized) || ".bin";
+}
+
+function parseContentDispositionFilename(value) {
+  const raw = String(value || "");
+  const encoded = raw.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+  return raw.match(/filename="?([^";]+)"?/i)?.[1] || "";
+}
+
+function extractAttachmentId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (/^[0-9a-fA-F-]{36}$/.test(raw)) {
+    return raw.toLowerCase();
+  }
+
+  try {
+    const parsed = new URL(raw, "https://outline.local");
+    const id = parsed.searchParams.get("id");
+    return id && /^[0-9a-fA-F-]{36}$/.test(id) ? id.toLowerCase() : "";
+  } catch {
+    const match = raw.match(/\bid=([0-9a-fA-F-]{36})\b/);
+    return match ? match[1].toLowerCase() : "";
+  }
+}
+
+function extractDocumentUrlId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(raw);
+    const last = parsed.pathname.split("/").filter(Boolean).pop() || "";
+    return last.match(/-([A-Za-z0-9]{8,})$/)?.[1] || "";
+  } catch {
+    return raw.match(/-([A-Za-z0-9]{8,})$/)?.[1] || "";
+  }
+}
+
+function extractAttachmentRefsFromText(text, baseUrl = "") {
+  const refs = [];
+  const seen = new Set();
+  const source = String(text || "");
+  const base = String(baseUrl || "").replace(/\/+$/, "");
+  const pattern = new RegExp(ATTACHMENT_REDIRECT_PATTERN.source, "g");
+  let match;
+
+  while ((match = pattern.exec(source)) !== null) {
+    const id = extractAttachmentId(match[1]);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    const url = match[1];
+    refs.push({
+      id,
+      index: refs.length,
+      source: "markdown",
+      url,
+      absoluteUrl: url.startsWith("http") || !base ? url : `${base}${url}`,
+      position: match.index,
+    });
+  }
+
+  return refs;
+}
+
+async function readDocumentForAttachments(ctx, args = {}) {
+  const id = args.id || args.documentId || extractDocumentUrlId(args.url);
+  const shareId = args.shareId;
+  if (!id && !shareId) {
+    throw new CliError("document attachment tools require args.id, args.documentId, args.url, or args.shareId");
+  }
+
+  const body = compactValue({ id, shareId }) || {};
+  const res = await ctx.client.call("documents.info", body, {
+    maxAttempts: toInteger(args.maxAttempts, 2),
+  });
+  const doc = res.body?.data || null;
+  if (!doc) {
+    throw new CliError("documents.info response did not include document data");
+  }
+  return doc;
+}
+
+function summarizeAttachmentDocument(doc) {
+  return {
+    id: doc?.id,
+    title: doc?.title,
+    url: doc?.url,
+    urlId: doc?.urlId,
+    collectionId: doc?.collectionId,
+    parentDocumentId: doc?.parentDocumentId,
+    revision: doc?.revision,
+    updatedAt: doc?.updatedAt,
+  };
+}
+
+function resolveAttachmentOutputPath(args, id, headers, index = null) {
+  if (args.filePath) {
+    return path.resolve(String(args.filePath));
+  }
+
+  const contentType = getHeader(headers, "content-type");
+  const dispositionName = parseContentDispositionFilename(getHeader(headers, "content-disposition"));
+  const requestedName = typeof args.fileName === "string" ? args.fileName.trim() : "";
+  const baseName = requestedName || dispositionName;
+  const ext = path.extname(baseName) || contentTypeToExtension(contentType);
+  const prefix = index === null ? "" : `${String(index + 1).padStart(2, "0")}-`;
+  const fallbackName = `${prefix}${id}${ext}`;
+  const safeName = sanitizeFileToken(baseName ? `${prefix}${baseName}` : fallbackName);
+  const outputDir = path.resolve(String(args.outputDir || path.join(defaultTmpDir(), "attachments")));
+
+  return path.join(outputDir, safeName);
+}
+
+async function writeAttachmentFile(filePath, buffer, overwrite) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await fs.writeFile(filePath, buffer, { flag: overwrite ? "w" : "wx" });
+  } catch (err) {
+    if (err?.code === "EEXIST") {
+      throw new CliError(`Attachment file already exists: ${filePath}`, {
+        code: "ATTACHMENT_FILE_EXISTS",
+        filePath,
+      });
+    }
+    throw err;
+  }
+}
+
+async function downloadAttachmentToFile(ctx, args = {}, id, index = null) {
+  if (!ctx.client || typeof ctx.client.download !== "function") {
+    throw new CliError("Current Outline client does not support binary downloads");
+  }
+
+  const res = await ctx.client.download("attachments.redirect", { id }, {
+    maxAttempts: toInteger(args.maxAttempts, 2),
+  });
+  const buffer = res.body;
+  const filePath = resolveAttachmentOutputPath(args, id, res.headers, index);
+  await writeAttachmentFile(filePath, buffer, args.overwrite === true);
+
+  const contentType = getHeader(res.headers, "content-type") || "application/octet-stream";
+  return {
+    id,
+    ok: true,
+    filePath,
+    bytes: buffer.length,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+    contentType,
+    status: res.status,
+    sourceUrl: res.url,
+  };
 }
 
 function defaultUsageArgs(def) {
@@ -408,10 +605,39 @@ async function buildAnswerFallbackResult(ctx, question, args = {}) {
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
   const contextChars = Math.max(80, toInteger(args.contextChars, 220));
   const limit = Math.max(1, Math.min(8, toInteger(args.limit, 5)));
+  const scopedDocumentId = args.documentId || args.id;
+
+  if (scopedDocumentId) {
+    const res = await ctx.client.call("documents.info", { id: scopedDocumentId }, { maxAttempts });
+    const document = normalizeFallbackAnswerHit(res.body?.data, contextChars);
+    return {
+      question,
+      answer: "",
+      noAnswerReason: "documents.answerQuestion is unsupported by this Outline deployment; returning the scoped document as retrieval evidence instead.",
+      unsupported: true,
+      fallbackUsed: true,
+      fallbackTool: "documents.info",
+      fallbackSuggestion: {
+        tool: "documents.info",
+        args: compactValue({
+          id: scopedDocumentId,
+          view: "summary",
+        }),
+      },
+      documents: document ? [document] : [],
+      retrieval: {
+        query: question,
+        result: compactValue({
+          ...maybeDropPolicies(res.body, !!args.includePolicies),
+          data: document,
+        }),
+      },
+    };
+  }
+
   const body = compactValue({
     query: question,
     collectionId: args.collectionId,
-    documentId: args.documentId || args.id,
     userId: args.userId,
     shareId: args.shareId,
     statusFilter: args.statusFilter,
@@ -535,16 +761,30 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
       };
     } catch (err) {
       if (parsed && isAnswerEndpointUnsupported(err)) {
-        return {
-          index,
-          ok: true,
-          question: parsed.question,
-          documentId: parsed.documentId,
-          result: await buildAnswerFallbackResult(ctx, parsed.question, {
-            ...args,
-            ...parsed.body,
-          }),
-        };
+        try {
+          return {
+            index,
+            ok: true,
+            question: parsed.question,
+            documentId: parsed.documentId,
+            result: await buildAnswerFallbackResult(ctx, parsed.question, {
+              ...args,
+              ...parsed.body,
+            }),
+          };
+        } catch (fallbackErr) {
+          if (fallbackErr instanceof ApiError || fallbackErr instanceof CliError) {
+            return {
+              index,
+              ok: false,
+              question: parsed.question,
+              documentId: parsed.documentId,
+              error: fallbackErr.message,
+              status: fallbackErr instanceof ApiError ? fallbackErr.details.status : undefined,
+            };
+          }
+          throw fallbackErr;
+        }
       }
       if (err instanceof ApiError || err instanceof CliError) {
         return {
@@ -569,6 +809,73 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
       total: items.length,
       succeeded: items.length - failed,
       failed,
+      items,
+    },
+  };
+}
+
+async function documentsAttachmentsTool(ctx, args = {}) {
+  const doc = await readDocumentForAttachments(ctx, args);
+  const attachments = extractAttachmentRefsFromText(doc.text || "", ctx.profile?.baseUrl);
+
+  return {
+    tool: "documents.attachments",
+    profile: ctx.profile.id,
+    result: {
+      document: summarizeAttachmentDocument(doc),
+      total: attachments.length,
+      attachments,
+    },
+  };
+}
+
+async function attachmentsDownloadTool(ctx, args = {}) {
+  const id = extractAttachmentId(args.id || args.attachmentId || args.url || args.path);
+  if (!id) {
+    throw new CliError("attachments.download requires args.id or an attachment redirect args.url/path");
+  }
+
+  return {
+    tool: "attachments.download",
+    profile: ctx.profile.id,
+    result: await downloadAttachmentToFile(ctx, args, id),
+  };
+}
+
+async function documentsDownloadAttachmentsTool(ctx, args = {}) {
+  const doc = await readDocumentForAttachments(ctx, args);
+  const attachments = extractAttachmentRefsFromText(doc.text || "", ctx.profile?.baseUrl);
+  const concurrency = Math.max(1, Math.min(8, toInteger(args.concurrency, 3)));
+  const items = await mapLimit(attachments, concurrency, async (attachment, index) => {
+    try {
+      const saved = await downloadAttachmentToFile(ctx, args, attachment.id, index);
+      return {
+        ...attachment,
+        ...saved,
+      };
+    } catch (err) {
+      if (err instanceof ApiError || err instanceof CliError) {
+        return {
+          ...attachment,
+          ok: false,
+          error: err.message,
+          status: err instanceof ApiError ? err.details.status : undefined,
+        };
+      }
+      throw err;
+    }
+  });
+  const failed = items.filter((item) => !item.ok).length;
+
+  return {
+    tool: "documents.download_attachments",
+    profile: ctx.profile.id,
+    result: {
+      document: summarizeAttachmentDocument(doc),
+      total: attachments.length,
+      succeeded: items.length - failed,
+      failed,
+      outputDir: path.resolve(String(args.outputDir || path.join(defaultTmpDir(), "attachments"))),
       items,
     },
   };
@@ -3216,6 +3523,64 @@ export const EXTENDED_TOOLS = {
       "Review perQuery errors before treating missing issue refs as definitive.",
     ],
     handler: documentsIssueRefReportTool,
+  },
+  "documents.attachments": {
+    signature:
+      "documents.attachments(args: { id?: string; documentId?: string; url?: string; shareId?: string; maxAttempts?: number })",
+    description:
+      "Extract embedded Outline attachment references from a document body, including images rendered through /api/attachments.redirect.",
+    usageExample: {
+      tool: "documents.attachments",
+      args: {
+        url: "https://handbook.example.com/doc/example-title-AbCdEf1234",
+      },
+    },
+    bestPractices: [
+      "Use this after documents.info when you need to enumerate embedded images or file links without downloading bytes.",
+      "Pass a document URL directly; the tool resolves the Outline URL id suffix through documents.info.",
+      "Follow with attachments.download or documents.download_attachments to save files locally.",
+    ],
+    handler: documentsAttachmentsTool,
+  },
+  "attachments.download": {
+    signature:
+      "attachments.download(args: { id?: string; attachmentId?: string; url?: string; path?: string; outputDir?: string; filePath?: string; fileName?: string; overwrite?: boolean; maxAttempts?: number })",
+    description:
+      "Download one Outline attachment or embedded image through the authenticated attachments.redirect endpoint and save it locally.",
+    usageExample: {
+      tool: "attachments.download",
+      args: {
+        id: "15831936-7fef-4a58-b17b-121a65c3d787",
+        outputDir: "./outline-attachments",
+        overwrite: true,
+      },
+    },
+    bestPractices: [
+      "Prefer id for deterministic downloads; url/path may be an /api/attachments.redirect?id=... value copied from document markdown.",
+      "Use outputDir for generated names or filePath when the caller needs an exact path.",
+      "Inspect returned sha256, bytes, and contentType before handing the file to downstream tools.",
+    ],
+    handler: attachmentsDownloadTool,
+  },
+  "documents.download_attachments": {
+    signature:
+      "documents.download_attachments(args: { id?: string; documentId?: string; url?: string; shareId?: string; outputDir?: string; overwrite?: boolean; concurrency?: number; maxAttempts?: number })",
+    description:
+      "Extract all embedded Outline attachment references from a document and save each referenced file locally.",
+    usageExample: {
+      tool: "documents.download_attachments",
+      args: {
+        url: "https://handbook.example.com/doc/example-title-AbCdEf1234",
+        outputDir: "./outline-attachments",
+        overwrite: true,
+      },
+    },
+    bestPractices: [
+      "Run documents.attachments first when you only need metadata or want to choose a subset.",
+      "Keep concurrency modest for large image-heavy documents to avoid rate limits.",
+      "Use overwrite=true for repeatable automation into a scratch directory.",
+    ],
+    handler: documentsDownloadAttachmentsTool,
   },
   "documents.import_file": {
     signature:

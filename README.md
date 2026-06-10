@@ -42,6 +42,19 @@ outline-cli invoke documents.info \
   --args '{"id":"<document-id>","view":"summary"}'
 ```
 
+List and save embedded document images/files:
+
+```bash
+outline-cli invoke documents.attachments \
+  --args '{"url":"https://handbook.example.com/doc/example-title-AbCdEf1234"}'
+
+outline-cli invoke documents.download_attachments \
+  --args '{"url":"https://handbook.example.com/doc/example-title-AbCdEf1234","outputDir":"./outline-attachments","overwrite":true}'
+
+outline-cli invoke attachments.download \
+  --args '{"id":"<attachment-id>","outputDir":"./outline-attachments","overwrite":true}'
+```
+
 List only collection root pages:
 
 ```bash
@@ -163,6 +176,7 @@ Use this short operating pattern when an AI agent drives the CLI:
 9. List existing profiles before creating one with `outline-cli profile list`.
 10. For new profiles, prefer API key mode and guide users through base URL + API key generation (`<base-url>/settings/api-and-apps`) before `profile add`.
 11. If output is file-offloaded, read only the required fields via `tmp cat` + `jq`.
+12. For embedded images/files in document markdown, use `documents.attachments`, `attachments.download`, or `documents.download_attachments`; do not force `attachments.redirect` through `api.call` because it returns binary data.
 
 For structured AI playbooks and scenario guides:
 
@@ -221,6 +235,14 @@ Release prerequisites:
 - Clean working tree (unless you intentionally pass `--allow-dirty`)
 - `OUTLINE_ENTRY_BUILD_KEY` available in environment or `.env.local`
 - npm auth ready (`npm login`)
+
+Optional GitHub automation:
+
+- `.github/workflows/npm-auto-publish.yml` auto-publishes on pushes to `main` when `README.md` or `package.json` changes.
+- If `package.json` version changes, the workflow publishes that exact version.
+- If only docs metadata changes (for example `README.md`), the workflow cuts and publishes a patch release automatically.
+- Required repository secrets: `NPM_TOKEN` and `OUTLINE_ENTRY_BUILD_KEY`.
+- Ensure GitHub Actions can push to `main` and create tags in this repository.
 
 ## Security Notes
 

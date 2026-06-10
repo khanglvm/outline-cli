@@ -1,9 +1,9 @@
 import { CliError } from "./errors.js";
 
-const AI_SKILL_DATA_VERSION = "2026-03-07.1";
+const AI_SKILL_DATA_VERSION = "2026-06-10.1";
 const AI_HELP_SECTION_ID = "ai-skills";
 const QUICK_START_HELP_SECTION_ID = "quick-start-agent";
-const QUICK_START_HELP_VERSION = "2026-03-07.1";
+const QUICK_START_HELP_VERSION = "2026-06-10.1";
 
 const QUICK_START_AGENT_PLAYBOOK = {
   title: "outline-cli onboarding for non-expert users",
@@ -137,6 +137,7 @@ const QUICK_START_AGENT_PLAYBOOK = {
         "Create a draft release notes document with today's date.",
         "Append a short status update to document <document-id>.",
         "Find documents mentioning incident response in the last month.",
+        "Download the embedded images from document <document-url> into ./outline-attachments.",
         "Show who can access document <document-id>.",
         "Compare two documents and list key differences.",
         "Generate a TODO list from document <document-id>.",
@@ -172,6 +173,7 @@ const AI_GLOBAL_GUIDANCE = {
     "Prefer batch operations (queries, ids, or batch command) before multi-call loops.",
     "For heavy retrieval, use search.research with precisionMode + perQueryView/perQueryHitLimit to control token cost.",
     "When outputs offload to tmp files, read the new preview first, then inspect file content only when needed.",
+    "For embedded images/files, use documents.attachments or documents.download_attachments; attachments.redirect returns binary bytes and should not go through api.call.",
     "Keep mutating calls action-gated and explicit with performAction=true only at execute time.",
     "Capture audit evidence (events/revisions/policies) immediately after high-impact changes.",
   ],
@@ -358,6 +360,47 @@ const AI_SKILLS = [
     safetyChecks: [
       "Block patch apply when expected revision drifts.",
       "Never apply mutation from synthetic issue refs without doc hydration.",
+    ],
+  },
+  {
+    id: "embedded_attachment_access",
+    title: "Embedded attachment and image access",
+    scenarios: ["UC-08", "UC-12"],
+    objective: "Extract, download, and hand off files embedded in Outline documents, including markdown images.",
+    featureUpdates: [
+      "documents.attachments extracts /api/attachments.redirect references from document markdown.",
+      "attachments.download and documents.download_attachments save authenticated binary attachment bytes locally with contentType, byte count, and sha256 metadata.",
+    ],
+    sequence: [
+      {
+        step: 1,
+        tool: "documents.attachments",
+        purpose: "List embedded attachment IDs and source URLs without downloading bytes.",
+      },
+      {
+        step: 2,
+        tool: "attachments.download",
+        purpose: "Save one selected attachment/image to a local file.",
+      },
+      {
+        step: 3,
+        tool: "documents.download_attachments",
+        purpose: "Save every embedded file from a document into an output directory.",
+      },
+      {
+        step: 4,
+        tool: "documents.info",
+        purpose: "Re-read the document only when you need surrounding text context for downloaded files.",
+      },
+    ],
+    efficiencyTips: [
+      "Run documents.attachments first when you only need IDs or want to choose a subset.",
+      "Use a scratch outputDir plus overwrite=true for repeatable automation.",
+      "Keep download concurrency modest for image-heavy documents.",
+    ],
+    safetyChecks: [
+      "Do not use api.call for attachments.redirect; it is a binary endpoint.",
+      "Verify returned bytes, contentType, sha256, and filePath before downstream processing.",
     ],
   },
   {

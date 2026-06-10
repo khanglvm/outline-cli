@@ -695,6 +695,95 @@ test("import and file operation wrappers expose deterministic envelopes and acti
   }
 });
 
+test("attachment wrappers extract embedded refs and save binary downloads", async () => {
+  const firstId = "15831936-7fef-4a58-b17b-121a65c3d787";
+  const secondId = "a770acd6-af1f-42e8-ad06-77bcd201a35d";
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-attachments-"));
+  const calls = [];
+  const downloads = [];
+  const ctx = {
+    profile: {
+      id: "profile-hardening",
+      baseUrl: "https://handbook.example.com",
+    },
+    client: {
+      async call(method, body, options) {
+        calls.push({ method, body, options });
+        assert.equal(method, "documents.info");
+        return {
+          body: {
+            data: {
+              id: "doc-1",
+              title: "Attachment doc",
+              url: "/doc/attachment-doc-AbCdEf1234",
+              urlId: "AbCdEf1234",
+              collectionId: "collection-1",
+              parentDocumentId: null,
+              revision: 3,
+              updatedAt: "2026-06-10T00:00:00.000Z",
+              text: [
+                `![Flow](/api/attachments.redirect?id=${firstId} " =4764x1524")`,
+                `![Duplicate](/api/attachments.redirect?id=${firstId})`,
+                `![Screen](https://handbook.example.com/api/attachments.redirect?id=${secondId})`,
+              ].join("\n"),
+            },
+          },
+        };
+      },
+      async download(method, body, options) {
+        downloads.push({ method, body, options });
+        return {
+          status: 200,
+          headers: {
+            "content-type": "image/png",
+          },
+          body: Buffer.from(`image:${body.id}`),
+          url: `https://signed.example.com/${body.id}.png`,
+        };
+      },
+    },
+  };
+
+  try {
+    const refs = await EXTENDED_TOOLS["documents.attachments"].handler(ctx, {
+      url: "https://handbook.example.com/doc/attachment-doc-AbCdEf1234",
+    });
+    assert.equal(refs.result.document.id, "doc-1");
+    assert.equal(refs.result.total, 2);
+    assert.deepEqual(refs.result.attachments.map((item) => item.id), [firstId, secondId]);
+    assert.equal(refs.result.attachments[0].absoluteUrl, `https://handbook.example.com/api/attachments.redirect?id=${firstId}`);
+
+    const single = await EXTENDED_TOOLS["attachments.download"].handler(ctx, {
+      url: `/api/attachments.redirect?id=${firstId}`,
+      filePath: path.join(tmpDir, "single.png"),
+      overwrite: true,
+    });
+    assert.equal(single.result.id, firstId);
+    assert.equal(single.result.contentType, "image/png");
+    assert.equal(await fs.readFile(single.result.filePath, "utf8"), `image:${firstId}`);
+
+    const all = await EXTENDED_TOOLS["documents.download_attachments"].handler(ctx, {
+      documentId: "doc-1",
+      outputDir: tmpDir,
+      overwrite: true,
+      concurrency: 1,
+    });
+    assert.equal(all.result.total, 2);
+    assert.equal(all.result.succeeded, 2);
+    assert.equal(all.result.failed, 0);
+    assert.ok(all.result.items.every((item) => item.ok === true && item.bytes > 0 && item.sha256));
+    assert.deepEqual(downloads.map((call) => call.method), [
+      "attachments.redirect",
+      "attachments.redirect",
+      "attachments.redirect",
+    ]);
+    assert.deepEqual(downloads.map((call) => call.body.id), [firstId, firstId, secondId]);
+    assert.equal(calls.length, 2);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
   assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
@@ -747,6 +836,25 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
       collectionId: "collection-1",
       publish: false,
       performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.attachments", {
+      url: "https://handbook.example.com/doc/attachment-doc-AbCdEf1234",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("attachments.download", {
+      url: "/api/attachments.redirect?id=15831936-7fef-4a58-b17b-121a65c3d787",
+      outputDir: "./tmp/attachments",
+      overwrite: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.download_attachments", {
+      documentId: "doc-1",
+      outputDir: "./tmp/attachments",
+      concurrency: 2,
     })
   );
   assert.doesNotThrow(() => validateToolArgs("file_operations.list", { limit: 10 }));
@@ -820,6 +928,29 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
 
   assert.throws(
     () => validateToolArgs("documents.import_file", { performAction: true }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.filePath"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("attachments.download", { outputDir: "./tmp" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("attachments.download", {
+        id: "15831936-7fef-4a58-b17b-121a65c3d787",
+        filePath: "./tmp/image.png",
+        outputDir: "./tmp",
+      }),
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.filePath"));

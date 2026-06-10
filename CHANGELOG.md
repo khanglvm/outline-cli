@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7 - 2026-06-10
+
+- Changes since `v0.1.6`.
+- feat: add Outline attachment downloads (e7d3ec0)
+
 ## 0.1.6 - 2026-03-08
 
 - Changes since `v0.1.5`.

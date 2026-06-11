@@ -171,6 +171,8 @@ const AI_GLOBAL_GUIDANCE = {
     "Start with the best-fit task tool first; open help/contracts only after validation fails or capability is unclear.",
     "Use ids/summary views first, then hydrate only selected records.",
     "Prefer batch operations (queries, ids, or batch command) before multi-call loops.",
+    "Pass documentQuery/refs, collectionQuery/collectionRefs, or userQuery/userRefs directly to documents.answer, documents.answer_batch, documents.search, documents.list, search.expand, search.research, or events.list when filtering by remembered names.",
+    "Use documents.resolve or documents.resolve_urls with refresh=false for zero-network remembered title or URL resolution.",
     "For heavy retrieval, use search.research with precisionMode + perQueryView/perQueryHitLimit to control token cost.",
     "When outputs offload to tmp files, read the new preview first, then inspect file content only when needed.",
     "For embedded images/files, use documents.attachments or documents.download_attachments; attachments.redirect returns binary bytes and should not go through api.call.",
@@ -192,8 +194,10 @@ const AI_SKILLS = [
     scenarios: ["UC-04", "UC-15"],
     objective: "Answer FAQ-style questions with bounded scope and deterministic follow-up.",
     featureUpdates: [
-      "documents.answer and documents.answer_batch wrappers for permission-aware AI responses.",
-      "search.research now supports precisionMode, reranking diversification, and compact per-query response shaping.",
+      "documents.answer and documents.answer_batch wrappers for permission-aware AI responses with remembered document/collection/user scopes.",
+      "search.research now supports precisionMode, reranking diversification, compact per-query response shaping, and remembered collection/user filters.",
+      "documents.search, documents.list, and search.expand can resolve remembered collection/user filters before retrieval.",
+      "documents.resolve and documents.resolve_urls can warm candidates from local memory or run memory-only with refresh=false.",
     ],
     sequence: [
       {
@@ -219,6 +223,8 @@ const AI_SKILLS = [
     ],
     efficiencyTips: [
       "Use precisionMode=precision and perQueryView=ids with a small perQueryHitLimit for stable token budgets.",
+      "Use documentQuery, collectionQuery, or userQuery filters on documents.answer, documents.answer_batch, documents.search, search.expand, or search.research when the user names a scope but not IDs.",
+      "Use documents.resolve_urls refresh=false when the user pasted an Outline URL that was seen in a prior session.",
       "Enable includeBacklinks only when one-call context gathering is worth extra API work.",
       "Keep batch concurrency low for stable latency and predictable cost.",
     ],
@@ -233,37 +239,36 @@ const AI_SKILLS = [
     scenarios: ["UC-05"],
     objective: "Create, update, and revoke share links with explicit auditability.",
     featureUpdates: [
-      "shares.list/info/create/update/revoke wrappers with deterministic envelopes.",
+      "shares.list/info wrappers can resolve remembered document refs before read operations.",
+      "shares.create can resolve remembered document refs before creating share links.",
+      "shares.update/revoke wrappers retain deterministic envelopes.",
       "Mutation gating retained across sharing lifecycle operations.",
     ],
     sequence: [
       {
         step: 1,
-        tool: "documents.search",
-        purpose: "Resolve target public-help docs by query.",
+        tool: "shares.create",
+        purpose: "Create share artifact for an approved exact document ID or remembered document ref.",
       },
       {
         step: 2,
-        tool: "shares.create",
-        purpose: "Create share artifact only for approved doc targets.",
-      },
-      {
-        step: 3,
         tool: "shares.update",
         purpose: "Apply controlled publish/visibility updates.",
       },
       {
-        step: 4,
+        step: 3,
         tool: "shares.info",
         purpose: "Confirm final share state and metadata.",
       },
       {
-        step: 5,
+        step: 4,
         tool: "shares.revoke",
         purpose: "Revoke stale or deprecated share links.",
       },
     ],
     efficiencyTips: [
+      "Pass documentQuery/refs/url/urlId directly to shares.create when creating a link for a known document by title or URL.",
+      "Pass documentQuery/refs/url/urlId directly to shares.list when auditing share links for a known document.",
       "Persist share ids once discovered to avoid repeated broad list calls.",
       "Use summary view for routine checks; hydrate full payload only for exceptions.",
     ],
@@ -279,7 +284,7 @@ const AI_SKILLS = [
     objective: "Apply least-privilege access controls and verify visibility by group and collection.",
     featureUpdates: [
       "groups.memberships wrapper added for group membership reads.",
-      "documents.users and collection/document membership wrappers available for audits.",
+      "documents.users and collection/document membership wrappers can resolve remembered document and collection names before audit reads.",
     ],
     sequence: [
       {
@@ -310,6 +315,8 @@ const AI_SKILLS = [
     ],
     efficiencyTips: [
       "Prefer group grants over per-user grants for lower operational churn.",
+      "Pass query/refs/url/urlId directly to document and collection access wrappers to avoid separate resolve calls.",
+      "Use documentQuery/refs, collectionQuery/collectionRefs, and userQuery/userRefs directly on events.list for scoped audit evidence.",
       "Use paginated memberships reads for deterministic audits.",
     ],
     safetyChecks: [
@@ -368,7 +375,7 @@ const AI_SKILLS = [
     scenarios: ["UC-08", "UC-12"],
     objective: "Extract, download, and hand off files embedded in Outline documents, including markdown images.",
     featureUpdates: [
-      "documents.attachments extracts /api/attachments.redirect references from document markdown.",
+      "documents.attachments extracts /api/attachments.redirect references from document markdown and can resolve remembered document titles, URLs, URL ids, and share ids directly.",
       "attachments.download and documents.download_attachments save authenticated binary attachment bytes locally with contentType, byte count, and sha256 metadata.",
     ],
     sequence: [
@@ -394,6 +401,7 @@ const AI_SKILLS = [
       },
     ],
     efficiencyTips: [
+      "Pass query, refs, url, urlId, or shareId directly to documents.attachments or documents.download_attachments instead of opening the document first.",
       "Run documents.attachments first when you only need IDs or want to choose a subset.",
       "Use a scratch outputDir plus overwrite=true for repeatable automation.",
       "Keep download concurrency modest for image-heavy documents.",
@@ -410,36 +418,53 @@ const AI_SKILLS = [
     objective: "Plan and apply edits with revision diff evidence and deterministic rollback paths.",
     featureUpdates: [
       "revisions.diff and documents.apply_patch_safe wrappers added.",
+      "documents.diff can resolve remembered document titles, URLs, URL ids, and share ids before comparing proposed text.",
+      "documents.safe_update, documents.apply_patch, and documents.apply_patch_safe can resolve remembered document titles, URLs, URL ids, and share ids before guarded writes.",
+      "documents.safe_update and documents.apply_patch_safe accept expectedRevision='latest' for one-call edits against the current revision read inside the tool.",
+      "revisions.list can resolve remembered document titles, URLs, URL ids, and share ids before listing history.",
+      "revisions.diff can resolve remembered document refs and compare the latest two revisions without a separate revisions.list call.",
+      "documents.archived and documents.deleted can resolve remembered collection names before history/trash listing.",
       "Revision safety checks included in schema validation and tests.",
     ],
     sequence: [
       {
         step: 1,
-        tool: "documents.info",
-        purpose: "Read target document and revision baseline.",
+        tool: "documents.diff",
+        purpose: "Resolve target document refs and compare proposed text before planning a write.",
       },
       {
         step: 2,
-        tool: "revisions.list",
-        purpose: "Inspect recent revision timeline for concurrent edits.",
+        tool: "documents.open",
+        purpose: "Read a revision baseline only when the edit needs separate human or agent review before mutation.",
       },
       {
         step: 3,
-        tool: "revisions.diff",
-        purpose: "Diff candidate revisions for precise change context.",
+        tool: "revisions.list",
+        purpose: "Resolve target document refs and inspect recent revision timeline for concurrent edits.",
       },
       {
         step: 4,
-        tool: "documents.apply_patch_safe",
-        purpose: "Apply guarded patch with explicit expectedRevision.",
+        tool: "revisions.diff",
+        purpose: "Diff explicit revision IDs or the latest two revisions for precise change context.",
       },
       {
         step: 5,
+        tool: "documents.apply_patch_safe",
+        purpose: "Apply guarded patch with a numeric expectedRevision or expectedRevision='latest'.",
+      },
+      {
+        step: 6,
         tool: "revisions.info",
         purpose: "Confirm final revision and patch provenance.",
       },
     ],
     efficiencyTips: [
+      "Pass query, refs, url, urlId, or shareId directly to documents.diff instead of opening the document first.",
+      "Pass query, refs, url, urlId, or shareId directly to documents.safe_update or documents.apply_patch_safe when applying a guarded write.",
+      "Use expectedRevision='latest' to avoid a separate read turn when the requested edit should target the current server revision.",
+      "Pass query, refs, url, urlId, or shareId directly to revisions.list when the user asks for history by title.",
+      "Pass query, refs, url, urlId, or shareId directly to revisions.diff with revisionPair=latest when the user asks what changed recently.",
+      "Pass collectionQuery/collectionRefs directly to documents.archived or documents.deleted when reviewing collection-scoped history.",
       "Prefer small patch hunks over full document rewrite when coordinating multiple agents.",
       "Use summary views for revision triage, then hydrate final comparison only.",
     ],
@@ -494,7 +519,8 @@ const AI_SKILLS = [
     scenarios: ["UC-11"],
     objective: "Generate consistent documents from templates with strict placeholder enforcement.",
     featureUpdates: [
-      "templates.extract_placeholders and documents.create_from_template wrappers added.",
+      "templates.list/info observations populate local template memory.",
+      "templates.extract_placeholders and documents.create_from_template wrappers resolve remembered template names before acting.",
       "Strict unresolved placeholder checks to block unsafe publishes.",
     ],
     sequence: [
@@ -520,6 +546,8 @@ const AI_SKILLS = [
       },
     ],
     efficiencyTips: [
+      "Pass templateQuery/templateRef/refs directly when the user names a template but does not provide an ID.",
+      "Use memory.lookup or memory.resolve with type=template when you need to inspect remembered template candidates.",
       "Reuse extracted placeholder keys to validate payload before creation.",
       "Use summary view for pipeline loop status checks.",
     ],
@@ -575,7 +603,9 @@ const AI_SKILLS = [
     objective: "Automate users/groups/permissions lifecycle changes with explicit verification.",
     featureUpdates: [
       "users lifecycle wrappers (invite, update_role, activate, suspend) added.",
-      "documents.users and membership wrappers improve scoped permission checks.",
+      "users.info, groups.info, and groups.memberships can resolve remembered names/emails before read operations.",
+      "documents.users and membership wrappers resolve remembered document and collection refs for scoped permission checks.",
+      "Permission mutation wrappers can resolve both the target resource and user/group principal before action-gated add/remove calls.",
     ],
     sequence: [
       {
@@ -610,11 +640,13 @@ const AI_SKILLS = [
       },
     ],
     efficiencyTips: [
-      "Batch read operations (ids/queries) before any mutation stage.",
+      "Pass query/refs directly to users.info, groups.info, and groups.memberships when the agent only has a remembered name or email.",
+      "Use documentQuery/query plus userQuery or groupQuery on access add/remove tools instead of separate resolve calls when the names are already clear.",
+      "Batch broad user/group reads before mutations, then pass document or collection refs directly to access verification wrappers.",
       "Separate planning output from execution payload for reliable reruns.",
     ],
     safetyChecks: [
-      "Never combine unknown target resolution and mutation in the same step.",
+      "Never execute add/remove access calls from weak or ambiguous resolution candidates.",
       "Use performAction=true only on approved write calls.",
     ],
   },
@@ -705,6 +737,8 @@ const AI_SKILLS = [
     objective: "Build deterministic review queues and close loops with comment evidence.",
     featureUpdates: [
       "comments.review_queue wrapper added for scoped editorial queues.",
+      "comments.list can resolve remembered document refs for direct thread hydration.",
+      "comments.create can resolve remembered document refs before creating comments.",
       "Thread/reply and anchor metadata can be included for full review context.",
     ],
     sequence: [
@@ -720,17 +754,24 @@ const AI_SKILLS = [
       },
       {
         step: 3,
+        tool: "comments.create",
+        purpose: "Create an approved comment directly against an exact document ID or remembered document ref.",
+      },
+      {
+        step: 4,
         tool: "documents.info",
         purpose: "Hydrate only docs requiring editorial action.",
       },
       {
-        step: 4,
+        step: 5,
         tool: "events.list",
         purpose: "Track review completion and discussion churn.",
       },
     ],
     efficiencyTips: [
       "Scope review_queue to explicit documentIds whenever possible.",
+      "Pass query/refs/url/urlId directly to comments.list when drilling into one remembered document.",
+      "Pass query/refs/url/urlId directly to comments.create when adding an approved comment to a remembered document.",
       "Use limitPerDocument to control queue growth and rerun with cursor-like cadence.",
     ],
     safetyChecks: [
@@ -746,6 +787,7 @@ const AI_SKILLS = [
     featureUpdates: [
       "documents.plan_terminology_refactor wrapper added for glossary/map-driven planning.",
       "Plan output is compatible with documents.batch_update execution workflows.",
+      "documents.batch_update can resolve per-item document titles, URLs, URL ids, and refs when expectedRevision is supplied.",
     ],
     sequence: [
       {
@@ -776,6 +818,7 @@ const AI_SKILLS = [
     ],
     efficiencyTips: [
       "Use map/glossary inputs with explicit scope filters to bound search space.",
+      "For small approved batches, pass query/refs/url directly in updates[] with expectedRevision='latest' to avoid a separate ID resolution turn.",
       "Review plan hashes and impact counts before any batch apply.",
     ],
     safetyChecks: [

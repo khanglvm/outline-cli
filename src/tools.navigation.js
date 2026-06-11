@@ -1,6 +1,7 @@
 import { CliError } from "./errors.js";
 import { compactValue, ensureStringArray, mapLimit, toInteger } from "./utils.js";
 import { summarizeSafeText } from "./summary-redaction.js";
+import { collectionsOpenTool, memoryResolveTool } from "./memory-store.js";
 
 function normalizeDocumentRow(row, view = "summary", excerptChars = 220) {
   if (!row) {
@@ -68,6 +69,186 @@ function normalizeSearchHit(hit, view = "summary", contextChars = 220) {
   }
 
   return summary;
+}
+
+function nonEmptyString(value) {
+  const text = String(value || "").trim();
+  return text || "";
+}
+
+function normalizeMemoryScoreThreshold(value, fallback = 85) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  if (numeric >= 0 && numeric <= 1) {
+    return numeric * 100;
+  }
+  return numeric;
+}
+
+function firstFilterReference(args = {}, keys = [], arrayKeys = []) {
+  for (const key of keys) {
+    const value = nonEmptyString(args[key]);
+    if (value) {
+      return { key, value };
+    }
+  }
+  for (const key of arrayKeys) {
+    if (!Array.isArray(args[key])) {
+      continue;
+    }
+    for (const item of args[key]) {
+      const value = nonEmptyString(item);
+      if (value) {
+        return { key, value };
+      }
+    }
+  }
+  return null;
+}
+
+function resolutionFromFilterCandidate(resolved, ref, config, args = {}) {
+  const candidates = resolved.result?.candidates || [];
+  const topCandidate = candidates[0] || null;
+  const strict = args.strict !== false;
+  const strictThreshold = Math.max(0, toInteger(args.strictThreshold, 85));
+  const topScore = Number(topCandidate?.score || 0);
+
+  if (!topCandidate) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "not_found",
+        },
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+  if (strict && topScore < strictThreshold) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "low_confidence",
+          strictThreshold,
+        },
+        candidate: topCandidate,
+        candidates,
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+
+  const live = (resolved.result?.live || []).find((item) => item?.ok && item.candidate?.id === topCandidate.id)
+    || (resolved.result?.live || [])[0]
+    || null;
+  if (live && !live.ok) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "hydrate_failed",
+          error: live.error,
+          statusCode: live.status,
+        },
+        candidate: topCandidate,
+        memory: resolved.result?.memory || live.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: topCandidate.id,
+    resultField: config.resultField,
+    resolution: compactValue({
+      mode: "memory",
+      kind: ref.key,
+      value: ref.value,
+      id: topCandidate.id,
+      name: topCandidate.name,
+      email: topCandidate.email,
+      candidate: topCandidate,
+      live,
+      memory: resolved.result?.memory || null,
+    }) || { id: topCandidate.id },
+  };
+}
+
+async function resolveFilter(ctx, args = {}, config) {
+  const exact = nonEmptyString(args[config.idKey]);
+  if (exact) {
+    return { id: exact, resultField: config.resultField };
+  }
+  const ref = firstFilterReference(args, config.queryKeys, config.arrayQueryKeys);
+  if (!ref) {
+    return null;
+  }
+
+  const threshold = Math.max(0, normalizeMemoryScoreThreshold(args.strictThreshold, 85));
+  const resolved = await memoryResolveTool(ctx, {
+    query: ref.value,
+    type: config.type,
+    profile: args.profile,
+    limit: Math.max(1, toInteger(args.resolveLimit, 5)),
+    hydrateLimit: 1,
+    maxAgeHours: args.maxAgeHours,
+    minScore: args.minScore === undefined && args.strict !== false ? threshold : args.minScore,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore === undefined && args.strict !== false ? threshold : args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    refresh: args.refresh !== false,
+    maxAttempts: args.maxAttempts,
+  });
+
+  return {
+    ...resolutionFromFilterCandidate(resolved, ref, config, args),
+    resultField: config.resultField,
+  };
+}
+
+async function resolveRetrievalFilters(ctx, args = {}) {
+  const filters = [
+    await resolveFilter(ctx, args, {
+      type: "collection",
+      idKey: "collectionId",
+      resultField: "collectionId",
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    }),
+    await resolveFilter(ctx, args, {
+      type: "user",
+      idKey: "userId",
+      resultField: "userId",
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    }),
+  ].filter(Boolean);
+
+  const failed = filters.find((filter) => filter?.error);
+  if (failed) {
+    return { error: failed.error, resultField: failed.resultField };
+  }
+
+  const ids = {};
+  const resolution = {};
+  for (const filter of filters) {
+    ids[filter.resultField] = filter.id;
+    if (filter.resolution) {
+      resolution[filter.resultField] = filter.resolution;
+    }
+  }
+
+  return {
+    ids,
+    resolution: Object.keys(resolution).length > 0 ? resolution : null,
+  };
 }
 
 function normalizeRanking(ranking) {
@@ -638,7 +819,8 @@ async function researchSingleQuery(ctx, query, args, maxAttempts, contextChars) 
 
   const baseBody = compactValue({
     query,
-    collectionId: args.collectionId,
+    collectionId: args.resolvedCollectionId || args.collectionId,
+    userId: args.resolvedUserId || args.userId,
     limit: limitPerQuery,
     offset,
   }) || {};
@@ -736,8 +918,32 @@ async function searchResearchTool(ctx, args) {
     : modeConfig.mmrLambda;
   const diversify = args.diversify !== false;
 
+  const resolvedFilters = await resolveRetrievalFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "search.research",
+      profile: ctx.profile.id,
+      queryCount: queries.length,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        queries,
+        perQuery: [],
+        merged: [],
+        expanded: [],
+      }) || {},
+    };
+  }
+  const searchArgs = {
+    ...args,
+    resolvedCollectionId: resolvedFilters.ids?.collectionId,
+    resolvedUserId: resolvedFilters.ids?.userId,
+  };
+
   const perQueryRaw = await mapLimit(queries, concurrency, async (query) =>
-    researchSingleQuery(ctx, query, args, maxAttempts, contextChars)
+    researchSingleQuery(ctx, query, searchArgs, maxAttempts, contextChars)
   );
 
   const allHits = perQueryRaw.flatMap((item) => item.result.hits || []);
@@ -884,6 +1090,7 @@ async function searchResearchTool(ctx, args) {
     result: {
       question: args.question,
       queries,
+      resolution: resolvedFilters.resolution,
       ...(includePerQuery ? { perQuery } : {}),
       merged: mergedOut,
       ...(includeExpanded ? { expanded } : {}),
@@ -1097,6 +1304,62 @@ function buildCandidateFromDocument(document, { confidence = 1, source = "explic
   };
 }
 
+function buildCandidateFromMemory(item, { source = "memory", query = "" } = {}) {
+  if (!item?.id) {
+    return null;
+  }
+  const score = Number(item.score || 0);
+  return {
+    id: String(item.id),
+    title: item.title || item.name,
+    collectionId: item.collectionId,
+    parentDocumentId: item.parentDocumentId,
+    updatedAt: item.updatedAt,
+    publishedAt: item.publishedAt,
+    urlId: item.urlId,
+    ranking: Number.isFinite(score) ? score : undefined,
+    confidence: clamp(Number.isFinite(score) ? score / 100 : 0, 0, 1),
+    sources: [source],
+    context: query ? `remembered match for ${query}` : "remembered match",
+    document: item,
+  };
+}
+
+async function loadRememberedDocumentCandidates(ctx, args = {}, ref = {}) {
+  if (args.memory === false) {
+    return {
+      candidates: [],
+      memory: null,
+    };
+  }
+
+  const resolved = await memoryResolveTool(ctx, compactValue({
+    query: ref.query,
+    url: ref.url,
+    urlId: ref.urlId,
+    id: ref.id,
+    type: "document",
+    profile: args.profile,
+    limit: Math.max(1, toInteger(args.limit, 8)),
+    minScore: args.memoryMinScore ?? args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: false,
+    fallbackSearch: false,
+    collectionId: args.resolvedCollectionId || args.collectionId,
+    view: "summary",
+    maxAttempts: args.maxAttempts,
+  }) || {
+    type: "document",
+    refresh: false,
+    fallbackSearch: false,
+  });
+
+  return {
+    candidates: resolved.result?.candidates || [],
+    memory: resolved.result?.memory || null,
+  };
+}
+
 function normalizeStatusFilter(statusFilter) {
   if (statusFilter === undefined || statusFilter === null) {
     return undefined;
@@ -1150,10 +1413,51 @@ async function resolveSingleQuery(ctx, query, args) {
   const maxAttempts = toInteger(args.maxAttempts, 2);
   const limit = Math.max(1, toInteger(args.limit, 8));
   const strict = !!args.strict;
+  const view = args.view || "summary";
+  const excerptChars = toInteger(args.excerptChars, 220);
+  const byId = new Map();
+  const remembered = await loadRememberedDocumentCandidates(ctx, args, { query });
+
+  for (const item of remembered.candidates) {
+    const candidate = buildCandidateFromMemory(item, { query });
+    if (candidate?.id) {
+      byId.set(candidate.id, candidate);
+    }
+  }
+
+  if (args.refresh === false) {
+    const candidates = Array.from(byId.values()).sort((a, b) => {
+      if (b.confidence !== a.confidence) {
+        return b.confidence - a.confidence;
+      }
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    });
+    const strictThreshold = Number.isFinite(Number(args.strictThreshold))
+      ? Number(args.strictThreshold)
+      : 0.82;
+    const strictCandidates = strict ? candidates.filter((item) => item.confidence >= strictThreshold) : candidates;
+    const trimmed = strictCandidates.slice(0, limit);
+    return {
+      query,
+      bestMatch: trimmed[0] ? makeCandidateView(trimmed[0], view, excerptChars) : null,
+      candidates: trimmed.map((item) => makeCandidateView(item, view, excerptChars)),
+      stats: {
+        titleHits: 0,
+        semanticHits: 0,
+        memoryHits: remembered.candidates.length,
+        candidateCount: trimmed.length,
+        strict,
+        strictThreshold,
+        memoryOnly: true,
+      },
+      memory: remembered.memory,
+    };
+  }
 
   const common = compactValue({
     query,
-    collectionId: args.collectionId,
+    collectionId: args.resolvedCollectionId || args.collectionId,
+    userId: args.resolvedUserId || args.userId,
     limit,
     offset: 0,
   }) || {};
@@ -1175,8 +1479,6 @@ async function resolveSingleQuery(ctx, query, args) {
         );
 
   const semanticHits = Array.isArray(semanticResponse?.body?.data) ? semanticResponse.body.data : [];
-
-  const byId = new Map();
 
   for (const hit of titleHits) {
     const id = hit?.id;
@@ -1202,6 +1504,15 @@ async function resolveSingleQuery(ctx, query, args) {
       sources: ["titles"],
       document: hit,
     };
+
+    const existing = byId.get(id);
+    if (existing) {
+      existing.confidence = Math.max(existing.confidence, candidate.confidence);
+      existing.sources = uniqueStrings([...(existing.sources || []), "titles"]);
+      existing.document = { ...existing.document, ...hit };
+      existing.text = existing.text || hit.text;
+      continue;
+    }
 
     byId.set(id, candidate);
   }
@@ -1272,9 +1583,6 @@ async function resolveSingleQuery(ctx, query, args) {
   const bestRaw = candidates[0] || null;
   const bestMatch = bestRaw && (!strict || bestRaw.confidence >= strictThreshold) ? bestRaw : null;
 
-  const view = args.view || "summary";
-  const excerptChars = toInteger(args.excerptChars, 220);
-
   return {
     query,
     bestMatch: bestMatch ? makeCandidateView(bestMatch, view, excerptChars) : null,
@@ -1282,10 +1590,12 @@ async function resolveSingleQuery(ctx, query, args) {
     stats: {
       titleHits: titleHits.length,
       semanticHits: semanticHits.length,
+      memoryHits: remembered.candidates.length,
       candidateCount: candidates.length,
       strict,
       strictThreshold,
     },
+    memory: remembered.memory,
   };
 }
 
@@ -1295,8 +1605,29 @@ async function documentsResolveTool(ctx, args) {
     throw new CliError("documents.resolve requires args.query or args.queries[]");
   }
 
+  const resolvedFilters = await resolveRetrievalFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "documents.resolve",
+      profile: ctx.profile.id,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        perQuery: [],
+        mergedBestMatches: [],
+      }) || {},
+    };
+  }
+  const resolveArgs = {
+    ...args,
+    resolvedCollectionId: resolvedFilters.ids?.collectionId,
+    resolvedUserId: resolvedFilters.ids?.userId,
+  };
+
   const perQuery = await mapLimit(queries, Math.max(1, toInteger(args.concurrency, 4)), async (query) =>
-    resolveSingleQuery(ctx, query, args)
+    resolveSingleQuery(ctx, query, resolveArgs)
   );
 
   if (queries.length === 1 && !args.forceGroupedResult) {
@@ -1304,7 +1635,10 @@ async function documentsResolveTool(ctx, args) {
       tool: "documents.resolve",
       profile: ctx.profile.id,
       query: perQuery[0].query,
-      result: perQuery[0],
+      result: {
+        ...perQuery[0],
+        resolution: resolvedFilters.resolution,
+      },
     };
   }
 
@@ -1320,6 +1654,7 @@ async function documentsResolveTool(ctx, args) {
     result: {
       perQuery,
       mergedBestMatches,
+      resolution: resolvedFilters.resolution,
     },
   };
 }
@@ -1336,6 +1671,7 @@ async function resolveSingleUrlReference(ctx, rawUrl, args) {
   const candidateMap = new Map();
   const warnings = [];
   let shareLookupAttempted = false;
+  const remembered = await loadRememberedDocumentCandidates(ctx, args, { url: rawUrl });
 
   if (parsed.validUrl && args.strictHost === true && parsed.matchesProfileHost === false) {
     warnings.push("host_mismatch_skipped");
@@ -1351,6 +1687,52 @@ async function resolveSingleUrlReference(ctx, rawUrl, args) {
         strictThreshold,
         shareLookupAttempted,
       },
+      warnings,
+    };
+  }
+
+  for (const item of remembered.candidates) {
+    const memoryCandidate = buildCandidateFromMemory(item, { source: "memory_url", query: rawUrl });
+    if (!memoryCandidate?.id) {
+      continue;
+    }
+    candidateMap.set(memoryCandidate.id, {
+      ...memoryCandidate,
+      rawConfidence: memoryCandidate.confidence,
+      matchingReasons: ["memory"],
+      matchedQueries: [],
+      urlIdHintMatched: parsed.urlIdHints.length > 0 && parsed.urlIdHints.includes(String(memoryCandidate.urlId || "")),
+    });
+  }
+
+  if (args.refresh === false) {
+    const memoryCandidates = Array.from(candidateMap.values()).sort((a, b) => {
+      const confidenceDiff = Number(b.confidence || 0) - Number(a.confidence || 0);
+      if (confidenceDiff !== 0) {
+        return confidenceDiff;
+      }
+      return String(a.title || "").localeCompare(String(b.title || ""));
+    });
+    const strictCandidates = strict
+      ? memoryCandidates.filter((item) => Number(item.confidence || 0) >= strictThreshold)
+      : memoryCandidates;
+    const trimmedCandidates = strictCandidates.slice(0, limit);
+    const bestMatch = trimmedCandidates[0] || null;
+    return {
+      url: parsed.input,
+      parsed,
+      bestMatch: bestMatch ? shapeResolveUrlCandidate(bestMatch, view, excerptChars) : null,
+      candidates: trimmedCandidates.map((item) => shapeResolveUrlCandidate(item, view, excerptChars)),
+      stats: {
+        queryCount: 0,
+        candidateCount: trimmedCandidates.length,
+        strict,
+        strictThreshold,
+        shareLookupAttempted,
+        memoryHits: remembered.candidates.length,
+        memoryOnly: true,
+      },
+      memory: remembered.memory,
       warnings,
     };
   }
@@ -1489,7 +1871,9 @@ async function resolveSingleUrlReference(ctx, rawUrl, args) {
       strict,
       strictThreshold,
       shareLookupAttempted,
+      memoryHits: remembered.candidates.length,
     },
+    memory: remembered.memory,
     warnings,
   };
 }
@@ -1501,15 +1885,39 @@ async function documentsResolveUrlsTool(ctx, args) {
     throw new CliError("documents.resolve_urls requires args.url or args.urls[]");
   }
 
+  const resolvedFilters = await resolveRetrievalFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "documents.resolve_urls",
+      profile: ctx.profile.id,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        perUrl: [],
+        mergedBestMatches: [],
+      }) || {},
+    };
+  }
+  const resolveArgs = {
+    ...args,
+    resolvedCollectionId: resolvedFilters.ids?.collectionId,
+    resolvedUserId: resolvedFilters.ids?.userId,
+  };
+
   const concurrency = Math.max(1, toInteger(args.concurrency, 4));
-  const perUrl = await mapLimit(urls, concurrency, async (url) => resolveSingleUrlReference(ctx, url, args));
+  const perUrl = await mapLimit(urls, concurrency, async (url) => resolveSingleUrlReference(ctx, url, resolveArgs));
 
   if (urls.length === 1 && !args.forceGroupedResult) {
     return {
       tool: "documents.resolve_urls",
       profile: ctx.profile.id,
       url: perUrl[0].url,
-      result: perUrl[0],
+      result: {
+        ...perUrl[0],
+        resolution: resolvedFilters.resolution,
+      },
     };
   }
 
@@ -1525,6 +1933,7 @@ async function documentsResolveUrlsTool(ctx, args) {
     result: {
       perUrl,
       mergedBestMatches,
+      resolution: resolvedFilters.resolution,
     },
   };
 }
@@ -1838,9 +2247,80 @@ function buildTree({ docs, view, maxDepth }) {
   return { tree, rootCount: roots.length };
 }
 
+async function resolveCollectionForTree(ctx, args) {
+  if (args.collectionId) {
+    return {
+      ok: true,
+      collectionId: args.collectionId,
+      mode: "collectionId",
+      collection: null,
+      memory: null,
+    };
+  }
+
+  const refArgs = compactValue({
+    query: args.query,
+    id: args.id,
+    urlId: args.urlId,
+    url: args.url,
+    profile: args.profile,
+    limit: args.resolveLimit || args.limit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    view: "summary",
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!refArgs.query && !refArgs.id && !refArgs.urlId && !refArgs.url) {
+    throw new CliError("collections.tree requires args.collectionId, args.id, args.query, args.urlId, or args.url");
+  }
+
+  const opened = await collectionsOpenTool(ctx, refArgs);
+  if (!opened.result?.ok || !opened.result?.collection?.id) {
+    return {
+      ok: false,
+      status: opened.result?.status || "not_found",
+      collectionId: null,
+      collection: opened.result?.collection || null,
+      candidates: opened.result?.candidates,
+      candidate: opened.result?.candidate,
+      memory: opened.result?.memory,
+    };
+  }
+
+  return {
+    ok: true,
+    collectionId: opened.result.collection.id,
+    mode: opened.result.mode,
+    collection: opened.result.collection,
+    candidate: opened.result.candidate,
+    memory: opened.result.memory,
+  };
+}
+
 async function collectionsTreeTool(ctx, args) {
-  if (!args.collectionId) {
-    throw new CliError("collections.tree requires args.collectionId");
+  const resolvedCollection = await resolveCollectionForTree(ctx, args);
+  if (!resolvedCollection.ok) {
+    return {
+      tool: "collections.tree",
+      profile: ctx.profile.id,
+      collectionId: null,
+      result: {
+        ok: false,
+        status: resolvedCollection.status,
+        collection: null,
+        candidate: resolvedCollection.candidate,
+        candidates: resolvedCollection.candidates,
+        memory: resolvedCollection.memory,
+        tree: [],
+      },
+    };
   }
 
   const includeDrafts = !!args.includeDrafts;
@@ -1854,7 +2334,7 @@ async function collectionsTreeTool(ctx, args) {
   for (let page = 0; page < maxPages; page += 1) {
     const offset = page * pageSize;
     const body = compactValue({
-      collectionId: args.collectionId,
+      collectionId: resolvedCollection.collectionId,
       limit: pageSize,
       offset,
       sort: args.sort || "index",
@@ -1878,8 +2358,15 @@ async function collectionsTreeTool(ctx, args) {
   return {
     tool: "collections.tree",
     profile: ctx.profile.id,
-    collectionId: args.collectionId,
+    collectionId: resolvedCollection.collectionId,
     result: {
+      ok: true,
+      collection: resolvedCollection.collection,
+      resolution: {
+        mode: resolvedCollection.mode,
+        candidate: resolvedCollection.candidate,
+        memory: resolvedCollection.memory,
+      },
       includeDrafts,
       maxDepth,
       totalDocuments: normalizedDocs.length,
@@ -1987,9 +2474,9 @@ async function expandSingleQuery(ctx, query, args, hydrationCache) {
 
   const body = compactValue({
     query,
-    collectionId: args.collectionId,
+    collectionId: args.resolvedCollectionId || args.collectionId,
     documentId: args.documentId,
-    userId: args.userId,
+    userId: args.resolvedUserId || args.userId,
     limit,
     offset: toInteger(args.offset, 0),
     snippetMinWords: mode === "semantic" ? toInteger(args.snippetMinWords, 16) : undefined,
@@ -2087,9 +2574,31 @@ async function searchExpandTool(ctx, args) {
     throw new CliError("search.expand requires args.query or args.queries[]");
   }
 
+  const resolvedFilters = await resolveRetrievalFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "search.expand",
+      profile: ctx.profile.id,
+      queryCount: queries.length,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        perQuery: [],
+        mergedExpanded: [],
+      }) || {},
+    };
+  }
+  const searchArgs = {
+    ...args,
+    resolvedCollectionId: resolvedFilters.ids?.collectionId,
+    resolvedUserId: resolvedFilters.ids?.userId,
+  };
+
   const hydrationCache = new Map();
   const perQuery = await mapLimit(queries, Math.max(1, toInteger(args.concurrency, 4)), async (query) =>
-    expandSingleQuery(ctx, query, args, hydrationCache)
+    expandSingleQuery(ctx, query, searchArgs, hydrationCache)
   );
 
   if (queries.length === 1 && !args.forceGroupedResult) {
@@ -2097,7 +2606,9 @@ async function searchExpandTool(ctx, args) {
       tool: "search.expand",
       profile: ctx.profile.id,
       query: perQuery[0].query,
-      result: perQuery[0],
+      result: resolvedFilters.resolution
+        ? compactValue({ ...perQuery[0], resolution: resolvedFilters.resolution }) || perQuery[0]
+        : perQuery[0],
     };
   }
 
@@ -2127,6 +2638,7 @@ async function searchExpandTool(ctx, args) {
     result: {
       perQuery,
       mergedExpanded: Array.from(mergedMap.values()),
+      resolution: resolvedFilters.resolution,
     },
   };
 }
@@ -2134,7 +2646,7 @@ async function searchExpandTool(ctx, args) {
 export const NAVIGATION_TOOLS = {
   "documents.resolve": {
     signature:
-      "documents.resolve(args: { query?: string; queries?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; })",
+      "documents.resolve(args: { query?: string; queries?: string[]; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; refresh?: boolean; memory?: boolean; limit?: number; strict?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; })",
     description:
       "Resolve fuzzy document references by combining title search with semantic fallback and returning confidence-ranked candidates.",
     usageExample: {
@@ -2146,6 +2658,9 @@ export const NAVIGATION_TOOLS = {
       },
     },
     bestPractices: [
+      "Use refresh=false to resolve from local memory only when a prior session likely observed the document.",
+      "Leave memory enabled to warm live resolver results with remembered candidates before title/semantic search.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs when scoping resolution by remembered collection or user names.",
       "Use `strict=true` when only near-exact matches should be auto-selected.",
       "Start with `view=ids` in planner loops, then hydrate selected IDs separately.",
       "Send multiple references in `queries[]` to reduce tool round trips.",
@@ -2154,7 +2669,7 @@ export const NAVIGATION_TOOLS = {
   },
   "documents.resolve_urls": {
     signature:
-      "documents.resolve_urls(args: { url?: string; urls?: string[]; collectionId?: string; limit?: number; strict?: boolean; strictHost?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; forceGroupedResult?: boolean; maxAttempts?: number; })",
+      "documents.resolve_urls(args: { url?: string; urls?: string[]; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; refresh?: boolean; memory?: boolean; limit?: number; strict?: boolean; strictHost?: boolean; strictThreshold?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; snippetMinWords?: number; snippetMaxWords?: number; excerptChars?: number; forceGroupedResult?: boolean; maxAttempts?: number; })",
     description:
       "Resolve document URLs (doc/share links) into confidence-ranked document candidates with URL-id/host-aware boosts.",
     usageExample: {
@@ -2170,8 +2685,11 @@ export const NAVIGATION_TOOLS = {
       },
     },
     bestPractices: [
+      "Use refresh=false to resolve remembered Outline URLs and urlIds without a network call.",
+      "Leave memory enabled so remembered URL mappings can boost live URL resolution.",
       "Use strictHost=true when links should belong to the currently selected profile host only.",
       "Use strict=true for automation paths that should avoid weak URL matches.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs when URL hints should be resolved inside a remembered scope.",
       "Start with view=ids, then hydrate selected IDs with documents.info for low-token loops.",
     ],
     handler: documentsResolveUrlsTool,
@@ -2199,8 +2717,8 @@ export const NAVIGATION_TOOLS = {
   },
   "collections.tree": {
     signature:
-      "collections.tree(args: { collectionId: string; includeDrafts?: boolean; maxDepth?: number; view?: 'summary'|'full'; pageSize?: number; maxPages?: number; })",
-    description: "Build a parent/child document tree for a collection without modifying server data.",
+      "collections.tree(args: { collectionId?: string; id?: string; query?: string; urlId?: string; url?: string; includeDrafts?: boolean; maxDepth?: number; view?: 'summary'|'full'; pageSize?: number; maxPages?: number; })",
+    description: "Build a parent/child document tree for a collection, resolving remembered collection names or URLs when needed.",
     usageExample: {
       tool: "collections.tree",
       args: {
@@ -2211,6 +2729,7 @@ export const NAVIGATION_TOOLS = {
       },
     },
     bestPractices: [
+      "Pass query/url/urlId directly when you know the collection name or URL but not the exact ID.",
       "Keep `view=summary` and low `maxDepth` for navigation tasks to save tokens.",
       "Set includeDrafts=true only if draft pages matter for your workflow.",
       "Use output tree IDs as anchors for targeted `documents.info` calls.",
@@ -2219,7 +2738,7 @@ export const NAVIGATION_TOOLS = {
   },
   "search.expand": {
     signature:
-      "search.expand(args: { query?: string; queries?: string[]; mode?: 'semantic'|'titles'; limit?: number; expandLimit?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; })",
+      "search.expand(args: { query?: string; queries?: string[]; mode?: 'semantic'|'titles'; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; limit?: number; expandLimit?: number; view?: 'ids'|'summary'|'full'; concurrency?: number; hydrateConcurrency?: number; })",
     description:
       "Search and then hydrate top-ranked documents in one call, returning compact joined search+document output.",
     usageExample: {
@@ -2235,6 +2754,7 @@ export const NAVIGATION_TOOLS = {
     bestPractices: [
       "Use low `expandLimit` (2-5) to minimize payload while preserving answer quality.",
       "Use `queries[]` for multi-intent retrieval in one request.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs when filtering by remembered names.",
       "For multi-query runs, duplicate document hydration is automatically cached within the same tool call.",
       "Prefer `view=summary` unless a full markdown body is strictly needed.",
     ],
@@ -2242,7 +2762,7 @@ export const NAVIGATION_TOOLS = {
   },
   "search.research": {
     signature:
-      "search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; precisionMode?: 'balanced'|'precision'|'recall'; minScore?: number; diversify?: boolean; diversityLambda?: number; rrfK?: number; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; perQueryView?: 'ids'|'summary'|'full'; perQueryHitLimit?: number; evidencePerDocument?: number; suggestedQueryLimit?: number; includePerQuery?: boolean; includeExpanded?: boolean; includeCoverage?: boolean; includeBacklinks?: boolean; backlinksLimit?: number; backlinksConcurrency?: number; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })",
+      "search.research(args: { question?: string; query?: string; queries?: string[]; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; limitPerQuery?: number; offset?: number; includeTitleSearch?: boolean; includeSemanticSearch?: boolean; precisionMode?: 'balanced'|'precision'|'recall'; minScore?: number; diversify?: boolean; diversityLambda?: number; rrfK?: number; expandLimit?: number; maxDocuments?: number; seenIds?: string[]; view?: 'ids'|'summary'|'full'; perQueryView?: 'ids'|'summary'|'full'; perQueryHitLimit?: number; evidencePerDocument?: number; suggestedQueryLimit?: number; includePerQuery?: boolean; includeExpanded?: boolean; includeCoverage?: boolean; includeBacklinks?: boolean; backlinksLimit?: number; backlinksConcurrency?: number; concurrency?: number; hydrateConcurrency?: number; contextChars?: number; excerptChars?: number; maxAttempts?: number; })",
     description:
       "Run multi-query, multi-source research retrieval with weighted reranking, optional diversification, hydration, and follow-up cursor support for multi-turn QA.",
     usageExample: {
@@ -2265,6 +2785,7 @@ export const NAVIGATION_TOOLS = {
     bestPractices: [
       "Pass prior `next.seenIds` into `seenIds` for follow-up turns to avoid repetition.",
       "Use `precisionMode=precision` for answer-grade retrieval and `precisionMode=recall` for exploration.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs to scope research by remembered names.",
       "Set `perQueryView=ids` + `perQueryHitLimit` to reduce token cost while preserving traceability.",
       "Enable `includeBacklinks` when one-call context gathering is more important than raw latency.",
       "Keep `expandLimit` small and raise only when answer confidence is insufficient.",

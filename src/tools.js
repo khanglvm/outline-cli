@@ -11,6 +11,7 @@ import { NAVIGATION_TOOLS } from "./tools.navigation.js";
 import { MUTATION_TOOLS } from "./tools.mutation.js";
 import { PLATFORM_TOOLS } from "./tools.platform.js";
 import { EXTENDED_TOOLS } from "./tools.extended.js";
+import { MEMORY_TOOLS, memoryResolveTool, recordToolObservation } from "./memory-store.js";
 import { validateToolArgs } from "./tool-arg-schemas.js";
 import { summarizeSafeText } from "./summary-redaction.js";
 import {
@@ -105,6 +106,175 @@ function normalizeDocumentRow(row, view = "summary", excerptChars = 280) {
   }
 
   return summary;
+}
+
+function nonEmptyString(value) {
+  const text = String(value || "").trim();
+  return text || "";
+}
+
+function firstFilterReference(args = {}, keys = [], arrayKeys = []) {
+  for (const key of keys) {
+    const value = nonEmptyString(args[key]);
+    if (value) {
+      return { key, value };
+    }
+  }
+  for (const key of arrayKeys) {
+    if (!Array.isArray(args[key])) {
+      continue;
+    }
+    for (const item of args[key]) {
+      const value = nonEmptyString(item);
+      if (value) {
+        return { key, value };
+      }
+    }
+  }
+  return null;
+}
+
+function resolutionFromFilterCandidate(resolved, ref, config, args = {}) {
+  const candidates = resolved.result?.candidates || [];
+  const topCandidate = candidates[0] || null;
+  const strict = args.strict !== false;
+  const strictThreshold = Math.max(0, toInteger(args.strictThreshold, 85));
+  const topScore = Number(topCandidate?.score || 0);
+
+  if (!topCandidate) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "not_found",
+        },
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+  if (strict && topScore < strictThreshold) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "low_confidence",
+          strictThreshold,
+        },
+        candidate: topCandidate,
+        candidates,
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+
+  const live = (resolved.result?.live || []).find((item) => item?.ok && item.candidate?.id === topCandidate.id)
+    || (resolved.result?.live || [])[0]
+    || null;
+  if (live && !live.ok) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "hydrate_failed",
+          error: live.error,
+          statusCode: live.status,
+        },
+        candidate: topCandidate,
+        memory: resolved.result?.memory || live.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: topCandidate.id,
+    resultField: config.resultField,
+    resolution: compactValue({
+      mode: "memory",
+      kind: ref.key,
+      value: ref.value,
+      id: topCandidate.id,
+      name: topCandidate.name,
+      email: topCandidate.email,
+      candidate: topCandidate,
+      live,
+      memory: resolved.result?.memory || null,
+    }) || { id: topCandidate.id },
+  };
+}
+
+async function resolveDocumentFilter(ctx, args = {}, config) {
+  const exact = nonEmptyString(args[config.idKey]);
+  if (exact) {
+    return { id: exact, resultField: config.resultField };
+  }
+  const ref = firstFilterReference(args, config.queryKeys, config.arrayQueryKeys);
+  if (!ref) {
+    return null;
+  }
+
+  const threshold = Math.max(0, toInteger(args.strictThreshold, 85));
+  const resolved = await memoryResolveTool(ctx, {
+    query: ref.value,
+    type: config.type,
+    profile: args.profile,
+    limit: Math.max(1, toInteger(args.resolveLimit, 5)),
+    hydrateLimit: 1,
+    maxAgeHours: args.maxAgeHours,
+    minScore: args.minScore === undefined && args.strict !== false ? threshold : args.minScore,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore === undefined && args.strict !== false ? threshold : args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    refresh: args.refresh !== false,
+    maxAttempts: args.maxAttempts,
+  });
+
+  return {
+    ...resolutionFromFilterCandidate(resolved, ref, config, args),
+    resultField: config.resultField,
+  };
+}
+
+async function resolveDocumentFilters(ctx, args = {}) {
+  const filters = [
+    await resolveDocumentFilter(ctx, args, {
+      type: "collection",
+      idKey: "collectionId",
+      resultField: "collectionId",
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    }),
+    await resolveDocumentFilter(ctx, args, {
+      type: "user",
+      idKey: "userId",
+      resultField: "userId",
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    }),
+  ].filter(Boolean);
+
+  const failed = filters.find((filter) => filter?.error);
+  if (failed) {
+    return { error: failed.error, resultField: failed.resultField };
+  }
+
+  const ids = {};
+  const resolution = {};
+  for (const filter of filters) {
+    ids[filter.resultField] = filter.id;
+    if (filter.resolution) {
+      resolution[filter.resultField] = filter.resolution;
+    }
+  }
+
+  return {
+    ids,
+    resolution: Object.keys(resolution).length > 0 ? resolution : null,
+  };
 }
 
 function normalizeCollectionRow(row, view = "summary") {
@@ -274,10 +444,27 @@ async function documentsSearchTool(ctx, args) {
     throw new CliError("documents.search requires args.query or args.queries[]");
   }
 
+  const resolvedFilters = await resolveDocumentFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "documents.search",
+      mode,
+      profile: ctx.profile.id,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        data: [],
+        merged: [],
+      }) || {},
+    };
+  }
+
   const baseBody = compactValue({
-    collectionId: args.collectionId,
+    collectionId: resolvedFilters.ids?.collectionId || args.collectionId,
     documentId: args.documentId,
-    userId: args.userId,
+    userId: resolvedFilters.ids?.userId || args.userId,
     statusFilter: normalizeStatusFilter(args.statusFilter),
     dateFilter: args.dateFilter,
     shareId: args.shareId,
@@ -357,6 +544,7 @@ async function documentsSearchTool(ctx, args) {
       result: {
         ...perQuery[0],
         merged,
+        resolution: resolvedFilters.resolution,
       },
     };
   }
@@ -369,18 +557,34 @@ async function documentsSearchTool(ctx, args) {
     result: {
       perQuery,
       merged,
+      resolution: resolvedFilters.resolution,
     },
   };
 }
 
 async function documentsListTool(ctx, args) {
+  const resolvedFilters = await resolveDocumentFilters(ctx, args);
+  if (resolvedFilters.error) {
+    return {
+      tool: "documents.list",
+      profile: ctx.profile.id,
+      result: compactValue({
+        ok: false,
+        status: resolvedFilters.error.status || "not_found",
+        [resolvedFilters.resultField || "filterId"]: "",
+        resolution: resolvedFilters.error,
+        data: [],
+      }) || {},
+    };
+  }
+
   const body = compactValue({
     limit: toInteger(args.limit, 25),
     offset: toInteger(args.offset, 0),
     sort: args.sort,
     direction: args.direction,
-    collectionId: args.collectionId,
-    userId: args.userId,
+    collectionId: resolvedFilters.ids?.collectionId || args.collectionId,
+    userId: resolvedFilters.ids?.userId || args.userId,
     backlinkDocumentId: args.backlinkDocumentId,
     statusFilter: normalizeStatusFilter(args.statusFilter),
   }) || {};
@@ -413,7 +617,9 @@ async function documentsListTool(ctx, args) {
   return {
     tool: "documents.list",
     profile: ctx.profile.id,
-    result: payload,
+    result: resolvedFilters.resolution
+      ? compactValue({ ...payload, resolution: resolvedFilters.resolution }) || payload
+      : payload,
   };
 }
 
@@ -829,7 +1035,7 @@ export const TOOLS = {
   },
   "documents.search": {
     signature:
-      "documents.search(args: { query?: string; queries?: string[]; mode?: 'semantic' | 'titles'; limit?: number; offset?: number; collectionId?: string; documentId?: string; userId?: string; statusFilter?: string[]; dateFilter?: 'day'|'week'|'month'|'year'; snippetMinWords?: number; snippetMaxWords?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'summary'|'ids'|'full'; includePolicies?: boolean; merge?: boolean; concurrency?: number; })",
+      "documents.search(args: { query?: string; queries?: string[]; mode?: 'semantic' | 'titles'; limit?: number; offset?: number; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; documentId?: string; statusFilter?: string[]; dateFilter?: 'day'|'week'|'month'|'year'; snippetMinWords?: number; snippetMaxWords?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'summary'|'ids'|'full'; includePolicies?: boolean; merge?: boolean; concurrency?: number; })",
     description: "Search documents with single or multi-query batch in one invocation.",
     usageExample: {
       tool: "documents.search",
@@ -843,6 +1049,7 @@ export const TOOLS = {
     },
     bestPractices: [
       "Prefer `queries[]` batch mode to reduce round trips.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs when filtering by a remembered collection or user name.",
       "Use `view=ids` for planning and follow with documents.info only on selected IDs.",
       "Tune snippetMinWords/snippetMaxWords to control context window size.",
     ],
@@ -850,7 +1057,7 @@ export const TOOLS = {
   },
   "documents.list": {
     signature:
-      "documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; parentDocumentId?: string | null; rootOnly?: boolean; userId?: string; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })",
+      "documents.list(args?: { limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; parentDocumentId?: string | null; rootOnly?: boolean; statusFilter?: string[]; view?: 'ids'|'summary'|'full'; includePolicies?: boolean })",
     description: "List documents with filtering and pagination.",
     usageExample: {
       tool: "documents.list",
@@ -863,6 +1070,7 @@ export const TOOLS = {
     },
     bestPractices: [
       "Use small page sizes (10-25) and iterate with offset.",
+      "Pass collectionQuery/collectionRefs or userQuery/userRefs to resolve remembered filters before listing.",
       "Use rootOnly=true (or parentDocumentId=null) to list only collection root pages.",
       "Use summary view unless the full document body is required.",
     ],
@@ -1009,6 +1217,7 @@ export const TOOLS = {
   ...MUTATION_TOOLS,
   ...EXTENDED_TOOLS,
   ...PLATFORM_TOOLS,
+  ...MEMORY_TOOLS,
 };
 
 const TOOL_ALIAS_DEFS = [
@@ -1304,6 +1513,14 @@ export async function invokeTool(ctx, name, args = {}) {
       },
     }
     : result;
+
+  try {
+    await recordToolObservation(ctx, resolution.resolvedName, normalizedArgs, enriched);
+  } catch (err) {
+    if (ctx?.memory?.strict === true) {
+      throw err;
+    }
+  }
 
   if (normalizedArgs.compact ?? true) {
     return compactValue(enriched) || {};

@@ -65,6 +65,249 @@ test("validateToolArgs supports allowUnknown opt-out", () => {
   }
 });
 
+test("memory.resolve_batch schema accepts mixed reference arrays", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("memory.resolve_batch", {
+      ids: ["doc-1"],
+      urlIds: ["url-1"],
+      urls: ["https://handbook.example.com/doc/runbook-AbCdEf12"],
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("memory.resolve_batch", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.queries"));
+      return true;
+    }
+  );
+});
+
+test("document retrieval schemas accept remembered filter refs and reject ambiguous filters", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("documents.search", {
+      query: "incident",
+      collectionQuery: "Engineering",
+      userQuery: "alice@example.com",
+      resolveLimit: 3,
+      fallbackSearch: true,
+      view: "summary",
+    });
+  });
+
+  assert.doesNotThrow(() => {
+    validateToolArgs("documents.list", {
+      collectionRefs: ["Engineering"],
+      userRefs: ["alice@example.com"],
+      limit: 10,
+      rootOnly: true,
+      view: "ids",
+    });
+  });
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.search", {
+        query: "incident",
+        collectionId: "col-1",
+        collectionQuery: "Engineering",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.collectionQuery"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.list", {
+        userId: "user-1",
+        userQuery: "Alice Example",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.userQuery"));
+      return true;
+    }
+  );
+});
+
+test("documents.open schema accepts one reference and rejects ambiguous references", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("documents.open", {
+      query: "incident runbook",
+      view: "summary",
+      strictThreshold: 90,
+    });
+  });
+
+  assert.doesNotThrow(() => {
+    validateToolArgs("documents.open", {
+      url: "https://handbook.example.com/doc/runbook-AbCdEf12",
+      fallbackMode: "both",
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("documents.open", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.open", { query: "incident", id: "doc-1" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => /provide only one/.test(issue.message)));
+      return true;
+    }
+  );
+});
+
+test("documents.open_batch schema accepts mixed references and validates batch bounds", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("documents.open_batch", {
+      refs: ["incident runbook", "https://handbook.example.com/doc/runbook-AbCdEf12"],
+      ids: ["doc-1"],
+      shareIds: ["share-1"],
+      view: "summary",
+      concurrency: 4,
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("documents.open_batch", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.refs"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("documents.open_batch", { ids: ["doc-1"], concurrency: 99 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.concurrency"));
+      return true;
+    }
+  );
+});
+
+test("collections.open schema accepts one reference and rejects ambiguous references", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("collections.open", {
+      query: "engineering",
+      view: "summary",
+      strictThreshold: 90,
+    });
+  });
+
+  assert.doesNotThrow(() => {
+    validateToolArgs("collections.open", {
+      url: "https://handbook.example.com/collection/engineering-AbCdEf12",
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("collections.open", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("collections.open", { query: "engineering", id: "col-1" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => /provide only one/.test(issue.message)));
+      return true;
+    }
+  );
+});
+
+test("collections.open_batch schema accepts mixed references and validates batch bounds", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("collections.open_batch", {
+      refs: ["engineering", "https://handbook.example.com/collection/engineering-AbCdEf12"],
+      ids: ["col-1"],
+      view: "summary",
+      concurrency: 4,
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("collections.open_batch", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.refs"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("collections.open_batch", { ids: ["col-1"], hydrateConcurrency: 99 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.hydrateConcurrency"));
+      return true;
+    }
+  );
+});
+
+test("collections.tree schema accepts resolved collection references and rejects ambiguity", () => {
+  assert.doesNotThrow(() => {
+    validateToolArgs("collections.tree", {
+      query: "engineering",
+      maxDepth: 2,
+      view: "summary",
+    });
+  });
+
+  assert.doesNotThrow(() => {
+    validateToolArgs("collections.tree", {
+      collectionId: "col-1",
+      pageSize: 25,
+    });
+  });
+
+  assert.throws(
+    () => validateToolArgs("collections.tree", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.collectionId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("collections.tree", { collectionId: "col-1", query: "engineering" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => /provide only one/.test(issue.message)));
+      return true;
+    }
+  );
+});
+
 test("api.call accepts method or endpoint and rejects when both missing", () => {
   assert.doesNotThrow(() => {
     validateToolArgs("api.call", { method: "documents.info" });
@@ -786,7 +1029,23 @@ test("attachment wrappers extract embedded refs and save binary downloads", asyn
 
 test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
+  assert.doesNotThrow(() => validateToolArgs("shares.info", { query: "help docs" }));
   assert.doesNotThrow(() => validateToolArgs("templates.create", { title: "Template", data: {} }));
+  assert.doesNotThrow(() => validateToolArgs("templates.info", { templateQuery: "Incident Postmortem" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("templates.update", {
+      templateQuery: "Incident Postmortem",
+      title: "Updated Template",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.list", {
+      query: "review doc",
+      includeReplies: true,
+      limit: 20,
+    })
+  );
   assert.doesNotThrow(() =>
     validateToolArgs("comments.create", {
       documentId: "doc-1",
@@ -795,8 +1054,39 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     })
   );
   assert.doesNotThrow(() =>
+    validateToolArgs("comments.create", {
+      query: "review doc",
+      text: "looks good",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
     validateToolArgs("events.list", {
       auditLog: true,
+      limit: 5,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("events.list", {
+      documentQuery: "Incident Runbook",
+      collectionQuery: "Engineering",
+      userQuery: "alice@example.com",
+      auditLog: true,
+      limit: 5,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.archived", {
+      collectionQuery: "Engineering",
+      limit: 5,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.deleted", {
+      collectionQuery: "Engineering",
       limit: 5,
       view: "summary",
     })
@@ -816,12 +1106,48 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     })
   );
   assert.doesNotThrow(() =>
+    validateToolArgs("collections.add_user", {
+      query: "Engineering",
+      userQuery: "alice@example.com",
+      performAction: true,
+      resolveConcurrency: 2,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.add_group", {
+      documentQuery: "Incident Runbook",
+      groupQuery: "Security",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("groups.add_user", {
+      groupQuery: "Engineering",
+      userQuery: "Alice Example",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
     validateToolArgs("groups.memberships", {
       id: "group-1",
       limit: 20,
       offset: 0,
       view: "summary",
     })
+  );
+  assert.throws(
+    () => validateToolArgs("events.list", { actorId: "user-1", userQuery: "Alice Example" }),
+    (err) => {
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.userQuery"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("documents.deleted", { collectionId: "col-1", collectionQuery: "Engineering" }),
+    (err) => {
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.collectionQuery"));
+      return true;
+    }
   );
   assert.doesNotThrow(() =>
     validateToolArgs("documents.import", {
@@ -844,6 +1170,13 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     })
   );
   assert.doesNotThrow(() =>
+    validateToolArgs("documents.attachments", {
+      query: "attachment doc",
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+    })
+  );
+  assert.doesNotThrow(() =>
     validateToolArgs("attachments.download", {
       url: "/api/attachments.redirect?id=15831936-7fef-4a58-b17b-121a65c3d787",
       outputDir: "./tmp/attachments",
@@ -853,6 +1186,13 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("documents.download_attachments", {
       documentId: "doc-1",
+      outputDir: "./tmp/attachments",
+      concurrency: 2,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.download_attachments", {
+      refs: ["attachment doc"],
       outputDir: "./tmp/attachments",
       concurrency: 2,
     })
@@ -891,6 +1231,20 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
   );
 
   assert.throws(
+    () =>
+      validateToolArgs("comments.create", {
+        documentId: "doc-1",
+        documentQuery: "review doc",
+        text: "looks good",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentQuery"));
+      return true;
+    }
+  );
+
+  assert.throws(
     () => validateToolArgs("webhooks.create", { name: "w", url: "https://example.com", events: [] }),
     (err) => {
       assert.ok(err instanceof CliError);
@@ -922,6 +1276,34 @@ test("validateToolArgs covers new scenario wrapper schemas", () => {
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.add_user", {
+        documentQuery: "Incident Runbook",
+        userId: "user-1",
+        userQuery: "Alice Example",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.userQuery"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("groups.add_user", {
+        groupQuery: "Engineering",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.userId"));
       return true;
     }
   );
@@ -1324,6 +1706,11 @@ test("template pipeline schemas enforce strict id and placeholderValues validati
       id: "template-1",
     })
   );
+  assert.doesNotThrow(() =>
+    validateToolArgs("templates.extract_placeholders", {
+      templateQuery: "Incident Postmortem",
+    })
+  );
 
   assert.doesNotThrow(() =>
     validateToolArgs("documents.create_from_template", {
@@ -1336,6 +1723,13 @@ test("template pipeline schemas enforce strict id and placeholderValues validati
       },
       strictPlaceholders: true,
       view: "summary",
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.create_from_template", {
+      templateQuery: "Incident Postmortem",
+      title: "Incident Runbook",
       performAction: true,
     })
   );
@@ -1358,6 +1752,19 @@ test("template pipeline schemas enforce strict id and placeholderValues validati
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.templateId"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.create_from_template", {
+        templateId: "template-1",
+        templateQuery: "Incident Postmortem",
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.templateQuery"));
       return true;
     }
   );
@@ -1454,6 +1861,18 @@ test("data_attributes schemas and document dataAttributes alignment validate val
         {
           id: "doc-1",
           dataAttributes: [{ dataAttributeId: "attr-1", value: 42 }],
+        },
+      ],
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.batch_update", {
+      updates: [
+        {
+          query: "Release plan",
+          expectedRevision: "latest",
+          dataAttributes: [{ dataAttributeId: "attr-1", value: "Done" }],
         },
       ],
       performAction: true,
@@ -1558,13 +1977,36 @@ test("data_attributes schemas and document dataAttributes alignment validate val
       return true;
     }
   );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.batch_update", {
+        updates: [{ query: "Release plan", text: "unguarded" }],
+        performAction: true,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.updates[0].expectedRevision"));
+      return true;
+    }
+  );
 });
 
 test("users/groups schemas enforce deterministic id selector constraints", () => {
   assert.doesNotThrow(() => validateToolArgs("users.info", { id: "user-1" }));
   assert.doesNotThrow(() => validateToolArgs("users.info", { ids: ["user-1", "user-2"] }));
+  assert.doesNotThrow(() => validateToolArgs("users.info", { query: "Alice Example" }));
+  assert.doesNotThrow(() => validateToolArgs("users.info", { refs: ["alice@example.com"] }));
   assert.doesNotThrow(() => validateToolArgs("groups.info", { id: "group-1" }));
   assert.doesNotThrow(() => validateToolArgs("groups.info", { ids: ["group-1"] }));
+  assert.doesNotThrow(() => validateToolArgs("groups.info", { query: "Engineering" }));
+  assert.doesNotThrow(() =>
+    validateToolArgs("groups.memberships", {
+      query: "Engineering",
+      limit: 20,
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+    })
+  );
 
   assert.throws(
     () => validateToolArgs("users.info", { ids: [] }),
@@ -1598,6 +2040,30 @@ test("users/groups schemas enforce deterministic id selector constraints", () =>
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.ids"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("users.info", { id: "user-1", query: "Alice Example" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("groups.memberships", {}),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("groups.memberships", { query: "Engineering", resolveConcurrency: 9 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.resolveConcurrency"));
       return true;
     }
   );
@@ -1636,6 +2102,41 @@ test("user lifecycle and documents.users schemas enforce required selectors and 
       limit: 20,
       offset: 0,
       view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.users", {
+      documentId: "doc-1",
+      limit: 20,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.users", {
+      query: "incident runbook",
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.memberships", {
+      refs: ["incident runbook"],
+      fallbackSearch: false,
+      limit: 20,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("collections.memberships", {
+      collectionId: "collection-1",
+      limit: 20,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("collections.group_memberships", {
+      query: "engineering",
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
     })
   );
 
@@ -1702,6 +2203,30 @@ test("user lifecycle and documents.users schemas enforce required selectors and 
       return true;
     }
   );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.users", {
+        id: "doc-1",
+        documentId: "doc-2",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+  assert.throws(
+    () =>
+      validateToolArgs("collections.memberships", {
+        query: "engineering",
+        resolveConcurrency: 9,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.resolveConcurrency"));
+      return true;
+    }
+  );
 });
 
 test("groups.create schema requires non-empty memberIds when provided", () => {
@@ -1732,6 +2257,7 @@ test("shares lifecycle schemas enforce deterministic selectors and update requir
   assert.doesNotThrow(() =>
     validateToolArgs("shares.list", {
       query: "help docs",
+      documentQuery: "public handbook",
       limit: 10,
       offset: 0,
       sort: "updatedAt",
@@ -1739,11 +2265,26 @@ test("shares lifecycle schemas enforce deterministic selectors and update requir
       view: "summary",
     })
   );
+  assert.doesNotThrow(() =>
+    validateToolArgs("shares.list", {
+      refs: ["public handbook"],
+      fallbackSearch: false,
+      limit: 10,
+    })
+  );
   assert.doesNotThrow(() => validateToolArgs("shares.info", { id: "share-1" }));
   assert.doesNotThrow(() => validateToolArgs("shares.info", { documentId: "doc-1" }));
+  assert.doesNotThrow(() => validateToolArgs("shares.info", { query: "public handbook" }));
   assert.doesNotThrow(() =>
     validateToolArgs("shares.create", {
       documentId: "doc-1",
+      published: true,
+      performAction: true,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("shares.create", {
+      documentQuery: "public handbook",
       published: true,
       performAction: true,
     })
@@ -1783,12 +2324,37 @@ test("shares lifecycle schemas enforce deterministic selectors and update requir
       return true;
     }
   );
+  assert.throws(
+    () => validateToolArgs("shares.info", { id: "share-1", query: "public handbook" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+  assert.throws(
+    () => validateToolArgs("shares.list", { documentQuery: "public handbook", resolveConcurrency: 9 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.resolveConcurrency"));
+      return true;
+    }
+  );
 
   assert.throws(
     () => validateToolArgs("shares.create", {}),
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () => validateToolArgs("shares.create", { documentId: "doc-1", documentQuery: "public handbook" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentQuery"));
       return true;
     }
   );
@@ -1837,10 +2403,42 @@ test("shares lifecycle schemas enforce deterministic selectors and update requir
 
 test("documents.apply_patch accepts optional expectedRevision and validates bounds", () => {
   assert.doesNotThrow(() =>
+    validateToolArgs("documents.diff", {
+      id: "doc-1",
+      proposedText: "# Title\n\nUpdated",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.diff", {
+      query: "incident runbook",
+      proposedText: "# Title\n\nUpdated",
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+    })
+  );
+  assert.throws(
+    () => validateToolArgs("documents.diff", { proposedText: "# Title" }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.doesNotThrow(() =>
     validateToolArgs("documents.apply_patch", {
       id: "doc-1",
       patch: "@@ -1,1 +1,1 @@\n-a\n+b",
       expectedRevision: 3,
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.apply_patch", {
+      query: "incident runbook",
+      patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      expectedRevision: "latest",
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
     })
   );
 
@@ -1857,6 +2455,19 @@ test("documents.apply_patch accepts optional expectedRevision and validates boun
       return true;
     }
   );
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch", {
+        id: "doc-1",
+        query: "incident runbook",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      return true;
+    }
+  );
 });
 
 test("documents.apply_patch_safe requires expectedRevision and validates bounds", () => {
@@ -1867,12 +2478,70 @@ test("documents.apply_patch_safe requires expectedRevision and validates bounds"
       expectedRevision: 3,
     })
   );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.apply_patch_safe", {
+      url: "https://handbook.example.com/doc/incident-runbook-AbCdEf12",
+      patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      expectedRevision: "latest",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.safe_update", {
+      query: "incident runbook",
+      expectedRevision: "latest",
+      text: "\n\nUpdated",
+      editMode: "append",
+      performAction: true,
+    })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch_safe", {
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+        expectedRevision: 3,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.id"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch_safe", {
+        id: "doc-1",
+        query: "incident runbook",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+        expectedRevision: 3,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.query"));
+      return true;
+    }
+  );
 
   assert.throws(
     () =>
       validateToolArgs("documents.apply_patch_safe", {
         id: "doc-1",
         patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.expectedRevision"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.apply_patch_safe", {
+        id: "doc-1",
+        patch: "@@ -1,1 +1,1 @@\n-a\n+b",
+        expectedRevision: "current",
       }),
     (err) => {
       assert.ok(err instanceof CliError);
@@ -2085,6 +2754,32 @@ test("documents.apply_patch_safe delegates to apply_patch flow with deterministi
       },
     },
   });
+
+  successCalls.length = 0;
+  const latestOutput = await contract.handler(successCtx, {
+    id: "doc-1",
+    expectedRevision: "latest",
+    patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
+    performAction: true,
+    view: "summary",
+  });
+
+  assert.deepEqual(successCalls, [
+    {
+      method: "documents.info",
+      body: { id: "doc-1" },
+      options: { maxAttempts: 2 },
+    },
+    {
+      method: "documents.update",
+      body: { id: "doc-1", text: "New", editMode: "replace" },
+      options: { maxAttempts: 1 },
+    },
+  ]);
+  assert.equal(latestOutput.result.ok, true);
+  assert.equal(latestOutput.result.id, "doc-1");
+  assert.equal(latestOutput.result.expectedRevision, 8);
+  assert.equal(latestOutput.result.expectedRevisionSource, "latest");
 });
 
 test("revisions.diff is exposed as a first-class mutation wrapper with deterministic payload", async () => {
@@ -2155,6 +2850,12 @@ test("revisions.diff is exposed as a first-class mutation wrapper with determini
   assert.deepEqual(output.result, {
     ok: true,
     id: "doc-1",
+    resolution: {
+      mode: "direct",
+      id: "doc-1",
+      memory: null,
+    },
+    revisionPair: "explicit",
     baseRevisionId: "rev-base",
     targetRevisionId: "rev-target",
     baseRevision: {
@@ -2202,7 +2903,32 @@ test("revisions.diff is exposed as a first-class mutation wrapper with determini
   });
 });
 
-test("revisions.diff schema validates valid and invalid inputs with deterministic issues", () => {
+test("revisions list and diff schemas validate valid and invalid inputs with deterministic issues", () => {
+  assert.doesNotThrow(() =>
+    validateToolArgs("revisions.list", {
+      documentId: "doc-1",
+      limit: 8,
+      view: "summary",
+    })
+  );
+  assert.doesNotThrow(() =>
+    validateToolArgs("revisions.list", {
+      query: "incident runbook",
+      limit: 8,
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+      view: "summary",
+    })
+  );
+  assert.throws(
+    () => validateToolArgs("revisions.list", { limit: 8 }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentId"));
+      return true;
+    }
+  );
+
   assert.doesNotThrow(() =>
     validateToolArgs("revisions.diff", {
       id: "doc-1",
@@ -2215,6 +2941,18 @@ test("revisions.diff schema validates valid and invalid inputs with deterministi
       maxAttempts: 2,
     })
   );
+  assert.doesNotThrow(() =>
+    validateToolArgs("revisions.diff", {
+      query: "incident runbook",
+      revisionPair: "latest",
+      revisionLimit: 2,
+      resolveConcurrency: 2,
+      resolveHydrateConcurrency: 2,
+      hunkLimit: 8,
+      hunkLineLimit: 12,
+      view: "summary",
+    })
+  );
 
   assert.throws(
     () => validateToolArgs("revisions.diff", {}),
@@ -2223,7 +2961,41 @@ test("revisions.diff schema validates valid and invalid inputs with deterministi
       assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
       assert.deepEqual(
         err.details?.issues?.map((issue) => issue.path),
-        ["args.id", "args.baseRevisionId", "args.targetRevisionId"]
+        ["args.documentId"]
+      );
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("revisions.diff", {
+        query: "incident runbook",
+        baseRevisionId: "rev-1",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.deepEqual(
+        err.details?.issues?.map((issue) => issue.path),
+        ["args.targetRevisionId"]
+      );
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("revisions.diff", {
+        query: "incident runbook",
+        revisionLimit: 21,
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.deepEqual(
+        err.details?.issues?.map((issue) => issue.path),
+        ["args.revisionLimit"]
       );
       return true;
     }
@@ -2262,6 +3034,21 @@ test("comments.review_queue schema enforces scope selector", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("comments.review_queue", {
       collectionId: "col-1",
+      includeReplies: true,
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.review_queue", {
+      refs: ["incident runbook"],
+      limitPerDocument: 3,
+      view: "summary",
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("comments.review_queue", {
+      collectionQuery: "engineering",
       includeReplies: true,
     })
   );
@@ -2384,6 +3171,10 @@ test("documents.answer and documents.answer_batch schema match handler inputs", 
   assert.doesNotThrow(() =>
     validateToolArgs("documents.answer", {
       query: "What changed this week?",
+      documentQuery: "Incident Runbook",
+      collectionQuery: "Engineering",
+      userQuery: "alice@example.com",
+      resolveLimit: 3,
     })
   );
 
@@ -2399,9 +3190,24 @@ test("documents.answer and documents.answer_batch schema match handler inputs", 
   assert.doesNotThrow(() =>
     validateToolArgs("documents.answer_batch", {
       question: "Where is the runbook?",
-      questions: [{ query: "Who owns incident response?" }],
+      questions: [{ query: "Who owns incident response?", documentQuery: "Incident Runbook" }],
+      collectionRefs: ["Engineering"],
       concurrency: 1,
     })
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.answer", {
+        query: "What changed this week?",
+        documentId: "doc-1",
+        documentQuery: "Incident Runbook",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.documentQuery"));
+      return true;
+    }
   );
 
   assert.throws(
@@ -2420,7 +3226,7 @@ test("documents.answer and documents.answer_batch schema match handler inputs", 
 test("graph schemas enforce selector constraints and strict bounds", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("documents.backlinks", {
-      id: "doc-1",
+      query: "incident runbook",
       limit: 25,
       offset: 0,
       direction: "DESC",
@@ -2431,7 +3237,8 @@ test("graph schemas enforce selector constraints and strict bounds", () => {
 
   assert.doesNotThrow(() =>
     validateToolArgs("documents.graph_neighbors", {
-      id: "doc-1",
+      refs: ["incident runbook", "https://handbook.example.com/doc/runbook-AbCdEf12"],
+      ids: ["doc-1"],
       includeBacklinks: true,
       includeSearchNeighbors: true,
       searchQueries: ["incident response"],
@@ -2449,6 +3256,19 @@ test("graph schemas enforce selector constraints and strict bounds", () => {
       includeSearchNeighbors: false,
       limitPerSource: 6,
       view: "summary",
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("documents.graph_report", {
+      seedRefs: ["incident runbook", "https://handbook.example.com/doc/runbook-AbCdEf12"],
+      seedQueries: ["postmortem"],
+      depth: 1,
+      maxNodes: 25,
+      includeBacklinks: true,
+      includeSearchNeighbors: false,
+      limitPerSource: 4,
+      view: "ids",
     })
   );
 
@@ -2541,6 +3361,8 @@ test("graph schemas enforce selector constraints and strict bounds", () => {
 test("issue reference schemas enforce selector, query, and regex constraints", () => {
   assert.doesNotThrow(() =>
     validateToolArgs("documents.issue_refs", {
+      refs: ["incident runbook"],
+      urls: ["https://handbook.example.com/doc/incident-AbCdEf12"],
       ids: ["doc-1", "doc-2"],
       issueDomains: ["jira.example.com"],
       keyPattern: "[A-Z]+-\\d+",
@@ -3300,6 +4122,19 @@ test("search.research schema accepts precision controls and enforces numeric bou
       includeBacklinks: true,
       backlinksLimit: 3,
       backlinksConcurrency: 2,
+      collectionQuery: "Engineering",
+      userQuery: "alice@example.com",
+      resolveLimit: 3,
+    })
+  );
+
+  assert.doesNotThrow(() =>
+    validateToolArgs("search.expand", {
+      query: "incident comms",
+      collectionRefs: ["Engineering"],
+      userRefs: ["alice@example.com"],
+      expandLimit: 2,
+      view: "summary",
     })
   );
 
@@ -3321,6 +4156,21 @@ test("search.research schema accepts precision controls and enforces numeric bou
     () =>
       validateToolArgs("search.research", {
         query: "incident comms",
+        collectionId: "col-1",
+        collectionQuery: "Engineering",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.equal(err.details?.code, "ARG_VALIDATION_FAILED");
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.collectionQuery"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("search.research", {
+        query: "incident comms",
         diversityLambda: 1.5,
       }),
     (err) => {
@@ -3334,14 +4184,28 @@ test("search.research schema accepts precision controls and enforces numeric bou
 
 test("URL resolve and canonicalization schemas enforce selectors and bounds", () => {
   assert.doesNotThrow(() =>
+    validateToolArgs("documents.resolve", {
+      query: "incident runbook",
+      collectionQuery: "Engineering",
+      userQuery: "alice@example.com",
+      refresh: false,
+      memoryMinScore: 80,
+      strict: true,
+      strictThreshold: 0.85,
+    })
+  );
+
+  assert.doesNotThrow(() =>
     validateToolArgs("documents.resolve_urls", {
       urls: [
         "https://handbook.example.com/doc/event-tracking-data-A7hLXuHZJl",
         "https://handbook.example.com/doc/campaign-detail-page-GWK1uA8w35#d-GWK1uA8w35",
       ],
+      collectionQuery: "Engineering",
       strict: true,
       strictHost: true,
       strictThreshold: 0.85,
+      refresh: false,
       view: "summary",
       concurrency: 2,
     })
@@ -3363,6 +4227,20 @@ test("URL resolve and canonicalization schemas enforce selectors and bounds", ()
     (err) => {
       assert.ok(err instanceof CliError);
       assert.ok(err.details?.issues?.some((issue) => issue.path === "args.url"));
+      return true;
+    }
+  );
+
+  assert.throws(
+    () =>
+      validateToolArgs("documents.resolve", {
+        query: "incident runbook",
+        collectionId: "col-1",
+        collectionQuery: "Engineering",
+      }),
+    (err) => {
+      assert.ok(err instanceof CliError);
+      assert.ok(err.details?.issues?.some((issue) => issue.path === "args.collectionQuery"));
       return true;
     }
   );

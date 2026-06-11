@@ -187,6 +187,7 @@ async function getRuntime(opts, overrideProfileId, context = {}) {
     profile,
     client,
     profileSelection,
+    memory: { enabled: true },
   };
 }
 
@@ -1003,6 +1004,7 @@ export async function run(argv = process.argv) {
           profile: hydrated,
           client: new OutlineClient(hydrated),
           profileSelection,
+          memory: { enabled: true },
         });
       }
       return clientCache.get(storedProfile.id);

@@ -173,12 +173,9 @@ outline-cli invoke documents.info --args '{
 
 ## Example 2: Safe revision-guarded patch update
 ```bash
-outline-cli invoke documents.info --args '{"id":"doc-a","view":"summary"}'
-# capture revision from result.items[0].document.revision
-
 outline-cli invoke documents.apply_patch_safe --args '{
-  "id": "doc-a",
-  "expectedRevision": 12,
+  "query": "incident runbook",
+  "expectedRevision": "latest",
   "mode": "unified",
   "patch": "@@ -1,1 +1,1 @@\n-Old\n+New",
   "performAction": true,
@@ -186,7 +183,18 @@ outline-cli invoke documents.apply_patch_safe --args '{
 }'
 ```
 
-## Example 3: Safe delete with read receipt
+## Example 3: Batch guarded updates by remembered refs
+```bash
+outline-cli invoke documents.batch_update --args '{
+  "updates": [
+    { "query": "incident runbook", "expectedRevision": "latest", "text": "\n\nUpdated", "editMode": "append" },
+    { "url": "https://handbook.example.com/doc/oncall-AbCdEf12", "expectedRevision": "latest", "title": "On-call Runbook" }
+  ],
+  "performAction": true
+}'
+```
+
+## Example 4: Safe delete with read receipt
 ```bash
 outline-cli invoke documents.info --args '{"id":"doc-a","armDelete":true,"view":"summary"}'
 
@@ -197,7 +205,7 @@ outline-cli invoke documents.delete --args '{
 }'
 ```
 
-## Example 4: Embedded image/file download
+## Example 5: Embedded image/file download
 ```bash
 outline-cli invoke documents.attachments --args '{
   "url": "https://handbook.example.com/doc/example-title-AbCdEf1234"

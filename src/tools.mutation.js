@@ -7,6 +7,7 @@ import {
 } from "./action-gate.js";
 import { compactValue, mapLimit, toInteger } from "./utils.js";
 import { summarizeSafeText } from "./summary-redaction.js";
+import { documentsOpenBatchTool } from "./memory-store.js";
 
 function normalizeDocumentSummary(doc, view = "summary", excerptChars = 220) {
   if (!doc) {
@@ -44,6 +45,31 @@ function buildRevisionConflict({ id, expectedRevision, actualRevision }) {
     expectedRevision,
     actualRevision,
     updated: false,
+  };
+}
+
+function resolveExpectedRevisionGuard(args, actualRevision, toolName) {
+  if (typeof args.expectedRevision === "string") {
+    const mode = args.expectedRevision.trim().toLowerCase();
+    if (mode !== "latest") {
+      throw new CliError("expectedRevision must be a number or \"latest\"");
+    }
+    if (!Number.isFinite(actualRevision)) {
+      throw new CliError(`${toolName} could not read the latest document revision`);
+    }
+    return {
+      expectedRevision: actualRevision,
+      source: "latest",
+    };
+  }
+
+  const expectedRevision = Number(args.expectedRevision);
+  if (!Number.isFinite(expectedRevision)) {
+    throw new CliError("expectedRevision must be a number or \"latest\"");
+  }
+  return {
+    expectedRevision,
+    source: "explicit",
   };
 }
 
@@ -1096,9 +1122,6 @@ async function documentsDeleteTool(ctx, args) {
 }
 
 async function documentsSafeUpdateTool(ctx, args) {
-  if (!args.id) {
-    throw new CliError("documents.safe_update requires args.id");
-  }
   if (args.expectedRevision === undefined || args.expectedRevision === null) {
     throw new CliError("documents.safe_update requires args.expectedRevision");
   }
@@ -1107,31 +1130,49 @@ async function documentsSafeUpdateTool(ctx, args) {
     action: "update a document",
   });
 
-  const expectedRevision = Number(args.expectedRevision);
-  if (!Number.isFinite(expectedRevision)) {
-    throw new CliError("expectedRevision must be a number");
+  const resolved = await resolveMutationDocumentTarget(ctx, args, "documents.safe_update");
+  if (resolved.error || !resolved.id) {
+    return {
+      tool: "documents.safe_update",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        updated: false,
+        status: resolved.error?.failed?.status || "not_found",
+        id: "",
+        resolution: resolved.error,
+      },
+    };
   }
 
-  const info = await ctx.client.call("documents.info", { id: args.id }, {
+  const info = await ctx.client.call("documents.info", { id: resolved.id }, {
     maxAttempts: toInteger(args.maxAttempts, 2),
   });
 
   const current = info.body?.data;
   const actualRevision = Number(current?.revision);
+  const expected = resolveExpectedRevisionGuard(args, actualRevision, "documents.safe_update");
+  const expectedRevision = expected.expectedRevision;
 
   if (actualRevision !== expectedRevision) {
     return {
       tool: "documents.safe_update",
       profile: ctx.profile.id,
-      result: buildRevisionConflict({
-        id: args.id,
-        expectedRevision,
-        actualRevision,
-      }),
+      result: {
+        ...buildRevisionConflict({
+          id: resolved.id,
+          expectedRevision,
+          actualRevision,
+        }),
+        ...(resolved.resolution ? { resolution: resolved.resolution } : {}),
+      },
     };
   }
 
-  const updateBody = ensureUpdatePayload(args);
+  const updateBody = ensureUpdatePayload({
+    ...args,
+    id: resolved.id,
+  });
   const updated = await ctx.client.call("documents.update", updateBody, {
     maxAttempts: toInteger(args.maxAttempts, 1),
   });
@@ -1142,7 +1183,9 @@ async function documentsSafeUpdateTool(ctx, args) {
     result: {
       ok: true,
       updated: true,
-      id: args.id,
+      id: resolved.id,
+      ...(resolved.resolution ? { resolution: resolved.resolution } : {}),
+      ...(expected.source === "latest" ? { expectedRevision, expectedRevisionSource: "latest" } : {}),
       previousRevision: actualRevision,
       currentRevision: updated.body?.data?.revision,
       data: normalizeDocumentSummary(updated.body?.data, args.view || "summary", toInteger(args.excerptChars, 220)),
@@ -1150,19 +1193,267 @@ async function documentsSafeUpdateTool(ctx, args) {
   };
 }
 
-async function documentsDiffTool(ctx, args) {
-  if (!args.id) {
-    throw new CliError("documents.diff requires args.id");
+async function resolveDiffDocument(ctx, args) {
+  if (args.id || args.documentId) {
+    const id = String(args.id || args.documentId);
+    const info = await ctx.client.call("documents.info", { id }, {
+      maxAttempts: toInteger(args.maxAttempts, 2),
+    });
+    return {
+      document: info.body?.data || null,
+      resolution: {
+        mode: "direct",
+        id,
+        memory: null,
+      },
+    };
   }
+
+  const refArgs = compactValue({
+    refs: args.refs || args.documentRefs || (args.documentRef ? [args.documentRef] : undefined),
+    queries: args.queries || args.documentQueries || (args.query ? [args.query] : args.documentQuery ? [args.documentQuery] : undefined),
+    shareIds: args.shareIds || (args.shareId ? [args.shareId] : undefined),
+    urlIds: args.urlIds || (args.urlId ? [args.urlId] : undefined),
+    urls: args.urls || (args.url ? [args.url] : undefined),
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: args.resolveCollectionId,
+    view: "full",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!refArgs.refs && !refArgs.queries && !refArgs.shareIds && !refArgs.urlIds && !refArgs.urls) {
+    throw new CliError("documents.diff requires args.id or document refs");
+  }
+
+  const opened = await documentsOpenBatchTool(ctx, refArgs);
+  const item = (opened.result?.items || []).find((row) => row?.ok && row.document?.id)
+    || (opened.result?.items || [])[0]
+    || null;
+  if (item?.ok && item.document) {
+    return {
+      document: item.document,
+      resolution: {
+        mode: item.mode,
+        index: item.index,
+        kind: item.kind,
+        value: item.value,
+        id: item.document.id,
+        title: item.document.title,
+        candidate: item.candidate,
+        memory: item.memory || opened.result?.memory || null,
+      },
+    };
+  }
+
+  return {
+    document: null,
+    resolution: {
+      failed: item
+        ? {
+            index: item.index,
+            kind: item.kind,
+            value: item.value,
+            status: item.status || "not_found",
+            candidate: item.candidate,
+            candidates: item.candidates,
+            error: item.error,
+          }
+        : { status: "not_found" },
+      memory: item?.memory || opened.result?.memory || null,
+    },
+  };
+}
+
+async function resolveDocumentIdForRevisionList(ctx, args) {
+  if (args.documentId || args.id) {
+    const id = String(args.documentId || args.id);
+    return {
+      documentId: id,
+      resolution: {
+        mode: "direct",
+        id,
+        memory: null,
+      },
+    };
+  }
+
+  const refArgs = compactValue({
+    refs: args.refs || args.documentRefs || (args.documentRef ? [args.documentRef] : undefined),
+    queries: args.queries || args.documentQueries || (args.query ? [args.query] : args.documentQuery ? [args.documentQuery] : undefined),
+    shareIds: args.shareIds || (args.shareId ? [args.shareId] : undefined),
+    urlIds: args.urlIds || (args.urlId ? [args.urlId] : undefined),
+    urls: args.urls || (args.url ? [args.url] : undefined),
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: args.resolveCollectionId,
+    view: "summary",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!refArgs.refs && !refArgs.queries && !refArgs.shareIds && !refArgs.urlIds && !refArgs.urls) {
+    throw new CliError("revisions.list requires args.documentId or document refs");
+  }
+
+  const opened = await documentsOpenBatchTool(ctx, refArgs);
+  const item = (opened.result?.items || []).find((row) => row?.ok && row.document?.id)
+    || (opened.result?.items || [])[0]
+    || null;
+  if (item?.ok && item.document?.id) {
+    return {
+      documentId: item.document.id,
+      resolution: {
+        mode: item.mode,
+        index: item.index,
+        kind: item.kind,
+        value: item.value,
+        id: item.document.id,
+        title: item.document.title,
+        candidate: item.candidate,
+        memory: item.memory || opened.result?.memory || null,
+      },
+    };
+  }
+
+  return {
+    documentId: "",
+    resolution: {
+      failed: item
+        ? {
+            index: item.index,
+            kind: item.kind,
+            value: item.value,
+            status: item.status || "not_found",
+            candidate: item.candidate,
+            candidates: item.candidates,
+            error: item.error,
+          }
+        : { status: "not_found" },
+      memory: item?.memory || opened.result?.memory || null,
+    },
+  };
+}
+
+async function resolveMutationDocumentTarget(ctx, args, toolName) {
+  if (args.id || args.documentId) {
+    const id = String(args.id || args.documentId);
+    return {
+      id,
+      resolution: null,
+    };
+  }
+
+  const refArgs = compactValue({
+    refs: args.refs || args.documentRefs || (args.documentRef ? [args.documentRef] : undefined),
+    queries: args.queries || args.documentQueries || (args.query ? [args.query] : args.documentQuery ? [args.documentQuery] : undefined),
+    shareIds: args.shareIds || (args.shareId ? [args.shareId] : undefined),
+    urlIds: args.urlIds || (args.urlId ? [args.urlId] : undefined),
+    urls: args.urls || (args.url ? [args.url] : undefined),
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: args.resolveCollectionId,
+    view: "summary",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!refArgs.refs && !refArgs.queries && !refArgs.shareIds && !refArgs.urlIds && !refArgs.urls) {
+    throw new CliError(`${toolName} requires args.id or document refs`);
+  }
+
+  const opened = await documentsOpenBatchTool(ctx, refArgs);
+  const item = (opened.result?.items || []).find((row) => row?.ok && row.document?.id)
+    || (opened.result?.items || [])[0]
+    || null;
+  if (item?.ok && item.document?.id) {
+    return {
+      id: item.document.id,
+      resolution: {
+        mode: item.mode,
+        index: item.index,
+        kind: item.kind,
+        value: item.value,
+        id: item.document.id,
+        title: item.document.title,
+        candidate: item.candidate,
+        memory: item.memory || opened.result?.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: "",
+    error: {
+      failed: item
+        ? {
+            index: item.index,
+            kind: item.kind,
+            value: item.value,
+            status: item.status || "not_found",
+            candidate: item.candidate,
+            candidates: item.candidates,
+            error: item.error,
+          }
+        : { status: "not_found" },
+      memory: item?.memory || opened.result?.memory || null,
+    },
+  };
+}
+
+async function documentsDiffTool(ctx, args) {
   if (typeof args.proposedText !== "string") {
     throw new CliError("documents.diff requires args.proposedText as string");
   }
 
-  const info = await ctx.client.call("documents.info", { id: args.id }, {
-    maxAttempts: toInteger(args.maxAttempts, 2),
-  });
+  const resolved = await resolveDiffDocument(ctx, args);
+  const current = resolved.document;
+  if (!current) {
+    return {
+      tool: "documents.diff",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        resolution: resolved.resolution,
+        stats: { added: 0, removed: 0, unchanged: 0 },
+        hunks: [],
+        truncated: false,
+      },
+    };
+  }
 
-  const current = info.body?.data;
   const currentText = current?.text || "";
   const diff = computeLineDiff(currentText, args.proposedText);
   const payload = buildDiffPayload(diff, args);
@@ -1172,9 +1463,10 @@ async function documentsDiffTool(ctx, args) {
     profile: ctx.profile.id,
     result: {
       ok: true,
-      id: args.id,
+      id: current.id || args.id || args.documentId,
       revision: current?.revision,
       title: current?.title,
+      resolution: resolved.resolution,
       stats: payload.stats,
       hunks: payload.hunks,
       truncated: payload.truncated,
@@ -1183,20 +1475,86 @@ async function documentsDiffTool(ctx, args) {
 }
 
 async function revisionsDiffTool(ctx, args) {
-  if (!args.id) {
-    throw new CliError("revisions.diff requires args.id");
-  }
-  if (!args.baseRevisionId) {
-    throw new CliError("revisions.diff requires args.baseRevisionId");
-  }
-  if (!args.targetRevisionId) {
-    throw new CliError("revisions.diff requires args.targetRevisionId");
+  const maxAttempts = toInteger(args.maxAttempts, 2);
+  let documentId = args.id || args.documentId || "";
+  let resolution = null;
+  let baseRevisionId = args.baseRevisionId || "";
+  let targetRevisionId = args.targetRevisionId || "";
+
+  if (!documentId) {
+    const resolved = await resolveDocumentIdForRevisionList(ctx, args);
+    documentId = resolved.documentId;
+    resolution = resolved.resolution;
+    if (!documentId) {
+      return {
+        tool: "revisions.diff",
+        profile: ctx.profile.id,
+        result: {
+          ok: false,
+          status: "not_found",
+          id: "",
+          resolution,
+          baseRevisionId: "",
+          targetRevisionId: "",
+          stats: { added: 0, removed: 0, unchanged: 0 },
+          hunks: [],
+          truncated: false,
+        },
+      };
+    }
+  } else {
+    resolution = {
+      mode: "direct",
+      id: documentId,
+      memory: null,
+    };
   }
 
-  const maxAttempts = toInteger(args.maxAttempts, 2);
+  if (!baseRevisionId || !targetRevisionId) {
+    const revisionPair = String(args.revisionPair || "latest").trim().toLowerCase();
+    if (revisionPair !== "latest") {
+      throw new CliError("revisions.diff requires args.baseRevisionId and args.targetRevisionId unless args.revisionPair is latest");
+    }
+    const listRes = await ctx.client.call(
+      "revisions.list",
+      compactValue({
+        documentId,
+        limit: Math.min(20, Math.max(2, toInteger(args.revisionLimit, 2))),
+        offset: 0,
+        sort: args.sort,
+        direction: args.direction,
+      }) || { documentId, limit: 2, offset: 0 },
+      { maxAttempts }
+    );
+    const revisions = Array.isArray(listRes.body?.data) ? listRes.body.data : [];
+    if (revisions.length < 2) {
+      return {
+        tool: "revisions.diff",
+        profile: ctx.profile.id,
+        result: {
+          ok: false,
+          status: "insufficient_revisions",
+          id: documentId,
+          resolution,
+          revisionCount: revisions.length,
+          baseRevisionId: "",
+          targetRevisionId: "",
+          stats: { added: 0, removed: 0, unchanged: 0 },
+          hunks: [],
+          truncated: false,
+        },
+      };
+    }
+    targetRevisionId = String(revisions[0]?.id || "");
+    baseRevisionId = String(revisions[1]?.id || "");
+    if (!baseRevisionId || !targetRevisionId) {
+      throw new CliError("revisions.diff could not derive latest revision IDs from revisions.list");
+    }
+  }
+
   const [baseRes, targetRes] = await Promise.all([
-    ctx.client.call("revisions.info", { id: args.baseRevisionId }, { maxAttempts }),
-    ctx.client.call("revisions.info", { id: args.targetRevisionId }, { maxAttempts }),
+    ctx.client.call("revisions.info", { id: baseRevisionId }, { maxAttempts }),
+    ctx.client.call("revisions.info", { id: targetRevisionId }, { maxAttempts }),
   ]);
 
   const baseRevision = baseRes.body?.data;
@@ -1211,19 +1569,19 @@ async function revisionsDiffTool(ctx, args) {
 
   const baseDocumentId = resolveRevisionDocumentId(baseRevision);
   const targetDocumentId = resolveRevisionDocumentId(targetRevision);
-  if (baseDocumentId && baseDocumentId !== args.id) {
+  if (baseDocumentId && baseDocumentId !== documentId) {
     throw new CliError("revisions.diff base revision does not belong to args.id", {
       code: "REVISION_DOCUMENT_MISMATCH",
-      id: args.id,
-      baseRevisionId: args.baseRevisionId,
+      id: documentId,
+      baseRevisionId,
       revisionDocumentId: baseDocumentId,
     });
   }
-  if (targetDocumentId && targetDocumentId !== args.id) {
+  if (targetDocumentId && targetDocumentId !== documentId) {
     throw new CliError("revisions.diff target revision does not belong to args.id", {
       code: "REVISION_DOCUMENT_MISMATCH",
-      id: args.id,
-      targetRevisionId: args.targetRevisionId,
+      id: documentId,
+      targetRevisionId,
       revisionDocumentId: targetDocumentId,
     });
   }
@@ -1237,9 +1595,11 @@ async function revisionsDiffTool(ctx, args) {
     profile: ctx.profile.id,
     result: {
       ok: true,
-      id: args.id,
-      baseRevisionId: args.baseRevisionId,
-      targetRevisionId: args.targetRevisionId,
+      id: documentId,
+      resolution,
+      revisionPair: !args.baseRevisionId || !args.targetRevisionId ? "latest" : "explicit",
+      baseRevisionId,
+      targetRevisionId,
       baseRevision: normalizeRevisionDiffMeta(baseRevision, view),
       targetRevision: normalizeRevisionDiffMeta(targetRevision, view),
       stats: payload.stats,
@@ -1253,9 +1613,6 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
   const toolName = options.toolName || "documents.apply_patch";
   const requireExpectedRevision = options.requireExpectedRevision === true;
 
-  if (!args.id) {
-    throw new CliError(`${toolName} requires args.id`);
-  }
   if (typeof args.patch !== "string") {
     throw new CliError(`${toolName} requires args.patch as string`);
   }
@@ -1270,17 +1627,32 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
     throw new CliError(`${toolName} requires args.expectedRevision`);
   }
 
-  const info = await ctx.client.call("documents.info", { id: args.id }, {
+  const resolved = await resolveMutationDocumentTarget(ctx, args, toolName);
+  if (resolved.error || !resolved.id) {
+    return {
+      tool: toolName,
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        updated: false,
+        status: resolved.error?.failed?.status || "not_found",
+        id: "",
+        resolution: resolved.error,
+      },
+    };
+  }
+
+  const info = await ctx.client.call("documents.info", { id: resolved.id }, {
     maxAttempts: toInteger(args.maxAttempts, 2),
   });
 
   const current = info.body?.data;
   const currentText = current?.text || "";
   const previousRevision = Number(current?.revision);
-  const expectedRevision = hasExpectedRevision ? Number(args.expectedRevision) : undefined;
-  if (hasExpectedRevision && !Number.isFinite(expectedRevision)) {
-    throw new CliError("expectedRevision must be a number");
-  }
+  const expected = hasExpectedRevision
+    ? resolveExpectedRevisionGuard(args, previousRevision, toolName)
+    : { expectedRevision: undefined, source: "none" };
+  const expectedRevision = expected.expectedRevision;
 
   const actualRevision = Number.isFinite(previousRevision) ? previousRevision : undefined;
   if (hasExpectedRevision && actualRevision !== expectedRevision) {
@@ -1289,10 +1661,11 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
       profile: ctx.profile.id,
       result: {
         ...buildRevisionConflict({
-          id: args.id,
+          id: resolved.id,
           expectedRevision,
           actualRevision,
         }),
+        ...(resolved.resolution ? { resolution: resolved.resolution } : {}),
         mode,
         previousRevision: actualRevision,
       },
@@ -1309,7 +1682,8 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
         result: {
           ok: false,
           updated: false,
-          id: args.id,
+          id: resolved.id,
+          ...(resolved.resolution ? { resolution: resolved.resolution } : {}),
           mode,
           previousRevision,
           error: applied.error,
@@ -1321,7 +1695,7 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
 
   const updateBody = ensureUpdatePayload({
     ...args,
-    id: args.id,
+    id: resolved.id,
     text: nextText,
     editMode: "replace",
   });
@@ -1336,7 +1710,9 @@ async function documentsApplyPatchTool(ctx, args, options = {}) {
     result: {
       ok: true,
       updated: true,
-      id: args.id,
+      id: resolved.id,
+      ...(resolved.resolution ? { resolution: resolved.resolution } : {}),
+      ...(expected.source === "latest" ? { expectedRevision, expectedRevisionSource: "latest" } : {}),
       mode,
       previousRevision,
       currentRevision: updated.body?.data?.revision,
@@ -1370,13 +1746,13 @@ async function documentsBatchUpdateTool(ctx, args) {
 
   const runner = async (update, index) => {
     try {
-      if (!update || typeof update !== "object" || !update.id) {
-        throw new CliError(`updates[${index}] must include id`);
+      if (!update || typeof update !== "object") {
+        throw new CliError(`updates[${index}] must be an object`);
       }
 
-      const body = ensureUpdatePayload(update);
-
-      if (Object.prototype.hasOwnProperty.call(update, "expectedRevision")) {
+      const hasExpectedRevision = Object.prototype.hasOwnProperty.call(update, "expectedRevision");
+      const hasExactId = Boolean(update.id || update.documentId);
+      if (hasExpectedRevision || !hasExactId) {
         const safe = await documentsSafeUpdateTool(ctx, {
           ...update,
           performAction: true,
@@ -1385,21 +1761,26 @@ async function documentsBatchUpdateTool(ctx, args) {
         });
         return {
           index,
-          id: update.id,
+          id: safe.result?.id || update.id || update.documentId,
           ok: safe.result?.ok === true,
           result: safe.result,
         };
       }
 
+      const body = ensureUpdatePayload({
+        ...update,
+        id: update.id || update.documentId,
+      });
+
       const updated = await ctx.client.call("documents.update", body, { maxAttempts });
       return {
         index,
-        id: update.id,
+        id: body.id,
         ok: true,
         result: {
           ok: true,
           updated: true,
-          id: update.id,
+          id: body.id,
           revision: updated.body?.data?.revision,
           data: normalizeDocumentSummary(updated.body?.data, update.view || "summary"),
         },
@@ -1408,12 +1789,12 @@ async function documentsBatchUpdateTool(ctx, args) {
       if (err instanceof ApiError || err instanceof CliError) {
         return {
           index,
-          id: update?.id,
+          id: update?.id || update?.documentId,
           ok: false,
           result: {
             ok: false,
             updated: false,
-            id: update?.id,
+            id: update?.id || update?.documentId,
             error: {
               code: err instanceof ApiError ? "api_error" : "invalid_input",
               message: err.message,
@@ -1475,12 +1856,24 @@ function normalizeRevisionRow(row, view = "summary") {
 }
 
 async function revisionsListTool(ctx, args) {
-  if (!args.documentId) {
-    throw new CliError("revisions.list requires args.documentId");
+  const resolved = await resolveDocumentIdForRevisionList(ctx, args);
+  if (!resolved.documentId) {
+    return {
+      tool: "revisions.list",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        documentId: "",
+        resolution: resolved.resolution,
+        data: [],
+        revisionCount: 0,
+      },
+    };
   }
 
   const body = compactValue({
-    documentId: args.documentId,
+    documentId: resolved.documentId,
     limit: toInteger(args.limit, 20),
     offset: toInteger(args.offset, 0),
     sort: args.sort,
@@ -1496,6 +1889,8 @@ async function revisionsListTool(ctx, args) {
 
   const payload = {
     ...res.body,
+    documentId: resolved.documentId,
+    resolution: resolved.resolution,
     data: rows,
     revisionCount: rows.length,
   };
@@ -1544,19 +1939,21 @@ async function revisionsRestoreTool(ctx, args) {
 export const MUTATION_TOOLS = {
   "documents.safe_update": {
     signature:
-      "documents.safe_update(args: { id: string; expectedRevision: number; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend'; icon?: string; color?: string; fullWidth?: boolean; templateId?: string; collectionId?: string; insightsEnabled?: boolean; publish?: boolean; dataAttributes?: any[]; view?: 'summary'|'full'; performAction?: boolean })",
+      "documents.safe_update(args: { id?: string; documentId?: string; query?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; expectedRevision: number|'latest'; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend'; icon?: string; color?: string; fullWidth?: boolean; templateId?: string; collectionId?: string; insightsEnabled?: boolean; publish?: boolean; dataAttributes?: any[]; view?: 'summary'|'full'; performAction?: boolean })",
     description: "Update document only if current revision matches expectedRevision.",
     usageExample: {
       tool: "documents.safe_update",
       args: {
-        id: "doc-id",
-        expectedRevision: 3,
+        query: "incident runbook",
+        expectedRevision: "latest",
         text: "\n\n## Changes\n- added new action",
         editMode: "append",
       },
     },
     bestPractices: [
-      "Read document first and pass returned revision as expectedRevision.",
+      "Pass id/documentId for exact targets, or query/refs/url when you only have a remembered title or pasted Outline URL.",
+      "Pass expectedRevision='latest' only when the requested edit should apply to the current revision read inside this tool call.",
+      "Pass a numeric revision from a prior read when coordinating an externally reviewed edit.",
       "Handle revision_conflict deterministically and re-read before retry.",
       "Use append/prepend for low-token incremental writes.",
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
@@ -1565,17 +1962,19 @@ export const MUTATION_TOOLS = {
   },
   "documents.diff": {
     signature:
-      "documents.diff(args: { id: string; proposedText: string; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number })",
-    description: "Compute line-level diff between current document text and proposed text.",
+      "documents.diff(args: { id?: string; documentId?: string; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; proposedText: string; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number })",
+    description: "Resolve a document and compute a line-level diff between current document text and proposed text.",
     usageExample: {
       tool: "documents.diff",
       args: {
-        id: "doc-id",
+        query: "incident runbook",
         proposedText: "# Title\n\nUpdated body",
       },
     },
     bestPractices: [
+      "Pass id/documentId for exact targets, or query/refs/url when you only have a remembered title or pasted Outline URL.",
       "Run diff before patch/apply to reduce accidental destructive edits.",
+      "Use strict=true defaults for remembered titles so weak fuzzy matches return a structured miss instead of guessing.",
       "Use preview hunks first; request full hunks only when needed.",
       "Track added/removed counts to detect large unintended changes.",
     ],
@@ -1583,20 +1982,21 @@ export const MUTATION_TOOLS = {
   },
   "documents.apply_patch": {
     signature:
-      "documents.apply_patch(args: { id: string; patch: string; mode?: 'unified'|'replace'; expectedRevision?: number; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
+      "documents.apply_patch(args: { id?: string; documentId?: string; query?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; patch: string; mode?: 'unified'|'replace'; expectedRevision?: number|'latest'; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
     description: "Apply unified diff patch (or full replace) to a document and persist update.",
     usageExample: {
       tool: "documents.apply_patch",
       args: {
-        id: "doc-id",
+        query: "incident runbook",
         expectedRevision: 7,
         mode: "unified",
         patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
       },
     },
     bestPractices: [
+      "Pass id/documentId for exact targets, or query/refs/url when you only have a remembered title or pasted Outline URL.",
       "Prefer unified mode for minimal, auditable text changes.",
-      "Pass expectedRevision when coordinating concurrent editors to prevent stale writes.",
+      "Pass expectedRevision='latest' only when the patch should apply to the current revision read inside this tool call; pass a number for externally reviewed edits.",
       "On patch_apply_failed, re-read latest text and regenerate patch.",
       "Use replace mode only for full-document rewrites.",
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
@@ -1605,20 +2005,22 @@ export const MUTATION_TOOLS = {
   },
   "documents.apply_patch_safe": {
     signature:
-      "documents.apply_patch_safe(args: { id: string; expectedRevision: number; patch: string; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
+      "documents.apply_patch_safe(args: { id?: string; documentId?: string; query?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; expectedRevision: number|'latest'; patch: string; mode?: 'unified'|'replace'; title?: string; view?: 'summary'|'full'; performAction?: boolean })",
     description:
       "Apply patch with mandatory revision guard so writes only proceed from the expected document revision.",
     usageExample: {
       tool: "documents.apply_patch_safe",
       args: {
-        id: "doc-id",
-        expectedRevision: 7,
+        query: "incident runbook",
+        expectedRevision: "latest",
         mode: "unified",
         patch: "@@ -1,1 +1,1 @@\n-Old\n+New",
       },
     },
     bestPractices: [
+      "Pass id/documentId for exact targets, or query/refs/url when you only have a remembered title or pasted Outline URL.",
       "Use this wrapper for all automated patch writes to enforce optimistic concurrency.",
+      "Pass expectedRevision='latest' only when the patch should apply to the current revision read inside this tool call; pass a number for externally reviewed edits.",
       "Re-read the document and regenerate patch when revision_conflict is returned.",
       "Keep unified mode for minimal, auditable edits; use replace mode for full rewrites only.",
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
@@ -1627,13 +2029,13 @@ export const MUTATION_TOOLS = {
   },
   "documents.batch_update": {
     signature:
-      "documents.batch_update(args: { updates: Array<{ id: string; expectedRevision?: number; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend' }>; concurrency?: number; continueOnError?: boolean; performAction?: boolean })",
+      "documents.batch_update(args: { updates: Array<{ id?: string; documentId?: string; query?: string; refs?: string[]; url?: string; expectedRevision?: number|'latest'; title?: string; text?: string; editMode?: 'replace'|'append'|'prepend' }>; concurrency?: number; continueOnError?: boolean; performAction?: boolean })",
     description: "Run multiple document updates in one call with per-item results.",
     usageExample: {
       tool: "documents.batch_update",
       args: {
         updates: [
-          { id: "doc-1", text: "\n\nupdate one", editMode: "append" },
+          { query: "incident runbook", expectedRevision: "latest", text: "\n\nupdate one", editMode: "append" },
           { id: "doc-2", title: "Renamed" },
         ],
         concurrency: 2,
@@ -1641,7 +2043,9 @@ export const MUTATION_TOOLS = {
       },
     },
     bestPractices: [
-      "Use expectedRevision per update for multi-agent safety.",
+      "Use query/refs/url per item when batching named documents; fuzzy targets require expectedRevision.",
+      "Use expectedRevision='latest' only when each edit should apply to the current revision read inside that item.",
+      "Use numeric expectedRevision per update for externally reviewed multi-agent safety.",
       "Set continueOnError=false for transactional-style stop-on-first-failure flows.",
       "Use per-item results to retry only failed updates.",
       "This tool is action-gated; set performAction=true only after explicit confirmation.",
@@ -1749,17 +2153,18 @@ export const MUTATION_TOOLS = {
   },
   "revisions.list": {
     signature:
-      "revisions.list(args: { documentId: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'summary'|'full' })",
-    description: "List revisions for a document.",
+      "revisions.list(args: { documentId?: string; id?: string; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'summary'|'full' })",
+    description: "Resolve a document and list its revisions.",
     usageExample: {
       tool: "revisions.list",
       args: {
-        documentId: "doc-id",
+        query: "incident runbook",
         limit: 10,
         view: "summary",
       },
     },
     bestPractices: [
+      "Pass documentId/id for exact targets, or query/refs/url when you only have a remembered title or pasted Outline URL.",
       "Use small limits and paginate for long histories.",
       "Capture revision IDs before performing restore operations.",
       "Use summary view for fast planning loops.",
@@ -1768,18 +2173,19 @@ export const MUTATION_TOOLS = {
   },
   "revisions.diff": {
     signature:
-      "revisions.diff(args: { id: string; baseRevisionId: string; targetRevisionId: string; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number; view?: 'summary'|'full'; maxAttempts?: number })",
-    description: "Compute line-level diff between two revisions by hydrating both with revisions.info.",
+      "revisions.diff(args: { id?: string; documentId?: string; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; baseRevisionId?: string; targetRevisionId?: string; revisionPair?: 'latest'; revisionLimit?: number; includeFullHunks?: boolean; hunkLimit?: number; hunkLineLimit?: number; view?: 'summary'|'full'; maxAttempts?: number })",
+    description: "Resolve a document and compute a line-level diff between explicit revision IDs or the latest two revisions.",
     usageExample: {
       tool: "revisions.diff",
       args: {
-        id: "doc-id",
-        baseRevisionId: "revision-id-older",
-        targetRevisionId: "revision-id-newer",
+        query: "incident runbook",
+        revisionPair: "latest",
         view: "summary",
       },
     },
     bestPractices: [
+      "Pass query/refs/url for one-call latest revision diffs when the exact document ID is unknown.",
+      "Pass explicit baseRevisionId and targetRevisionId when comparing non-adjacent revisions.",
       "Pass adjacent revisions first to isolate rollback root causes.",
       "Use preview hunks first; set includeFullHunks=true only when needed.",
       "Verify revision metadata before applying restore or patch actions.",

@@ -1,5 +1,7 @@
 import { CliError } from "./errors.js";
 
+const MEMORY_ENTITY_TYPES = ["document", "collection", "user", "group", "template"];
+
 const TYPES = {
   string: (v) => typeof v === "string",
   number: (v) => typeof v === "number" && Number.isFinite(v),
@@ -153,6 +155,447 @@ function buildValidationDetails(tool, spec, issues, args = undefined) {
     validationHint:
       acceptedArgs.length > 0 ? `Accepted args: ${acceptedArgs.join(", ")}` : undefined,
   };
+}
+
+const ACCESS_RESOLVE_COMMON_PROPERTIES = {
+  refs: { type: "string[]" },
+  queries: { type: "string[]" },
+  documentQueries: { type: "string[]" },
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
+  fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+  resolveConcurrency: { type: "number", min: 1 },
+  resolveHydrateConcurrency: { type: "number", min: 1 },
+};
+
+const DOCUMENT_ACCESS_RESOLVE_PROPERTIES = {
+  id: { type: "string" },
+  documentId: { type: "string" },
+  query: { type: "string" },
+  documentQuery: { type: "string" },
+  shareId: { type: "string" },
+  shareIds: { type: "string[]" },
+  urlId: { type: "string" },
+  urlIds: { type: "string[]" },
+  url: { type: "string" },
+  urls: { type: "string[]" },
+  resolveCollectionId: { type: "string" },
+  snippetMinWords: { type: "number", min: 1 },
+  snippetMaxWords: { type: "number", min: 1 },
+  ...ACCESS_RESOLVE_COMMON_PROPERTIES,
+};
+
+const COLLECTION_ACCESS_RESOLVE_PROPERTIES = {
+  id: { type: "string" },
+  collectionId: { type: "string" },
+  query: { type: "string" },
+  urlId: { type: "string" },
+  urlIds: { type: "string[]" },
+  url: { type: "string" },
+  urls: { type: "string[]" },
+  ...ACCESS_RESOLVE_COMMON_PROPERTIES,
+};
+
+const PRINCIPAL_RESOLVE_PROPERTIES = {
+  query: { type: "string" },
+  refs: { type: "string[]" },
+  queries: { type: "string[]" },
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
+  resolveConcurrency: { type: "number", min: 1 },
+  resolveHydrateConcurrency: { type: "number", min: 1 },
+};
+
+const PRINCIPAL_RESOLVE_OPTION_PROPERTIES = {
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
+  resolveConcurrency: { type: "number", min: 1 },
+  resolveHydrateConcurrency: { type: "number", min: 1 },
+};
+
+const USER_PRINCIPAL_RESOLVE_PROPERTIES = {
+  userQuery: { type: "string" },
+  userRef: { type: "string" },
+  userQueries: { type: "string[]" },
+  userRefs: { type: "string[]" },
+  ...PRINCIPAL_RESOLVE_OPTION_PROPERTIES,
+};
+
+const GROUP_PRINCIPAL_RESOLVE_PROPERTIES = {
+  groupQuery: { type: "string" },
+  groupRef: { type: "string" },
+  groupQueries: { type: "string[]" },
+  groupRefs: { type: "string[]" },
+  ...PRINCIPAL_RESOLVE_OPTION_PROPERTIES,
+};
+
+const TEMPLATE_RESOLVE_PROPERTIES = {
+  templateQuery: { type: "string" },
+  templateRef: { type: "string" },
+  templateQueries: { type: "string[]" },
+  templateRefs: { type: "string[]" },
+  refs: { type: "string[]" },
+  queries: { type: "string[]" },
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
+  resolveConcurrency: { type: "number", min: 1 },
+  resolveHydrateConcurrency: { type: "number", min: 1 },
+};
+
+const DOCUMENT_TARGET_RESOLVE_PROPERTIES = {
+  documentId: { type: "string" },
+  query: { type: "string" },
+  documentQuery: { type: "string" },
+  documentRef: { type: "string" },
+  queries: { type: "string[]" },
+  documentQueries: { type: "string[]" },
+  documentRefs: { type: "string[]" },
+  refs: { type: "string[]" },
+  shareId: { type: "string" },
+  shareIds: { type: "string[]" },
+  urlId: { type: "string" },
+  urlIds: { type: "string[]" },
+  url: { type: "string" },
+  urls: { type: "string[]" },
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
+  fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+  resolveCollectionId: { type: "string" },
+  resolveConcurrency: { type: "number", min: 1 },
+  resolveHydrateConcurrency: { type: "number", min: 1 },
+  snippetMinWords: { type: "number", min: 1 },
+  snippetMaxWords: { type: "number", min: 1 },
+};
+
+const DOCUMENT_MUTATION_TARGET_RESOLVE_PROPERTIES = {
+  id: { type: "string" },
+  ...DOCUMENT_TARGET_RESOLVE_PROPERTIES,
+};
+
+function hasNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasNonEmptyStringArray(value) {
+  return Array.isArray(value) && value.some((item) => hasNonEmptyString(item));
+}
+
+function validateAccessResolveConcurrency(args, issues) {
+  if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+    issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+  }
+  if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+    issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+  }
+}
+
+function validateDocumentAccessSelector(args, issues) {
+  const hasScalar = ["id", "documentId", "query", "documentQuery", "shareId", "urlId", "url"].some((key) =>
+    hasNonEmptyString(args[key])
+  );
+  const hasArray = ["refs", "queries", "documentQueries", "shareIds", "urlIds", "urls"].some((key) =>
+    hasNonEmptyStringArray(args[key])
+  );
+  if (!hasScalar && !hasArray) {
+    issues.push({ path: "args.id", message: "or args.documentId, args.query, args.refs, args.shareId, args.urlId, or args.url is required" });
+  }
+  if (args.id && args.documentId) {
+    issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function hasDocumentResolveSelector(args, { includeQuery = true } = {}) {
+  const scalarKeys = [
+    "documentId",
+    "documentQuery",
+    "documentRef",
+    "shareId",
+    "urlId",
+    "url",
+    ...(includeQuery ? ["query"] : []),
+  ];
+  const arrayKeys = [
+    "refs",
+    "documentRefs",
+    "documentQueries",
+    "shareIds",
+    "urlIds",
+    "urls",
+    ...(includeQuery ? ["queries"] : []),
+  ];
+  return scalarKeys.some((key) => hasNonEmptyString(args[key]))
+    || arrayKeys.some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validateOptionalDocumentResolveArgs(args, issues) {
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateRequiredDocumentResolveArgs(args, issues) {
+  if (!hasDocumentResolveSelector(args)) {
+    issues.push({ path: "args.documentId", message: "or args.query, args.documentQuery, args.refs, args.shareId, args.urlId, or args.url is required" });
+  }
+  const hasExact = hasNonEmptyString(args.documentId);
+  const hasRef = [
+    "query",
+    "documentQuery",
+    "documentRef",
+    "shareId",
+    "urlId",
+    "url",
+  ].some((key) => hasNonEmptyString(args[key]))
+    || ["refs", "queries", "documentQueries", "documentRefs", "shareIds", "urlIds", "urls"].some((key) => hasNonEmptyStringArray(args[key]));
+  if (hasExact && hasRef) {
+    issues.push({ path: "args.documentQuery", message: "cannot be combined with args.documentId" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateRequiredDocumentMutationTargetArgs(args, issues) {
+  const hasId = hasNonEmptyString(args.id);
+  const hasDocumentId = hasNonEmptyString(args.documentId);
+  const hasRef = [
+    "query",
+    "documentQuery",
+    "documentRef",
+    "shareId",
+    "urlId",
+    "url",
+  ].some((key) => hasNonEmptyString(args[key]))
+    || ["refs", "queries", "documentQueries", "documentRefs", "shareIds", "urlIds", "urls"].some((key) => hasNonEmptyStringArray(args[key]));
+
+  if (!hasId && !hasDocumentId && !hasRef) {
+    issues.push({ path: "args.id", message: "or args.documentId, args.query, args.refs, args.shareId, args.urlId, or args.url is required" });
+  }
+  if (hasId && hasDocumentId) {
+    issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+  }
+  if ((hasId || hasDocumentId) && hasRef) {
+    issues.push({ path: "args.query", message: "cannot be combined with args.id or args.documentId" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateExpectedRevisionGuard(args, issues) {
+  if (typeof args.expectedRevision === "string" && args.expectedRevision.trim().toLowerCase() !== "latest") {
+    issues.push({ path: "args.expectedRevision", message: "must be a number or latest" });
+  }
+}
+
+function validateRequiredDocumentMutationTargetAndExpectedRevision(args, issues) {
+  validateRequiredDocumentMutationTargetArgs(args, issues);
+  validateExpectedRevisionGuard(args, issues);
+}
+
+function validateBatchUpdateDocumentTarget(update, issues, path) {
+  const hasId = hasNonEmptyString(update.id);
+  const hasDocumentId = hasNonEmptyString(update.documentId);
+  const hasRef = [
+    "query",
+    "documentQuery",
+    "documentRef",
+    "shareId",
+    "urlId",
+    "url",
+  ].some((key) => hasNonEmptyString(update[key]))
+    || ["refs", "queries", "documentQueries", "documentRefs", "shareIds", "urlIds", "urls"].some((key) => hasNonEmptyStringArray(update[key]));
+
+  if (!hasId && !hasDocumentId && !hasRef) {
+    issues.push({ path: `${path}.id`, message: "or document refs are required" });
+  }
+  if (hasId && hasDocumentId) {
+    issues.push({ path: `${path}.documentId`, message: "cannot be combined with id" });
+  }
+  if ((hasId || hasDocumentId) && hasRef) {
+    issues.push({ path: `${path}.query`, message: "cannot be combined with id or documentId" });
+  }
+  if (hasRef && !Object.prototype.hasOwnProperty.call(update, "expectedRevision")) {
+    issues.push({ path: `${path}.expectedRevision`, message: "is required when using document refs" });
+  }
+}
+
+function validateEventsListResolveSelectors(args, issues) {
+  const hasDocumentRef = ["documentQuery", "documentRef", "shareId", "urlId", "url"].some((key) => hasNonEmptyString(args[key]))
+    || ["documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"].some((key) => hasNonEmptyStringArray(args[key]));
+  if (hasNonEmptyString(args.documentId) && hasDocumentRef) {
+    issues.push({ path: "args.documentQuery", message: "cannot be combined with args.documentId" });
+  }
+  if (hasNonEmptyString(args.collectionId) && hasDocumentFilterResolveSelector(args, "collection")) {
+    issues.push({ path: "args.collectionQuery", message: "cannot be combined with args.collectionId" });
+  }
+  if (hasNonEmptyString(args.actorId) && hasDocumentFilterResolveSelector(args, "user")) {
+    issues.push({ path: "args.userQuery", message: "cannot be combined with args.actorId" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateOptionalCollectionFilterResolveArgs(args, issues) {
+  if (hasNonEmptyString(args.collectionId) && hasDocumentFilterResolveSelector(args, "collection")) {
+    issues.push({ path: "args.collectionQuery", message: "cannot be combined with args.collectionId" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateShareInfoSelector(args, issues) {
+  const hasShareId = hasNonEmptyString(args.id);
+  const hasDocumentRef = hasDocumentResolveSelector(args);
+  if (!hasShareId && !hasDocumentRef) {
+    issues.push({ path: "args.id", message: "or args.documentId, args.query, args.documentQuery, args.refs, args.urlId, or args.url is required" });
+  }
+  if (hasShareId && hasDocumentRef) {
+    issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function validateCollectionAccessSelector(args, issues) {
+  const hasScalar = ["id", "collectionId", "query", "urlId", "url"].some((key) =>
+    hasNonEmptyString(args[key])
+  );
+  const hasArray = ["refs", "queries", "urlIds", "urls"].some((key) =>
+    hasNonEmptyStringArray(args[key])
+  );
+  if (!hasScalar && !hasArray) {
+    issues.push({ path: "args.id", message: "or args.collectionId, args.query, args.refs, args.urlId, or args.url is required" });
+  }
+  if (args.id && args.collectionId) {
+    issues.push({ path: "args.collectionId", message: "cannot be combined with args.id" });
+  }
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function hasPrincipalResolveSelector(args) {
+  return ["query"].some((key) => hasNonEmptyString(args[key]))
+    || ["refs", "queries"].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validatePrincipalResolveConcurrency(args, issues) {
+  validateAccessResolveConcurrency(args, issues);
+}
+
+function hasNamedPrincipalSelector(args, type) {
+  const prefix = type === "group" ? "group" : "user";
+  return [`${prefix}Query`, `${prefix}Ref`].some((key) => hasNonEmptyString(args[key]))
+    || [`${prefix}Queries`, `${prefix}Refs`].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validateNamedPrincipalSelector(args, issues, type) {
+  const idKey = type === "group" ? "groupId" : "userId";
+  const prefix = type === "group" ? "group" : "user";
+  const hasId = hasNonEmptyString(args[idKey]);
+  const hasResolvedRef = hasNamedPrincipalSelector(args, type);
+  if (!hasId && !hasResolvedRef) {
+    issues.push({ path: `args.${idKey}`, message: `or args.${prefix}Query/args.${prefix}Refs is required` });
+  }
+  if (hasId && hasResolvedRef) {
+    issues.push({ path: `args.${prefix}Query`, message: `cannot be combined with args.${idKey}` });
+  }
+  validatePrincipalResolveConcurrency(args, issues);
+}
+
+function hasGroupTargetSelector(args) {
+  return ["id", "groupId", "groupQuery", "groupRef"].some((key) => hasNonEmptyString(args[key]))
+    || ["groupQueries", "groupRefs"].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function hasTemplateResolveSelector(args, { includeQuery = true } = {}) {
+  return ["templateQuery", "templateRef", ...(includeQuery ? ["query"] : [])].some((key) => hasNonEmptyString(args[key]))
+    || ["templateQueries", "templateRefs", "refs", ...(includeQuery ? ["queries"] : [])].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validateTemplateTargetSelector(args, issues, options = {}) {
+  const idKeys = options.idKeys || ["id"];
+  const hasId = idKeys.some((key) => hasNonEmptyString(args[key]));
+  const hasIds = hasNonEmptyStringArray(args.ids);
+  const hasResolvedRef = hasTemplateResolveSelector(args, { includeQuery: options.includeQuery !== false });
+  if (!hasId && !hasIds && !hasResolvedRef) {
+    issues.push({ path: `args.${idKeys[0]}`, message: "or args.templateQuery/args.templateRefs is required" });
+  }
+  if ((hasId || hasIds) && hasResolvedRef) {
+    issues.push({ path: "args.templateQuery", message: `cannot be combined with args.${hasIds ? "ids" : idKeys[0]}` });
+  }
+  validatePrincipalResolveConcurrency(args, issues);
+}
+
+function validateGroupTargetSelector(args, issues) {
+  if (!hasGroupTargetSelector(args)) {
+    issues.push({ path: "args.id", message: "or args.groupId/args.groupQuery/args.groupRefs is required" });
+  }
+  const hasId = hasNonEmptyString(args.id) || hasNonEmptyString(args.groupId);
+  const hasResolvedRef = hasNamedPrincipalSelector(args, "group");
+  if (hasNonEmptyString(args.id) && hasNonEmptyString(args.groupId)) {
+    issues.push({ path: "args.groupId", message: "cannot be combined with args.id" });
+  }
+  if (hasId && hasResolvedRef) {
+    issues.push({ path: "args.groupQuery", message: "cannot be combined with args.id or args.groupId" });
+  }
+  validatePrincipalResolveConcurrency(args, issues);
+}
+
+function validateGroupUserMutationSelector(args, issues) {
+  validateGroupTargetSelector(args, issues);
+  validateNamedPrincipalSelector(args, issues, "user");
+}
+
+function validateCollectionUserMutationSelector(args, issues) {
+  validateCollectionAccessSelector(args, issues);
+  validateNamedPrincipalSelector(args, issues, "user");
+}
+
+function validateCollectionGroupMutationSelector(args, issues) {
+  validateCollectionAccessSelector(args, issues);
+  validateNamedPrincipalSelector(args, issues, "group");
+}
+
+function validateDocumentUserMutationSelector(args, issues) {
+  validateDocumentAccessSelector(args, issues);
+  validateNamedPrincipalSelector(args, issues, "user");
+}
+
+function validateDocumentGroupMutationSelector(args, issues) {
+  validateDocumentAccessSelector(args, issues);
+  validateNamedPrincipalSelector(args, issues, "group");
 }
 
 function looksNumeric(value) {
@@ -331,10 +774,57 @@ function validateSpec(tool, args, spec) {
 
 const SHARED_DOC_COMMON = {
   collectionId: { type: "string" },
+  collectionQuery: { type: "string" },
+  collectionRef: { type: "string" },
+  collectionQueries: { type: "string[]" },
+  collectionRefs: { type: "string[]" },
   userId: { type: "string" },
+  userQuery: { type: "string" },
+  userRef: { type: "string" },
+  userQueries: { type: "string[]" },
+  userRefs: { type: "string[]" },
+  profile: { type: "string" },
+  resolveLimit: { type: "number", min: 1 },
+  minScore: { type: "number", min: 0 },
+  maxAgeHours: { type: "number", min: 0 },
+  refresh: { type: "boolean" },
+  strict: { type: "boolean" },
+  strictThreshold: { type: "number", min: 0 },
+  fallbackSearch: { type: "boolean" },
+  fallbackMinScore: { type: "number", min: 0 },
+  fallbackLimit: { type: "number", min: 1 },
   statusFilter: { type: ["string", "string[]"] },
   view: { type: "string", enum: ["ids", "summary", "full"] },
 };
+
+function hasDocumentFilterResolveSelector(args, prefix) {
+  return [`${prefix}Query`, `${prefix}Ref`].some((key) => hasNonEmptyString(args[key]))
+    || [`${prefix}Queries`, `${prefix}Refs`].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validateDocumentFilterSelectors(args, issues) {
+  if (hasNonEmptyString(args.collectionId) && hasDocumentFilterResolveSelector(args, "collection")) {
+    issues.push({ path: "args.collectionQuery", message: "cannot be combined with args.collectionId" });
+  }
+  if (hasNonEmptyString(args.userId) && hasDocumentFilterResolveSelector(args, "user")) {
+    issues.push({ path: "args.userQuery", message: "cannot be combined with args.userId" });
+  }
+}
+
+function hasAnswerDocumentResolveSelector(args) {
+  return ["documentQuery", "documentRef", "shareId", "urlId", "url"].some((key) => hasNonEmptyString(args[key]))
+    || ["documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"].some((key) => hasNonEmptyStringArray(args[key]));
+}
+
+function validateAnswerScopeSelectors(args, issues) {
+  validateDocumentFilterSelectors(args, issues);
+  if (hasNonEmptyString(args.id) && hasNonEmptyString(args.documentId)) {
+    issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+  }
+  if ((hasNonEmptyString(args.id) || hasNonEmptyString(args.documentId)) && hasAnswerDocumentResolveSelector(args)) {
+    issues.push({ path: "args.documentQuery", message: "cannot be combined with args.id or args.documentId" });
+  }
+}
 
 const DATA_ATTRIBUTE_DATA_TYPES = ["string", "number", "boolean", "list"];
 const USER_ROLE_TYPES = ["admin", "member", "viewer", "guest"];
@@ -385,6 +875,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.query && !args.queries) {
         issues.push({ path: "args.query", message: "or args.queries[] is required" });
       }
+      validateDocumentFilterSelectors(args, issues);
     },
   },
   "documents.list": {
@@ -406,12 +897,28 @@ export const TOOL_ARG_SCHEMAS = {
           message: "cannot be combined with a non-null args.parentDocumentId",
         });
       }
+      validateDocumentFilterSelectors(args, issues);
     },
   },
   "documents.backlinks": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      query: { type: "string" },
+      shareId: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -421,8 +928,12 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (typeof args.id === "string" && args.id.trim().length === 0) {
-        issues.push({ path: "args.id", message: "must be a non-empty string" });
+      const refs = ["id", "query", "shareId", "urlId", "url"].filter((key) => args[key]);
+      if (refs.length === 0) {
+        issues.push({ path: "args.id", message: "or args.query, args.shareId, args.urlId, or args.url is required" });
+      }
+      if (refs.length > 1) {
+        issues.push({ path: "args.id", message: "provide only one of args.id, args.query, args.shareId, args.urlId, or args.url" });
       }
       if (typeof args.limit === "number" && args.limit > 250) {
         issues.push({ path: "args.limit", message: "must be <= 250" });
@@ -433,6 +944,29 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       ids: { type: "string[]" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       includeBacklinks: { type: "boolean" },
       includeSearchNeighbors: { type: "boolean" },
       searchQueries: { type: "string[]" },
@@ -443,9 +977,15 @@ export const TOOL_ARG_SCHEMAS = {
     custom(args, issues) {
       const hasId = typeof args.id === "string" && args.id.trim().length > 0;
       const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasRefs = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingularRef = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
 
-      if (!hasId && !hasIds) {
-        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      if (!hasId && !hasIds && !hasRefs && !hasSingularRef) {
+        issues.push({ path: "args.id", message: "or args.ids[], args.refs[], args.query, args.queries[], args.shareId(s), args.urlId(s), or args.url(s) is required" });
       }
       if (Array.isArray(args.ids) && args.ids.length === 0) {
         issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
@@ -478,12 +1018,40 @@ export const TOOL_ARG_SCHEMAS = {
       if (typeof args.limitPerSource === "number" && args.limitPerSource > 100) {
         issues.push({ path: "args.limitPerSource", message: "must be <= 100" });
       }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+      }
     },
   },
   "documents.graph_report": {
-    required: ["seedIds"],
     properties: {
       seedIds: { type: "string[]" },
+      seedRefs: { type: "string[]" },
+      seedQuery: { type: "string" },
+      seedQueries: { type: "string[]" },
+      seedShareId: { type: "string" },
+      seedShareIds: { type: "string[]" },
+      seedUrlId: { type: "string" },
+      seedUrlIds: { type: "string[]" },
+      seedUrl: { type: "string" },
+      seedUrls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       depth: { type: "number", min: 0 },
       maxNodes: { type: "number", min: 1 },
       includeBacklinks: { type: "boolean" },
@@ -493,6 +1061,17 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
+      const hasSeedIds = Array.isArray(args.seedIds) && args.seedIds.length > 0;
+      const hasSeedArrays = ["seedRefs", "seedQueries", "seedShareIds", "seedUrlIds", "seedUrls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSeedSingle = ["seedQuery", "seedShareId", "seedUrlId", "seedUrl"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+
+      if (!hasSeedIds && !hasSeedArrays && !hasSeedSingle) {
+        issues.push({ path: "args.seedIds", message: "or args.seedRefs[], args.seedQuery, args.seedQueries[], args.seedShareId(s), args.seedUrlId(s), or args.seedUrl(s) is required" });
+      }
       if (Array.isArray(args.seedIds) && args.seedIds.length === 0) {
         issues.push({ path: "args.seedIds", message: "must be a non-empty string[]" });
       }
@@ -512,6 +1091,12 @@ export const TOOL_ARG_SCHEMAS = {
       if (typeof args.limitPerSource === "number" && args.limitPerSource > 100) {
         issues.push({ path: "args.limitPerSource", message: "must be <= 100" });
       }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+      }
       if (args.includeBacklinks === false && args.includeSearchNeighbors === false) {
         issues.push({
           path: "args.includeBacklinks",
@@ -524,6 +1109,29 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       ids: { type: "string[]" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       issueDomains: { type: "string[]" },
       keyPattern: { type: "string" },
       view: { type: "string", enum: ["ids", "summary", "full"] },
@@ -532,9 +1140,15 @@ export const TOOL_ARG_SCHEMAS = {
     custom(args, issues) {
       const hasId = typeof args.id === "string" && args.id.trim().length > 0;
       const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasRefs = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingularRef = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
 
-      if (!hasId && !hasIds) {
-        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      if (!hasId && !hasIds && !hasRefs && !hasSingularRef) {
+        issues.push({ path: "args.id", message: "or args.ids[], args.refs[], args.query, args.queries[], args.shareId(s), args.urlId(s), or args.url(s) is required" });
       }
       if (typeof args.id === "string" && args.id.trim().length === 0) {
         issues.push({ path: "args.id", message: "must be a non-empty string" });
@@ -561,6 +1175,12 @@ export const TOOL_ARG_SCHEMAS = {
             issues.push({ path: `args.issueDomains[${i}]`, message: "must be a non-empty string" });
           }
         }
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
       }
       if (typeof args.keyPattern === "string") {
         if (args.keyPattern.trim().length === 0) {
@@ -644,13 +1264,46 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       documentId: { type: "string" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
       url: { type: "string" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      urls: { type: "string[]" },
       shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (!args.id && !args.documentId && !args.url && !args.shareId) {
-        issues.push({ path: "args.id", message: "or args.documentId, args.url, or args.shareId is required" });
+      const hasArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingle = ["query", "urlId"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      if (!args.id && !args.documentId && !args.url && !args.shareId && !hasArrays && !hasSingle) {
+        issues.push({ path: "args.id", message: "or args.documentId, args.url, args.shareId, or document refs are required" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
       }
     },
   },
@@ -679,19 +1332,52 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       documentId: { type: "string" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
       url: { type: "string" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      urls: { type: "string[]" },
       shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       outputDir: { type: "string" },
       overwrite: { type: "boolean" },
       concurrency: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
-      if (!args.id && !args.documentId && !args.url && !args.shareId) {
-        issues.push({ path: "args.id", message: "or args.documentId, args.url, or args.shareId is required" });
+      const hasArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingle = ["query", "urlId"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      if (!args.id && !args.documentId && !args.url && !args.shareId && !hasArrays && !hasSingle) {
+        issues.push({ path: "args.id", message: "or args.documentId, args.url, args.shareId, or document refs are required" });
       }
       if (typeof args.concurrency === "number" && args.concurrency > 8) {
         issues.push({ path: "args.concurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
       }
     },
   },
@@ -709,6 +1395,84 @@ export const TOOL_ARG_SCHEMAS = {
     custom(args, issues) {
       if (!args.id && !args.ids && !args.shareId) {
         issues.push({ path: "args.id", message: "or args.ids[] or args.shareId is required" });
+      }
+    },
+  },
+  "documents.open": {
+    properties: {
+      query: { type: "string" },
+      id: { type: "string" },
+      shareId: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      collectionId: { type: "string" },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const refs = ["query", "id", "shareId", "urlId", "url"].filter((key) => args[key]);
+      if (refs.length === 0) {
+        issues.push({ path: "args.query", message: "or args.id, args.shareId, args.urlId, or args.url is required" });
+      }
+      if (refs.length > 1) {
+        issues.push({ path: "args.query", message: "provide only one of args.query, args.id, args.shareId, args.urlId, or args.url" });
+      }
+    },
+  },
+  "documents.open_batch": {
+    properties: {
+      refs: { type: "string[]" },
+      queries: { type: "string[]" },
+      ids: { type: "string[]" },
+      shareIds: { type: "string[]" },
+      urlIds: { type: "string[]" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      collectionId: { type: "string" },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasRef = ["refs", "queries", "ids", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      if (!hasRef) {
+        issues.push({ path: "args.refs", message: "or args.queries, args.ids, args.shareIds, args.urlIds, or args.urls must include at least one value" });
+      }
+      if (typeof args.concurrency === "number" && args.concurrency > 8) {
+        issues.push({ path: "args.concurrency", message: "must be <= 8" });
+      }
+      if (typeof args.hydrateConcurrency === "number" && args.hydrateConcurrency > 8) {
+        issues.push({ path: "args.hydrateConcurrency", message: "must be <= 8" });
       }
     },
   },
@@ -773,6 +1537,74 @@ export const TOOL_ARG_SCHEMAS = {
       }
     },
   },
+  "collections.open": {
+    properties: {
+      query: { type: "string" },
+      id: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const refs = ["query", "id", "urlId", "url"].filter((key) => args[key]);
+      if (refs.length === 0) {
+        issues.push({ path: "args.query", message: "or args.id, args.urlId, or args.url is required" });
+      }
+      if (refs.length > 1) {
+        issues.push({ path: "args.query", message: "provide only one of args.query, args.id, args.urlId, or args.url" });
+      }
+    },
+  },
+  "collections.open_batch": {
+    properties: {
+      refs: { type: "string[]" },
+      queries: { type: "string[]" },
+      ids: { type: "string[]" },
+      urlIds: { type: "string[]" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasRef = ["refs", "queries", "ids", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      if (!hasRef) {
+        issues.push({ path: "args.refs", message: "or args.queries, args.ids, args.urlIds, or args.urls must include at least one value" });
+      }
+      if (typeof args.concurrency === "number" && args.concurrency > 8) {
+        issues.push({ path: "args.concurrency", message: "must be <= 8" });
+      }
+      if (typeof args.hydrateConcurrency === "number" && args.hydrateConcurrency > 8) {
+        issues.push({ path: "args.hydrateConcurrency", message: "must be <= 8" });
+      }
+    },
+  },
   "collections.create": {
     required: ["name"],
     properties: {
@@ -804,6 +1636,25 @@ export const TOOL_ARG_SCHEMAS = {
       query: { type: "string" },
       queries: { type: "string[]" },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
+      userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      memory: { type: "boolean" },
+      memoryMinScore: { type: "number", min: 0 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      fallbackSearch: { type: "boolean" },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMinScore: { type: "number", min: 0 },
+      resolveLimit: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       strict: { type: "boolean" },
       strictThreshold: { type: "number", min: 0 },
@@ -819,6 +1670,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.query && !args.queries) {
         issues.push({ path: "args.query", message: "or args.queries[] is required" });
       }
+      validateDocumentFilterSelectors(args, issues);
       if (typeof args.strictThreshold === "number" && args.strictThreshold > 1) {
         issues.push({ path: "args.strictThreshold", message: "must be <= 1" });
       }
@@ -829,6 +1681,25 @@ export const TOOL_ARG_SCHEMAS = {
       url: { type: "string" },
       urls: { type: "string[]" },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
+      userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      memory: { type: "boolean" },
+      memoryMinScore: { type: "number", min: 0 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      fallbackSearch: { type: "boolean" },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMinScore: { type: "number", min: 0 },
+      resolveLimit: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       strict: { type: "boolean" },
       strictHost: { type: "boolean" },
@@ -845,6 +1716,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.url && !args.urls) {
         issues.push({ path: "args.url", message: "or args.urls[] is required" });
       }
+      validateDocumentFilterSelectors(args, issues);
       if (typeof args.strictThreshold === "number" && args.strictThreshold > 1) {
         issues.push({ path: "args.strictThreshold", message: "must be <= 1" });
       }
@@ -884,9 +1756,22 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "collections.tree": {
-    required: ["collectionId"],
     properties: {
       collectionId: { type: "string" },
+      id: { type: "string" },
+      query: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
       includeDrafts: { type: "boolean" },
       maxDepth: { type: "number", min: 0 },
       view: { type: "string", enum: ["summary", "full"] },
@@ -896,6 +1781,15 @@ export const TOOL_ARG_SCHEMAS = {
       sort: { type: "string" },
       direction: { type: "string", enum: ["ASC", "DESC"] },
       maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const refs = ["collectionId", "id", "query", "urlId", "url"].filter((key) => args[key]);
+      if (refs.length === 0) {
+        issues.push({ path: "args.collectionId", message: "or args.id, args.query, args.urlId, or args.url is required" });
+      }
+      if (refs.length > 1) {
+        issues.push({ path: "args.collectionId", message: "provide only one of args.collectionId, args.id, args.query, args.urlId, or args.url" });
+      }
     },
   },
   "search.expand": {
@@ -910,8 +1804,25 @@ export const TOOL_ARG_SCHEMAS = {
       concurrency: { type: "number", min: 1 },
       hydrateConcurrency: { type: "number", min: 1 },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
       documentId: { type: "string" },
       userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
       sort: { type: "string" },
       direction: { type: "string", enum: ["ASC", "DESC"] },
       snippetMinWords: { type: "number", min: 1 },
@@ -925,6 +1836,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.query && !args.queries) {
         issues.push({ path: "args.query", message: "or args.queries[] is required" });
       }
+      validateDocumentFilterSelectors(args, issues);
     },
   },
   "search.research": {
@@ -933,6 +1845,24 @@ export const TOOL_ARG_SCHEMAS = {
       query: { type: "string" },
       queries: { type: "string[]" },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
+      userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
       limitPerQuery: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       includeTitleSearch: { type: "boolean" },
@@ -968,6 +1898,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (!args.question && !args.query && !args.queries) {
         issues.push({ path: "args.question", message: "or args.query or args.queries[] is required" });
       }
+      validateDocumentFilterSelectors(args, issues);
       if (args.includeTitleSearch === false && args.includeSemanticSearch === false) {
         issues.push({
           path: "args.includeTitleSearch",
@@ -983,10 +1914,10 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "documents.safe_update": {
-    required: ["id", "expectedRevision"],
+    required: ["expectedRevision"],
     properties: {
-      id: { type: "string" },
-      expectedRevision: { type: "number", min: 0 },
+      ...DOCUMENT_MUTATION_TARGET_RESOLVE_PROPERTIES,
+      expectedRevision: { type: ["number", "string"], min: 0 },
       title: { type: "string" },
       text: { type: "string" },
       icon: { type: "string" },
@@ -1003,38 +1934,89 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateRequiredDocumentMutationTargetAndExpectedRevision,
   },
   "documents.diff": {
-    required: ["id", "proposedText"],
+    required: ["proposedText"],
     properties: {
       id: { type: "string" },
+      documentId: { type: "string" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       proposedText: { type: "string" },
       includeFullHunks: { type: "boolean" },
       hunkLimit: { type: "number", min: 1 },
       hunkLineLimit: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasDocumentId = typeof args.documentId === "string" && args.documentId.trim().length > 0;
+      const hasArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingle = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      if (!hasId && !hasDocumentId && !hasArrays && !hasSingle) {
+        issues.push({ path: "args.id", message: "or document refs are required" });
+      }
+      if (hasId && hasDocumentId) {
+        issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+      }
+    },
   },
   "documents.apply_patch": {
-    required: ["id", "patch"],
+    required: ["patch"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_MUTATION_TARGET_RESOLVE_PROPERTIES,
       patch: { type: "string" },
-      expectedRevision: { type: "number", min: 0 },
+      expectedRevision: { type: ["number", "string"], min: 0 },
       mode: { type: "string", enum: ["unified", "replace"] },
       title: { type: "string" },
       view: { type: "string", enum: ["summary", "full"] },
       excerptChars: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      validateRequiredDocumentMutationTargetArgs(args, issues);
+      validateExpectedRevisionGuard(args, issues);
     },
   },
   "documents.apply_patch_safe": {
-    required: ["id", "expectedRevision", "patch"],
+    required: ["expectedRevision", "patch"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_MUTATION_TARGET_RESOLVE_PROPERTIES,
       patch: { type: "string" },
-      expectedRevision: { type: "number", min: 0 },
+      expectedRevision: { type: ["number", "string"], min: 0 },
       mode: { type: "string", enum: ["unified", "replace"] },
       title: { type: "string" },
       view: { type: "string", enum: ["summary", "full"] },
@@ -1042,6 +2024,7 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateRequiredDocumentMutationTargetAndExpectedRevision,
   },
   "documents.batch_update": {
     required: ["updates"],
@@ -1063,14 +2046,15 @@ export const TOOL_ARG_SCHEMAS = {
           issues.push({ path: `args.updates[${i}]`, message: "must be an object" });
           continue;
         }
-        if (!update.id || typeof update.id !== "string") {
-          issues.push({ path: `args.updates[${i}].id`, message: "is required and must be a string" });
-        }
+        validateBatchUpdateDocumentTarget(update, issues, `args.updates[${i}]`);
         if (
           Object.prototype.hasOwnProperty.call(update, "expectedRevision") &&
-          !(typeof update.expectedRevision === "number" && Number.isFinite(update.expectedRevision))
+          !(
+            (typeof update.expectedRevision === "number" && Number.isFinite(update.expectedRevision)) ||
+            (typeof update.expectedRevision === "string" && update.expectedRevision.trim().toLowerCase() === "latest")
+          )
         ) {
-          issues.push({ path: `args.updates[${i}].expectedRevision`, message: "must be a number" });
+          issues.push({ path: `args.updates[${i}].expectedRevision`, message: "must be a number or latest" });
         }
         if (
           Object.prototype.hasOwnProperty.call(update, "editMode") &&
@@ -1157,9 +2141,32 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "revisions.list": {
-    required: ["documentId"],
     properties: {
+      id: { type: "string" },
       documentId: { type: "string" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -1167,18 +2174,101 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasDocumentId = typeof args.documentId === "string" && args.documentId.trim().length > 0;
+      const hasArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingle = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      if (!hasId && !hasDocumentId && !hasArrays && !hasSingle) {
+        issues.push({ path: "args.documentId", message: "or document refs are required" });
+      }
+      if (hasId && hasDocumentId) {
+        issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+      }
+    },
   },
   "revisions.diff": {
-    required: ["id", "baseRevisionId", "targetRevisionId"],
     properties: {
       id: { type: "string" },
+      documentId: { type: "string" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       baseRevisionId: { type: "string" },
       targetRevisionId: { type: "string" },
+      revisionPair: { type: "string", enum: ["latest"] },
+      revisionLimit: { type: "number", min: 2 },
+      sort: { type: "string" },
+      direction: { type: "string", enum: ["ASC", "DESC"] },
       includeFullHunks: { type: "boolean" },
       hunkLimit: { type: "number", min: 1 },
       hunkLineLimit: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasId = typeof args.id === "string" && args.id.trim().length > 0;
+      const hasDocumentId = typeof args.documentId === "string" && args.documentId.trim().length > 0;
+      const hasArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasSingle = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      const hasBase = typeof args.baseRevisionId === "string" && args.baseRevisionId.trim().length > 0;
+      const hasTarget = typeof args.targetRevisionId === "string" && args.targetRevisionId.trim().length > 0;
+
+      if (!hasId && !hasDocumentId && !hasArrays && !hasSingle) {
+        issues.push({ path: "args.documentId", message: "or document refs are required" });
+      }
+      if (hasId && hasDocumentId) {
+        issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
+      }
+      if (hasBase !== hasTarget) {
+        issues.push({ path: hasBase ? "args.targetRevisionId" : "args.baseRevisionId", message: "must be provided with the other revision id" });
+      }
+      if ((hasBase || hasTarget) && args.revisionPair) {
+        issues.push({ path: "args.revisionPair", message: "cannot be combined with explicit revision IDs" });
+      }
+      if (typeof args.revisionLimit === "number" && args.revisionLimit > 20) {
+        issues.push({ path: "args.revisionLimit", message: "must be <= 20" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
+      }
     },
   },
   "revisions.restore": {
@@ -1206,6 +2296,31 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       query: { type: "string" },
       documentId: { type: "string" },
+      documentQuery: { type: "string" },
+      documentQueries: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -1214,28 +2329,48 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateOptionalDocumentResolveArgs,
   },
   "shares.info": {
     properties: {
       id: { type: "string" },
       documentId: { type: "string" },
+      query: { type: "string" },
+      documentQuery: { type: "string" },
+      queries: { type: "string[]" },
+      documentQueries: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       includePolicies: { type: "boolean" },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
-    custom(args, issues) {
-      if (!args.id && !args.documentId) {
-        issues.push({ path: "args.id", message: "or args.documentId is required" });
-      }
-      if (args.id && args.documentId) {
-        issues.push({ path: "args.documentId", message: "cannot be combined with args.id" });
-      }
-    },
+    custom: validateShareInfoSelector,
   },
   "shares.create": {
-    required: ["documentId"],
     properties: {
-      documentId: { type: "string" },
+      ...DOCUMENT_TARGET_RESOLVE_PROPERTIES,
       includeChildDocuments: { type: "boolean" },
       published: { type: "boolean" },
       includePolicies: { type: "boolean" },
@@ -1243,6 +2378,7 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateRequiredDocumentResolveArgs,
   },
   "shares.update": {
     required: ["id", "published"],
@@ -1267,7 +2403,12 @@ export const TOOL_ARG_SCHEMAS = {
   "templates.list": {
     properties: {
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
       query: { type: "string" },
+      ...PRINCIPAL_RESOLVE_OPTION_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -1276,32 +2417,33 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateOptionalCollectionFilterResolveArgs,
   },
   "templates.info": {
     properties: {
       id: { type: "string" },
       ids: { type: "string[]" },
+      query: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       includePolicies: { type: "boolean" },
       concurrency: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
-    custom(args, issues) {
-      if (!args.id && !args.ids) {
-        issues.push({ path: "args.id", message: "or args.ids[] is required" });
-      }
-    },
+    custom: validateTemplateTargetSelector,
   },
   "templates.extract_placeholders": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      query: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
       if (typeof args.id === "string" && args.id.trim().length === 0) {
         issues.push({ path: "args.id", message: "must be a non-empty string" });
       }
+      validateTemplateTargetSelector(args, issues);
     },
   },
   "templates.create": {
@@ -1320,9 +2462,9 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "templates.update": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       title: { type: "string" },
       data: { type: "object" },
       icon: { type: ["string", "null"] },
@@ -1334,35 +2476,47 @@ export const TOOL_ARG_SCHEMAS = {
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom(args, issues) {
+      validateTemplateTargetSelector(args, issues, { includeQuery: false });
+    },
   },
   "templates.delete": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom(args, issues) {
+      validateTemplateTargetSelector(args, issues, { includeQuery: false });
+    },
   },
   "templates.restore": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       includePolicies: { type: "boolean" },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom(args, issues) {
+      validateTemplateTargetSelector(args, issues, { includeQuery: false });
+    },
   },
   "templates.duplicate": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       title: { type: "string" },
       collectionId: { type: ["string", "null"] },
       includePolicies: { type: "boolean" },
       view: { type: "string", enum: ["summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      validateTemplateTargetSelector(args, issues, { includeQuery: false });
     },
   },
   "documents.templatize": {
@@ -1699,9 +2853,10 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "documents.create_from_template": {
-    required: ["templateId"],
     properties: {
       templateId: { type: "string" },
+      query: { type: "string" },
+      ...TEMPLATE_RESOLVE_PROPERTIES,
       title: { type: "string" },
       collectionId: { type: "string" },
       parentDocumentId: { type: "string" },
@@ -1717,6 +2872,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (typeof args.templateId === "string" && args.templateId.trim().length === 0) {
         issues.push({ path: "args.templateId", message: "must be a non-empty string" });
       }
+      validateTemplateTargetSelector(args, issues, { idKeys: ["templateId"] });
 
       for (const key of ["title", "collectionId", "parentDocumentId"]) {
         if (typeof args[key] === "string" && args[key].trim().length === 0) {
@@ -1743,6 +2899,33 @@ export const TOOL_ARG_SCHEMAS = {
   "comments.list": {
     properties: {
       documentId: { type: "string" },
+      query: { type: "string" },
+      documentQuery: { type: "string" },
+      queries: { type: "string[]" },
+      documentQueries: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       collectionId: { type: "string" },
       parentCommentId: { type: "string" },
       includeAnchorText: { type: "boolean" },
@@ -1755,6 +2938,7 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateOptionalDocumentResolveArgs,
   },
   "comments.info": {
     required: ["id"],
@@ -1767,9 +2951,8 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "comments.create": {
-    required: ["documentId"],
     properties: {
-      documentId: { type: "string" },
+      ...DOCUMENT_TARGET_RESOLVE_PROPERTIES,
       text: { type: "string" },
       data: { type: "object" },
       parentCommentId: { type: "string" },
@@ -1779,6 +2962,7 @@ export const TOOL_ARG_SCHEMAS = {
       performAction: { type: "boolean" },
     },
     custom(args, issues) {
+      validateRequiredDocumentResolveArgs(args, issues);
       if (!args.text && !args.data) {
         issues.push({ path: "args.text", message: "or args.data is required" });
       }
@@ -1882,8 +3066,42 @@ export const TOOL_ARG_SCHEMAS = {
   },
   "comments.review_queue": {
     properties: {
+      documentId: { type: "string" },
       documentIds: { type: "string[]" },
+      refs: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRefId: { type: "string" },
+      collectionUrlId: { type: "string" },
+      collectionUrl: { type: "string" },
+      collectionResolveLimit: { type: "number", min: 1 },
+      collectionMinScore: { type: "number", min: 0 },
+      collectionMaxAgeHours: { type: "number", min: 0 },
+      collectionStrictThreshold: { type: "number", min: 0 },
+      collectionFallbackMinScore: { type: "number", min: 0 },
+      collectionFallbackLimit: { type: "number", min: 1 },
       includeAnchorText: { type: "boolean" },
       includeReplies: { type: "boolean" },
       limitPerDocument: { type: "number", min: 1 },
@@ -1892,12 +3110,28 @@ export const TOOL_ARG_SCHEMAS = {
     },
     custom(args, issues) {
       const hasDocumentIds = Array.isArray(args.documentIds) && args.documentIds.length > 0;
+      const hasDocumentId = typeof args.documentId === "string" && args.documentId.trim().length > 0;
+      const hasDocumentArrays = ["refs", "queries", "shareIds", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      const hasDocumentSingle = ["query", "shareId", "urlId", "url"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
       const hasCollectionId = typeof args.collectionId === "string" && args.collectionId.length > 0;
-      if (!hasDocumentIds && !hasCollectionId) {
-        issues.push({ path: "args.documentIds", message: "or args.collectionId is required" });
+      const hasCollectionRef = ["collectionQuery", "collectionRefId", "collectionUrlId", "collectionUrl"].some((key) =>
+        typeof args[key] === "string" && args[key].trim().length > 0
+      );
+      if (!hasDocumentIds && !hasDocumentId && !hasDocumentArrays && !hasDocumentSingle && !hasCollectionId && !hasCollectionRef) {
+        issues.push({ path: "args.documentIds", message: "or document refs, args.collectionId, or collection refs are required" });
       }
       if (Array.isArray(args.documentIds) && args.documentIds.length === 0) {
         issues.push({ path: "args.documentIds", message: "must be a non-empty string[] when provided" });
+      }
+      if (typeof args.resolveConcurrency === "number" && args.resolveConcurrency > 8) {
+        issues.push({ path: "args.resolveConcurrency", message: "must be <= 8" });
+      }
+      if (typeof args.resolveHydrateConcurrency === "number" && args.resolveHydrateConcurrency > 8) {
+        issues.push({ path: "args.resolveHydrateConcurrency", message: "must be <= 8" });
       }
     },
   },
@@ -2068,11 +3302,46 @@ export const TOOL_ARG_SCHEMAS = {
   "events.list": {
     properties: {
       actorId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
       documentId: { type: "string" },
+      documentQuery: { type: "string" },
+      documentRef: { type: "string" },
+      documentQueries: { type: "string[]" },
+      documentRefs: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
       name: { type: "string" },
       auditLog: { type: "boolean" },
       ip: { type: "string" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2081,10 +3350,33 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateEventsListResolveSelectors,
   },
   "documents.archived": {
     properties: {
       collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
+      refs: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2093,9 +3385,33 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateOptionalCollectionFilterResolveArgs,
   },
   "documents.deleted": {
     properties: {
+      collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
+      refs: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2104,6 +3420,7 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateOptionalCollectionFilterResolveArgs,
   },
   "documents.archive": {
     required: ["id"],
@@ -2234,6 +3551,7 @@ export const TOOL_ARG_SCHEMAS = {
       id: { type: "string" },
       ids: { type: "string[]" },
       email: { type: "string" },
+      ...PRINCIPAL_RESOLVE_PROPERTIES,
       includePolicies: { type: "boolean" },
       concurrency: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
@@ -2242,9 +3560,10 @@ export const TOOL_ARG_SCHEMAS = {
     custom(args, issues) {
       const hasId = typeof args.id === "string" && args.id.length > 0;
       const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasResolvedRef = hasPrincipalResolveSelector(args);
 
-      if (!hasId && !hasIds && !args.email) {
-        issues.push({ path: "args.id", message: "or args.ids[] or args.email is required" });
+      if (!hasId && !hasIds && !args.email && !hasResolvedRef) {
+        issues.push({ path: "args.id", message: "or args.ids[], args.email, args.query, or args.refs is required" });
       }
       if (Array.isArray(args.ids) && args.ids.length === 0) {
         issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
@@ -2252,6 +3571,10 @@ export const TOOL_ARG_SCHEMAS = {
       if (hasId && Array.isArray(args.ids)) {
         issues.push({ path: "args.ids", message: "cannot be combined with args.id" });
       }
+      if (hasResolvedRef && (hasId || hasIds || args.email)) {
+        issues.push({ path: "args.query", message: "cannot be combined with args.id, args.ids, or args.email" });
+      }
+      validatePrincipalResolveConcurrency(args, issues);
     },
   },
   "users.invite": {
@@ -2318,6 +3641,7 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       id: { type: "string" },
       ids: { type: "string[]" },
+      ...PRINCIPAL_RESOLVE_PROPERTIES,
       includePolicies: { type: "boolean" },
       concurrency: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
@@ -2326,9 +3650,10 @@ export const TOOL_ARG_SCHEMAS = {
     custom(args, issues) {
       const hasId = typeof args.id === "string" && args.id.length > 0;
       const hasIds = Array.isArray(args.ids) && args.ids.length > 0;
+      const hasResolvedRef = hasPrincipalResolveSelector(args);
 
-      if (!hasId && !hasIds) {
-        issues.push({ path: "args.id", message: "or args.ids[] is required" });
+      if (!hasId && !hasIds && !hasResolvedRef) {
+        issues.push({ path: "args.id", message: "or args.ids[], args.query, or args.refs is required" });
       }
       if (Array.isArray(args.ids) && args.ids.length === 0) {
         issues.push({ path: "args.ids", message: "must be a non-empty string[] when provided" });
@@ -2336,12 +3661,16 @@ export const TOOL_ARG_SCHEMAS = {
       if (hasId && Array.isArray(args.ids)) {
         issues.push({ path: "args.ids", message: "cannot be combined with args.id" });
       }
+      if (hasResolvedRef && (hasId || hasIds)) {
+        issues.push({ path: "args.query", message: "cannot be combined with args.id or args.ids" });
+      }
+      validatePrincipalResolveConcurrency(args, issues);
     },
   },
   "groups.memberships": {
-    required: ["id"],
     properties: {
       id: { type: "string" },
+      ...PRINCIPAL_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2349,6 +3678,17 @@ export const TOOL_ARG_SCHEMAS = {
       includePolicies: { type: "boolean" },
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasId = hasNonEmptyString(args.id);
+      const hasResolvedRef = hasPrincipalResolveSelector(args);
+      if (!hasId && !hasResolvedRef) {
+        issues.push({ path: "args.id", message: "or args.query or args.refs is required" });
+      }
+      if (hasId && hasResolvedRef) {
+        issues.push({ path: "args.query", message: "cannot be combined with args.id" });
+      }
+      validatePrincipalResolveConcurrency(args, issues);
     },
   },
   "groups.create": {
@@ -2387,27 +3727,32 @@ export const TOOL_ARG_SCHEMAS = {
     },
   },
   "groups.add_user": {
-    required: ["id", "userId"],
     properties: {
       id: { type: "string" },
+      groupId: { type: "string" },
       userId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateGroupUserMutationSelector,
   },
   "groups.remove_user": {
-    required: ["id", "userId"],
     properties: {
       id: { type: "string" },
+      groupId: { type: "string" },
       userId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateGroupUserMutationSelector,
   },
   "collections.memberships": {
-    required: ["id"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2416,11 +3761,11 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateCollectionAccessSelector,
   },
   "collections.group_memberships": {
-    required: ["id"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2429,47 +3774,53 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateCollectionAccessSelector,
   },
   "collections.add_user": {
-    required: ["id", "userId"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       userId: { type: "string" },
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
+      permission: { type: "string" },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateCollectionUserMutationSelector,
   },
   "collections.remove_user": {
-    required: ["id", "userId"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       userId: { type: "string" },
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateCollectionUserMutationSelector,
   },
   "collections.add_group": {
-    required: ["id", "groupId"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       groupId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
+      permission: { type: "string" },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateCollectionGroupMutationSelector,
   },
   "collections.remove_group": {
-    required: ["id", "groupId"],
     properties: {
-      id: { type: "string" },
+      ...COLLECTION_ACCESS_RESOLVE_PROPERTIES,
       groupId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateCollectionGroupMutationSelector,
   },
   "documents.memberships": {
-    required: ["id"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2478,11 +3829,11 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateDocumentAccessSelector,
   },
   "documents.users": {
-    required: ["id"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2491,11 +3842,11 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateDocumentAccessSelector,
   },
   "documents.group_memberships": {
-    required: ["id"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       limit: { type: "number", min: 1 },
       offset: { type: "number", min: 0 },
       sort: { type: "string" },
@@ -2504,56 +3855,102 @@ export const TOOL_ARG_SCHEMAS = {
       view: { type: "string", enum: ["ids", "summary", "full"] },
       maxAttempts: { type: "number", min: 1 },
     },
+    custom: validateDocumentAccessSelector,
   },
   "documents.add_user": {
-    required: ["id", "userId"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       userId: { type: "string" },
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
+      permission: { type: "string" },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateDocumentUserMutationSelector,
   },
   "documents.remove_user": {
-    required: ["id", "userId"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       userId: { type: "string" },
+      ...USER_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateDocumentUserMutationSelector,
   },
   "documents.add_group": {
-    required: ["id", "groupId"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       groupId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
+      permission: { type: "string" },
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateDocumentGroupMutationSelector,
   },
   "documents.remove_group": {
-    required: ["id", "groupId"],
     properties: {
-      id: { type: "string" },
+      ...DOCUMENT_ACCESS_RESOLVE_PROPERTIES,
       groupId: { type: "string" },
+      ...GROUP_PRINCIPAL_RESOLVE_PROPERTIES,
       maxAttempts: { type: "number", min: 1 },
       performAction: { type: "boolean" },
     },
+    custom: validateDocumentGroupMutationSelector,
   },
   "documents.answer": {
     properties: {
       question: { type: "string" },
       query: { type: "string" },
-      collectionId: { type: "string" },
+      id: { type: "string" },
       documentId: { type: "string" },
+      documentQuery: { type: "string" },
+      documentRef: { type: "string" },
+      documentQueries: { type: "string[]" },
+      documentRefs: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
       userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
       statusFilter: { type: ["string", "string[]"] },
       dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
       includePolicies: { type: "boolean" },
       includeEvidenceDocs: { type: "boolean" },
       limit: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
+      contextChars: { type: "number", min: 1 },
+      excerptChars: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
     },
     custom(args, issues) {
@@ -2561,6 +3958,7 @@ export const TOOL_ARG_SCHEMAS = {
       if (typeof selected !== "string" || selected.trim().length === 0) {
         issues.push({ path: "args.question", message: "or args.query is required and must be non-empty" });
       }
+      validateAnswerScopeSelectors(args, issues);
     },
   },
   "documents.answer_batch": {
@@ -2568,15 +3966,54 @@ export const TOOL_ARG_SCHEMAS = {
       question: { type: "string" },
       query: { type: "string" },
       questions: { type: "array" },
-      collectionId: { type: "string" },
+      id: { type: "string" },
       documentId: { type: "string" },
+      documentQuery: { type: "string" },
+      documentRef: { type: "string" },
+      documentQueries: { type: "string[]" },
+      documentRefs: { type: "string[]" },
+      refs: { type: "string[]" },
+      shareId: { type: "string" },
+      shareIds: { type: "string[]" },
+      urlId: { type: "string" },
+      urlIds: { type: "string[]" },
+      url: { type: "string" },
+      urls: { type: "string[]" },
+      collectionId: { type: "string" },
+      collectionQuery: { type: "string" },
+      collectionRef: { type: "string" },
+      collectionQueries: { type: "string[]" },
+      collectionRefs: { type: "string[]" },
       userId: { type: "string" },
+      userQuery: { type: "string" },
+      userRef: { type: "string" },
+      userQueries: { type: "string[]" },
+      userRefs: { type: "string[]" },
+      profile: { type: "string" },
+      resolveLimit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      strict: { type: "boolean" },
+      strictThreshold: { type: "number", min: 0 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      resolveCollectionId: { type: "string" },
+      resolveConcurrency: { type: "number", min: 1 },
+      resolveHydrateConcurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
       statusFilter: { type: ["string", "string[]"] },
       dateFilter: { type: "string", enum: ["day", "week", "month", "year"] },
       includePolicies: { type: "boolean" },
       includeEvidenceDocs: { type: "boolean" },
       limit: { type: "number", min: 1 },
       view: { type: "string", enum: ["summary", "full"] },
+      contextChars: { type: "number", min: 1 },
+      excerptChars: { type: "number", min: 1 },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
       concurrency: { type: "number", min: 1 },
       maxAttempts: { type: "number", min: 1 },
     },
@@ -2592,6 +4029,8 @@ export const TOOL_ARG_SCHEMAS = {
       if (!hasSingle && questionCount === 0) {
         issues.push({ path: "args.questions", message: "or args.question or args.query is required" });
       }
+
+      validateAnswerScopeSelectors(args, issues);
 
       if (args.questions === undefined) {
         return;
@@ -2626,6 +4065,123 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       includePolicies: { type: "boolean" },
       includeRaw: { type: "boolean" },
+    },
+  },
+  "memory.lookup": {
+    properties: {
+      query: { type: "string" },
+      id: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      type: { type: "string", enum: MEMORY_ENTITY_TYPES },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+    },
+    custom(args, issues) {
+      if (!args.query && !args.id && !args.urlId && !args.url) {
+        issues.push({ path: "args.query", message: "or args.id, args.urlId, or args.url is required" });
+      }
+    },
+  },
+  "memory.resolve": {
+    properties: {
+      query: { type: "string" },
+      id: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      type: { type: "string", enum: MEMORY_ENTITY_TYPES },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      hydrateLimit: { type: "number", min: 1 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      collectionId: { type: "string" },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      if (!args.query && !args.id && !args.urlId && !args.url) {
+        issues.push({ path: "args.query", message: "or args.id, args.urlId, or args.url is required" });
+      }
+    },
+  },
+  "memory.resolve_batch": {
+    properties: {
+      queries: { type: "string[]" },
+      ids: { type: "string[]" },
+      urlIds: { type: "string[]" },
+      urls: { type: "string[]" },
+      type: { type: "string", enum: MEMORY_ENTITY_TYPES },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      minScore: { type: "number", min: 0 },
+      maxAgeHours: { type: "number", min: 0 },
+      refresh: { type: "boolean" },
+      hydrateLimit: { type: "number", min: 1 },
+      fallbackSearch: { type: "boolean" },
+      fallbackMinScore: { type: "number", min: 0 },
+      fallbackLimit: { type: "number", min: 1 },
+      fallbackMode: { type: "string", enum: ["titles", "semantic", "both"] },
+      collectionId: { type: "string" },
+      snippetMinWords: { type: "number", min: 1 },
+      snippetMaxWords: { type: "number", min: 1 },
+      view: { type: "string", enum: ["ids", "summary", "full"] },
+      concurrency: { type: "number", min: 1 },
+      hydrateConcurrency: { type: "number", min: 1 },
+      maxAttempts: { type: "number", min: 1 },
+    },
+    custom(args, issues) {
+      const hasRef = ["queries", "ids", "urlIds", "urls"].some((key) =>
+        Array.isArray(args[key]) && args[key].length > 0
+      );
+      if (!hasRef) {
+        issues.push({ path: "args.queries", message: "or args.ids, args.urlIds, or args.urls must include at least one value" });
+      }
+    },
+  },
+  "memory.recent": {
+    properties: {
+      type: { type: "string", enum: MEMORY_ENTITY_TYPES },
+      profile: { type: "string" },
+      limit: { type: "number", min: 1 },
+      maxAgeHours: { type: "number", min: 0 },
+      includeDeleted: { type: "boolean" },
+    },
+  },
+  "memory.remember": {
+    required: ["type", "id"],
+    properties: {
+      type: { type: "string", enum: MEMORY_ENTITY_TYPES },
+      id: { type: "string" },
+      title: { type: "string" },
+      name: { type: "string" },
+      email: { type: "string" },
+      urlId: { type: "string" },
+      url: { type: "string" },
+      aliases: { type: "string[]" },
+      query: { type: "string" },
+      queries: { type: "string[]" },
+      profile: { type: "string" },
+      performAction: { type: "boolean" },
+    },
+  },
+  "memory.stats": {
+    properties: {},
+  },
+  "memory.clear": {
+    properties: {
+      profile: { type: "string" },
+      allProfiles: { type: "boolean" },
+      performAction: { type: "boolean" },
     },
   },
   "documents.cleanup_test": {

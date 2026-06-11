@@ -5,6 +5,7 @@ import { ApiError, CliError } from "./errors.js";
 import { assertPerformAction } from "./action-gate.js";
 import { defaultTmpDir } from "./config-store.js";
 import { compactValue, ensureStringArray, mapLimit, sanitizeFileToken, toInteger } from "./utils.js";
+import { collectionsOpenBatchTool, collectionsOpenTool, documentsOpenBatchTool, memoryResolveTool } from "./memory-store.js";
 
 const CONTROL_ARG_KEYS = new Set([
   "performAction",
@@ -15,6 +16,116 @@ const CONTROL_ARG_KEYS = new Set([
   "questions",
   "compact",
 ]);
+
+const ACCESS_RESOLVE_ARG_KEYS = [
+  "documentId",
+  "collectionId",
+  "documentRef",
+  "documentRefs",
+  "documentQuery",
+  "documentQueries",
+  "refs",
+  "query",
+  "queries",
+  "shareId",
+  "shareIds",
+  "urlId",
+  "urlIds",
+  "url",
+  "urls",
+  "profile",
+  "resolveLimit",
+  "minScore",
+  "maxAgeHours",
+  "refresh",
+  "strict",
+  "strictThreshold",
+  "fallbackSearch",
+  "fallbackMinScore",
+  "fallbackLimit",
+  "fallbackMode",
+  "resolveCollectionId",
+  "resolveConcurrency",
+  "resolveHydrateConcurrency",
+  "hydrateConcurrency",
+  "snippetMinWords",
+  "snippetMaxWords",
+];
+
+const ENTITY_RESOLVE_ARG_KEYS = [
+  "ref",
+  "refs",
+  "query",
+  "queries",
+  "userRef",
+  "userRefs",
+  "userQuery",
+  "userQueries",
+  "groupRef",
+  "groupRefs",
+  "groupQuery",
+  "groupQueries",
+  "templateRef",
+  "templateRefs",
+  "templateQuery",
+  "templateQueries",
+  "profile",
+  "resolveLimit",
+  "minScore",
+  "maxAgeHours",
+  "refresh",
+  "strict",
+  "strictThreshold",
+  "fallbackSearch",
+  "fallbackMinScore",
+  "fallbackLimit",
+  "fallbackMode",
+  "resolveConcurrency",
+  "resolveHydrateConcurrency",
+  "hydrateConcurrency",
+];
+
+const ANSWER_RESOLVE_ARG_KEYS = [
+  "id",
+  "documentQuery",
+  "documentQueries",
+  "documentRef",
+  "documentRefs",
+  "refs",
+  "shareId",
+  "shareIds",
+  "urlId",
+  "urlIds",
+  "url",
+  "urls",
+  "collectionQuery",
+  "collectionRef",
+  "collectionQueries",
+  "collectionRefs",
+  "userQuery",
+  "userRef",
+  "userQueries",
+  "userRefs",
+  "profile",
+  "resolveLimit",
+  "minScore",
+  "maxAgeHours",
+  "refresh",
+  "strict",
+  "strictThreshold",
+  "fallbackSearch",
+  "fallbackMinScore",
+  "fallbackLimit",
+  "fallbackMode",
+  "resolveCollectionId",
+  "resolveConcurrency",
+  "resolveHydrateConcurrency",
+  "hydrateConcurrency",
+  "contextChars",
+  "excerptChars",
+  "snippetMinWords",
+  "snippetMaxWords",
+];
 
 function maybeDropPolicies(payload, includePolicies) {
   if (includePolicies) {
@@ -162,10 +273,74 @@ function extractAttachmentRefsFromText(text, baseUrl = "") {
 }
 
 async function readDocumentForAttachments(ctx, args = {}) {
-  const id = args.id || args.documentId || extractDocumentUrlId(args.url);
+  const urlId = args.urlId || extractDocumentUrlId(args.url);
+  const id = args.id || args.documentId || urlId;
   const shareId = args.shareId;
+  const refArgs = compactValue({
+    refs: args.refs,
+    queries: args.queries || (args.query ? [args.query] : undefined),
+    shareIds: shareId ? [shareId] : undefined,
+    urlIds: args.urlId ? [args.urlId] : undefined,
+    urls: args.url && !urlId ? [args.url] : undefined,
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: args.resolveCollectionId,
+    view: "full",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!id && !shareId && (refArgs.refs || refArgs.queries || refArgs.urlIds || refArgs.urls)) {
+    const opened = await documentsOpenBatchTool(ctx, refArgs);
+    const item = (opened.result?.items || []).find((row) => row?.ok && row.document?.id)
+      || (opened.result?.items || [])[0]
+      || null;
+    if (item?.ok && item.document) {
+      return {
+        document: item.document,
+        resolution: {
+          mode: item.mode,
+          index: item.index,
+          kind: item.kind,
+          value: item.value,
+          id: item.document.id,
+          title: item.document.title,
+          candidate: item.candidate,
+          memory: item.memory || opened.result?.memory || null,
+        },
+      };
+    }
+    return {
+      document: null,
+      resolution: {
+        failed: item
+          ? {
+              index: item.index,
+              kind: item.kind,
+              value: item.value,
+              status: item.status || "not_found",
+              candidate: item.candidate,
+              candidates: item.candidates,
+              error: item.error,
+            }
+          : { status: "not_found" },
+        memory: item?.memory || opened.result?.memory || null,
+      },
+    };
+  }
+
   if (!id && !shareId) {
-    throw new CliError("document attachment tools require args.id, args.documentId, args.url, or args.shareId");
+    throw new CliError("document attachment tools require args.id, args.documentId, args.url, args.shareId, or document refs");
   }
 
   const body = compactValue({ id, shareId }) || {};
@@ -176,7 +351,16 @@ async function readDocumentForAttachments(ctx, args = {}) {
   if (!doc) {
     throw new CliError("documents.info response did not include document data");
   }
-  return doc;
+  return {
+    document: doc,
+    resolution: {
+      mode: "direct",
+      id: doc?.id || id || "",
+      shareId: shareId || "",
+      urlId: urlId || "",
+      memory: null,
+    },
+  };
 }
 
 function summarizeAttachmentDocument(doc) {
@@ -251,6 +435,65 @@ async function downloadAttachmentToFile(ctx, args = {}, id, index = null) {
 }
 
 function defaultUsageArgs(def) {
+  const resolveConfig = normalizeResolveAccessConfig(def.resolveAccess);
+  const entityConfig = normalizeResolveEntityConfig(def.resolveEntity);
+  const principalConfig = normalizeResolveEntityConfig(def.resolvePrincipal);
+  if (principalConfig) {
+    const principalKey = principalConfig.queryKeys?.[0] || `${principalConfig.type}Query`;
+    const principalValue = principalConfig.type === "group" ? "Engineering" : "Alice Example";
+    if (resolveConfig?.kind === "document") {
+      return {
+        [resolveConfig.queryKeys?.includes("query") ? "query" : "documentQuery"]: "incident runbook",
+        [principalKey]: principalValue,
+        ...(def.mutating ? { performAction: true } : {}),
+      };
+    }
+    if (resolveConfig?.kind === "collection") {
+      const collectionQueryKey = resolveConfig.queryKeys?.includes("query") ? "query" : "collectionQuery";
+      return {
+        [collectionQueryKey]: "engineering",
+        [principalKey]: principalValue,
+        ...(def.mutating ? { performAction: true } : {}),
+      };
+    }
+    if (entityConfig?.type === "group") {
+      return {
+        [entityConfig.queryKeys?.[0] || "groupQuery"]: "Engineering",
+        [principalKey]: principalValue,
+        ...(def.mutating ? { performAction: true } : {}),
+      };
+    }
+  }
+  if (entityConfig?.type === "user") {
+    return {
+      query: "Alice Example",
+    };
+  }
+  if (entityConfig?.type === "group") {
+    return {
+      query: "Engineering",
+      limit: 20,
+    };
+  }
+  if (entityConfig?.type === "template") {
+    return {
+      [entityConfig.queryKeys?.[0] || "templateQuery"]: "incident postmortem",
+      limit: 20,
+    };
+  }
+  if (resolveConfig?.kind === "document") {
+    return {
+      [resolveConfig.queryKeys?.includes("query") ? "query" : "documentQuery"]: "incident runbook",
+      limit: 20,
+    };
+  }
+  if (resolveConfig?.kind === "collection") {
+    const collectionQueryKey = resolveConfig.queryKeys?.includes("query") ? "query" : "collectionQuery";
+    return {
+      [collectionQueryKey]: "engineering",
+      limit: 20,
+    };
+  }
   if (def.tool === "documents.empty_trash") {
     return def.mutating ? { performAction: true } : {};
   }
@@ -270,7 +513,7 @@ function defaultUsageArgs(def) {
   }
   if (def.tool === "shares.create") {
     return {
-      documentId: "document-id",
+      documentQuery: "incident runbook",
       performAction: true,
     };
   }
@@ -356,6 +599,410 @@ function defaultUsageArgs(def) {
   };
 }
 
+function nonEmptyString(value) {
+  const text = String(value || "").trim();
+  return text || "";
+}
+
+function hasAccessRefInput(args = {}, kind) {
+  if (nonEmptyString(args.query) || nonEmptyString(args.documentQuery) || nonEmptyString(args.urlId) || nonEmptyString(args.url)) {
+    return true;
+  }
+  if (kind === "document" && nonEmptyString(args.shareId)) {
+    return true;
+  }
+  return ["refs", "queries", "documentQueries", "urlIds", "urls", ...(kind === "document" ? ["shareIds"] : [])]
+    .some((key) => Array.isArray(args[key]) && args[key].some((item) => nonEmptyString(item)));
+}
+
+function normalizeResolveAccessConfig(input) {
+  if (!input) {
+    return null;
+  }
+  if (typeof input === "string") {
+    const aliasKey = input === "collection" ? "collectionId" : "documentId";
+    const queryKeys = input === "document" ? ["query", "documentQuery"] : ["query"];
+    const arrayQueryKeys = input === "document" ? ["queries", "documentQueries"] : ["queries"];
+    return {
+      kind: input,
+      outputField: "id",
+      resultField: aliasKey,
+      exactKeys: ["id", aliasKey],
+      required: true,
+      queryKeys,
+      arrayQueryKeys,
+      omitKeys: ACCESS_RESOLVE_ARG_KEYS,
+    };
+  }
+  const kind = input.kind || "document";
+  const aliasKey = kind === "collection" ? "collectionId" : "documentId";
+  const queryKeys = input.queryKeys || ["query"];
+  const arrayQueryKeys = input.arrayQueryKeys || ["queries"];
+  const outputField = input.outputField || "id";
+  const resultField = input.resultField || aliasKey;
+  const omitKeys = new Set([
+    ...ACCESS_RESOLVE_ARG_KEYS,
+    ...queryKeys,
+    ...arrayQueryKeys,
+    ...(input.omitKeys || []),
+  ]);
+  if (input.preserveQuery === true) {
+    omitKeys.delete("query");
+    omitKeys.delete("queries");
+  }
+  omitKeys.delete(outputField);
+  return {
+    kind,
+    outputField,
+    resultField,
+    exactKeys: input.exactKeys || ["id", aliasKey],
+    required: input.required !== false,
+    queryKeys,
+    arrayQueryKeys,
+    omitKeys: [...omitKeys],
+  };
+}
+
+function collectResolveQueries(args, config) {
+  const queries = [];
+  for (const key of config.queryKeys || []) {
+    const value = nonEmptyString(args[key]);
+    if (value) {
+      queries.push(value);
+    }
+  }
+  for (const key of config.arrayQueryKeys || []) {
+    if (!Array.isArray(args[key])) {
+      continue;
+    }
+    for (const value of args[key]) {
+      const text = nonEmptyString(value);
+      if (text) {
+        queries.push(text);
+      }
+    }
+  }
+  return queries;
+}
+
+function firstEntityReference(args = {}, config = {}) {
+  for (const key of config.queryKeys || ["query", "ref"]) {
+    const value = nonEmptyString(args[key]);
+    if (value) {
+      return {
+        key,
+        value,
+      };
+    }
+  }
+  for (const key of config.arrayQueryKeys || ["refs", "queries"]) {
+    if (!Array.isArray(args[key])) {
+      continue;
+    }
+    for (const item of args[key]) {
+      const value = nonEmptyString(item);
+      if (value) {
+        return {
+          key,
+          value,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function normalizeResolveEntityConfig(input) {
+  if (!input) {
+    return null;
+  }
+  const type = typeof input === "string" ? input : input.type;
+  if (!type) {
+    return null;
+  }
+  const queryKeys = input.queryKeys || ["query", "ref"];
+  const arrayQueryKeys = input.arrayQueryKeys || ["refs", "queries"];
+  const outputField = input.outputField || "id";
+  const resultField = input.resultField || `${type}Id`;
+  return {
+    type,
+    outputField,
+    resultField,
+    exactKeys: input.exactKeys || ["id"],
+    passthroughKeys: input.passthroughKeys || [],
+    queryKeys,
+    arrayQueryKeys,
+    omitKeys: [...new Set([...ENTITY_RESOLVE_ARG_KEYS, ...queryKeys, ...arrayQueryKeys, ...(input.omitKeys || [])])],
+    strictThreshold: input.strictThreshold,
+  };
+}
+
+function resolutionFromEntityCandidate(resolved, ref, config) {
+  const candidates = resolved.result?.candidates || [];
+  const topCandidate = candidates[0] || null;
+  const strict = ref.strict !== false;
+  const strictThreshold = Math.max(0, toInteger(ref.strictThreshold ?? config.strictThreshold, 85));
+  const topScore = Number(topCandidate?.score || 0);
+
+  if (!topCandidate) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "not_found",
+        },
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+  if (strict && topScore < strictThreshold) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "low_confidence",
+          strictThreshold,
+        },
+        candidate: topCandidate,
+        candidates,
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+
+  const live = (resolved.result?.live || []).find((item) => item?.ok && item.candidate?.id === topCandidate.id)
+    || (resolved.result?.live || [])[0]
+    || null;
+  if (live && !live.ok) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "hydrate_failed",
+          error: live.error,
+          statusCode: live.status,
+        },
+        candidate: topCandidate,
+        memory: resolved.result?.memory || live.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: topCandidate.id,
+    resolution: compactValue({
+      mode: "memory",
+      kind: ref.key,
+      value: ref.value,
+      id: topCandidate.id,
+      name: topCandidate.name,
+      email: topCandidate.email,
+      candidate: topCandidate,
+      live,
+      memory: resolved.result?.memory || null,
+    }) || { id: topCandidate.id },
+  };
+}
+
+async function resolveEntityId(ctx, args = {}, input) {
+  const config = normalizeResolveEntityConfig(input);
+  if (!config) {
+    return null;
+  }
+  const exact = (config.exactKeys || [])
+    .map((key) => ({ key, value: nonEmptyString(args[key]) }))
+    .find((item) => item.value);
+  if (exact?.value) {
+    if (exact.key !== config.outputField) {
+      return {
+        id: exact.value,
+        resolution: null,
+        outputField: config.outputField,
+        resultField: config.resultField,
+        omitKeys: config.omitKeys,
+      };
+    }
+    return null;
+  }
+  if ((config.passthroughKeys || []).some((key) => nonEmptyString(args[key]) || (Array.isArray(args[key]) && args[key].length > 0))) {
+    return null;
+  }
+
+  const ref = firstEntityReference(args, config);
+  if (!ref) {
+    return null;
+  }
+
+  const resolved = await memoryResolveTool(ctx, {
+    query: ref.value,
+    type: config.type,
+    profile: args.profile,
+    limit: Math.max(1, toInteger(args.resolveLimit, 5)),
+    hydrateLimit: 1,
+    maxAgeHours: args.maxAgeHours,
+    minScore: args.minScore === undefined && args.strict !== false
+      ? Math.max(0, toInteger(args.strictThreshold ?? config.strictThreshold, 85))
+      : args.minScore,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore === undefined && args.strict !== false
+      ? Math.max(0, toInteger(args.strictThreshold ?? config.strictThreshold, 85))
+      : args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    refresh: args.refresh !== false,
+  });
+  return {
+    ...resolutionFromEntityCandidate(resolved, { ...ref, strict: args.strict, strictThreshold: args.strictThreshold }, config),
+    outputField: config.outputField,
+    resultField: config.resultField,
+    omitKeys: config.omitKeys,
+  };
+}
+
+function successfulResolutions(resolutions) {
+  return resolutions.filter((item) => item?.id);
+}
+
+function combinedResolutionPayload(resolutions) {
+  const resolved = successfulResolutions(resolutions).filter((item) => item.resolution);
+  if (resolved.length === 0) {
+    return null;
+  }
+  if (resolved.length === 1) {
+    return resolved[0].resolution;
+  }
+  const byField = {};
+  for (const item of resolved) {
+    byField[item.resultField || item.outputField || "id"] = item.resolution;
+  }
+  return compactValue(byField);
+}
+
+function hasConfiguredAccessRefInput(args = {}, config) {
+  if (collectResolveQueries(args, config).length > 0) {
+    return true;
+  }
+  if (nonEmptyString(args.urlId) || nonEmptyString(args.url)) {
+    return true;
+  }
+  if (config.kind === "document" && nonEmptyString(args.shareId)) {
+    return true;
+  }
+  return ["refs", "urlIds", "urls", ...(config.kind === "document" ? ["shareIds"] : [])]
+    .some((key) => Array.isArray(args[key]) && args[key].some((item) => nonEmptyString(item)));
+}
+
+function resolutionFromAccessOpenItem(item, opened, kind) {
+  const entity = kind === "collection" ? item?.collection : item?.document;
+  if (!item?.ok || !entity?.id) {
+    return {
+      error: {
+        failed: item
+          ? {
+              index: item.index,
+              kind: item.kind,
+              value: item.value,
+              status: item.status || "not_found",
+              error: item.error,
+            }
+          : {
+              status: "not_found",
+            },
+        memory: opened.result?.memory || item?.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: entity.id,
+    resolution: compactValue({
+      mode: item.mode,
+      index: item.index,
+      kind: item.kind,
+      value: item.value,
+      id: entity.id,
+      title: entity.title,
+      name: entity.name,
+      candidate: item.candidate,
+      memory: item.memory || opened.result?.memory || null,
+    }) || { id: entity.id },
+  };
+}
+
+async function resolveAccessId(ctx, args = {}, input) {
+  const config = normalizeResolveAccessConfig(input);
+  const aliasKey = config.kind === "collection" ? "collectionId" : "documentId";
+  const exactId = (config.exactKeys || []).map((key) => nonEmptyString(args[key])).find(Boolean) || "";
+  if (exactId) {
+    return {
+      id: exactId,
+      resolution: null,
+      outputField: config.outputField,
+      resultField: config.resultField,
+      omitKeys: config.omitKeys,
+    };
+  }
+  if (!hasConfiguredAccessRefInput(args, config)) {
+    return config.required ? {
+      error: {
+        failed: {
+          status: "missing_selector",
+          message: `requires ${config.exactKeys.map((key) => `args.${key}`).join(", ")} or a resolvable reference`,
+        },
+      },
+      outputField: config.outputField,
+      resultField: config.resultField,
+      omitKeys: config.omitKeys,
+    } : null;
+  }
+
+  const queries = collectResolveQueries(args, config);
+  const openArgs = compactValue({
+    refs: args.refs,
+    queries: queries.length > 0 ? queries : undefined,
+    shareIds: config.kind === "document"
+      ? (args.shareIds || (args.shareId ? [args.shareId] : undefined))
+      : undefined,
+    urlIds: args.urlIds || (args.urlId ? [args.urlId] : undefined),
+    urls: args.urls || (args.url ? [args.url] : undefined),
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: config.kind === "document" ? args.resolveCollectionId : undefined,
+    snippetMinWords: args.snippetMinWords,
+    snippetMaxWords: args.snippetMaxWords,
+    view: "summary",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  const opened = config.kind === "collection"
+    ? await collectionsOpenBatchTool(ctx, openArgs)
+    : await documentsOpenBatchTool(ctx, openArgs);
+  const item = (opened.result?.items || []).find((row) => row?.ok)
+    || (opened.result?.items || [])[0]
+    || null;
+  return {
+    ...resolutionFromAccessOpenItem(item, opened, config.kind),
+    outputField: config.outputField,
+    resultField: config.resultField,
+    omitKeys: config.omitKeys,
+  };
+}
+
 function makeRpcHandler(def) {
   return async function rpcHandler(ctx, args = {}) {
     if (def.mutating) {
@@ -366,7 +1013,50 @@ function makeRpcHandler(def) {
     }
 
     const maxAttempts = toInteger(args.maxAttempts, def.mutating ? 1 : 2);
-    const body = buildBody(args);
+    const resolutions = [];
+    if (def.resolveAccess) {
+      resolutions.push(await resolveAccessId(ctx, args, def.resolveAccess));
+    }
+    if (def.resolveEntity) {
+      resolutions.push(await resolveEntityId(ctx, args, def.resolveEntity));
+    }
+    if (def.resolvePrincipal) {
+      resolutions.push(await resolveEntityId(ctx, args, def.resolvePrincipal));
+    }
+    const failedResolution = resolutions.find((item) => item?.error);
+    if (failedResolution?.error) {
+      const resultField = failedResolution.resultField || failedResolution.outputField || (def.resolveAccess === "collection" ? "collectionId" : "documentId");
+      return {
+        tool: def.tool,
+        profile: ctx.profile.id,
+        result: compactValue({
+          ok: false,
+          status: failedResolution.error.status || "not_found",
+          [resultField]: "",
+          resolution: failedResolution.error,
+          data: [],
+        }) || {},
+      };
+    }
+
+    const bodyArgs = { ...args };
+    const omitKeys = [];
+    const resolvedOutputFields = new Set();
+    for (const item of successfulResolutions(resolutions)) {
+      const outputField = item.outputField || "id";
+      bodyArgs[outputField] = item.id;
+      resolvedOutputFields.add(outputField);
+      omitKeys.push(...(item.omitKeys || []));
+    }
+    const effectiveOmitKeys = omitKeys.filter((key) => !resolvedOutputFields.has(key));
+    const body = buildBody(
+      bodyArgs,
+      effectiveOmitKeys.length > 0
+        ? effectiveOmitKeys
+        : def.resolveAccess
+          ? normalizeResolveAccessConfig(def.resolveAccess).omitKeys
+          : []
+    );
     let res;
     try {
       res = await ctx.client.call(def.method, body, { maxAttempts });
@@ -392,55 +1082,312 @@ function makeRpcHandler(def) {
       }
     }
 
+    const resolutionPayload = combinedResolutionPayload(resolutions);
+    const resolvedIds = {};
+    for (const item of successfulResolutions(resolutions)) {
+      resolvedIds[item.resultField || item.outputField || "id"] = item.id;
+    }
+
     return {
       tool: def.tool,
       profile: ctx.profile.id,
-      result: maybeDropPolicies(res.body, !!args.includePolicies),
+      result: resolutionPayload
+        ? compactValue({
+            ...maybeDropPolicies(res.body, !!args.includePolicies),
+            ...resolvedIds,
+            resolution: resolutionPayload,
+          }) || {}
+        : maybeDropPolicies(res.body, !!args.includePolicies),
     };
   };
 }
 
 function makeRpcContract(def) {
+  const resolveConfig = normalizeResolveAccessConfig(def.resolveAccess);
+  const entityConfig = normalizeResolveEntityConfig(def.resolveEntity);
+  const principalConfig = normalizeResolveEntityConfig(def.resolvePrincipal);
+  const isAccessResolver = !!resolveConfig;
+  const isEntityResolver = !!entityConfig;
+  const hasPrincipalResolver = !!principalConfig;
+  const targetIdArg = resolveConfig?.kind === "collection" ? "collectionId" : "documentId";
+  const exactIdArg = resolveConfig?.exactKeys?.includes("id") ? "id?: string; " : "";
+  const exactTargetText = resolveConfig?.exactKeys?.includes("id") ? `${targetIdArg}/id` : targetIdArg;
+  const resolverQueryArg = resolveConfig?.queryKeys?.includes("query")
+    ? "query"
+    : resolveConfig?.kind === "collection"
+      ? "collectionQuery"
+      : "documentQuery";
+  const entityQueryArg = entityConfig?.queryKeys?.[0] || "query";
+  const entityExactArg = entityConfig?.exactKeys?.includes("id") ? "id?: string; " : "";
+  const signature = def.signature || (hasPrincipalResolver
+    ? `${def.tool}(args: { ${exactIdArg}${targetIdArg}?: string; ${resolverQueryArg}?: string; userId?: string; groupId?: string; userQuery?: string; groupQuery?: string; userRefs?: string[]; groupRefs?: string[]; includePolicies?: boolean; maxAttempts?: number${def.mutating ? "; performAction?: boolean" : ""} })`
+    : isAccessResolver
+    ? `${def.tool}(args: { ${exactIdArg}${targetIdArg}?: string; ${resolverQueryArg}?: string; refs?: string[]; urlId?: string; url?: string; limit?: number; offset?: number; includePolicies?: boolean; maxAttempts?: number })`
+    : isEntityResolver
+      ? `${def.tool}(args: { ${entityExactArg}${entityQueryArg}?: string; refs?: string[]; limit?: number; offset?: number; includePolicies?: boolean; maxAttempts?: number${def.mutating ? "; performAction?: boolean" : ""} })`
+    : `${def.tool}(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number${
+    def.mutating ? "; performAction?: boolean" : ""
+  } })`);
+  const bestPractices = def.bestPractices || [
+    hasPrincipalResolver
+      ? `Pass exact IDs when known, or combine target refs with ${principalConfig.type}Query/${principalConfig.type}Refs to resolve remembered ${principalConfig.type}s first.`
+      : isAccessResolver
+      ? `Pass ${exactTargetText} for exact calls, or ${resolverQueryArg}/refs/url/urlId to resolve remembered targets first.`
+      : isEntityResolver
+        ? `Pass ${entityConfig.exactKeys?.includes("id") ? "id" : "exact IDs"} for exact calls, or ${entityQueryArg}/refs to resolve remembered ${entityConfig.type}s first.`
+      : "Prefer minimal payloads to keep responses deterministic and token-efficient.",
+    ...(def.mutating
+      ? ["This tool is action-gated; set performAction=true only for explicitly confirmed mutations."]
+      : ["Use includePolicies=true only when policy details are required."]),
+  ];
   return {
-    signature: `${def.tool}(args?: { ...endpointArgs; includePolicies?: boolean; maxAttempts?: number${
-      def.mutating ? "; performAction?: boolean" : ""
-    } })`,
+    signature,
     description: def.description,
-    usageExample: {
+    usageExample: def.usageExample || {
       tool: def.tool,
       args: defaultUsageArgs(def),
     },
-    bestPractices: [
-      "Prefer minimal payloads to keep responses deterministic and token-efficient.",
-      ...(def.mutating
-        ? ["This tool is action-gated; set performAction=true only for explicitly confirmed mutations."]
-        : ["Use includePolicies=true only when policy details are required."]),
-    ],
+    bestPractices,
     handler: makeRpcHandler(def),
   };
 }
 
 const RPC_WRAPPER_DEFS = [
-  { tool: "shares.list", method: "shares.list", description: "List shares." },
-  { tool: "shares.info", method: "shares.info", description: "Get share details." },
-  { tool: "shares.create", method: "shares.create", description: "Create a share.", mutating: true },
+  {
+    tool: "shares.list",
+    method: "shares.list",
+    description: "List shares, optionally resolving a remembered document first.",
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: false,
+      queryKeys: ["documentQuery"],
+      arrayQueryKeys: ["documentQueries"],
+      preserveQuery: true,
+    },
+  },
+  {
+    tool: "shares.info",
+    method: "shares.info",
+    description: "Get share details by share ID, document ID, or remembered document reference.",
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: false,
+      queryKeys: ["query", "documentQuery"],
+      arrayQueryKeys: ["queries", "documentQueries"],
+    },
+  },
+  {
+    tool: "shares.create",
+    method: "shares.create",
+    description: "Create a share for a document ID or remembered document reference.",
+    signature:
+      "shares.create(args: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; includeChildDocuments?: boolean; published?: boolean; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })",
+    usageExample: {
+      tool: "shares.create",
+      args: {
+        documentQuery: "public handbook",
+        published: true,
+        performAction: true,
+      },
+    },
+    bestPractices: [
+      "Pass documentQuery/refs/url/urlId when the user names a document but the exact ID is unknown.",
+      "Use documentId for deterministic automation when already known.",
+      "Confirm the target document before creating public share links in high-risk workspaces.",
+      "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
+    ],
+    mutating: true,
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: true,
+      queryKeys: ["query", "documentQuery", "documentRef", "shareId", "urlId", "url"],
+      arrayQueryKeys: ["queries", "documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"],
+    },
+  },
   { tool: "shares.update", method: "shares.update", description: "Update a share.", mutating: true },
   { tool: "shares.revoke", method: "shares.revoke", description: "Revoke a share.", mutating: true },
-  { tool: "templates.list", method: "templates.list", description: "List templates." },
-  { tool: "templates.info", method: "templates.info", description: "Get template details." },
+  {
+    tool: "templates.list",
+    method: "templates.list",
+    description: "List templates, optionally resolving a remembered collection filter first.",
+    resolveAccess: {
+      kind: "collection",
+      outputField: "collectionId",
+      exactKeys: ["collectionId"],
+      required: false,
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    },
+  },
+  {
+    tool: "templates.info",
+    method: "templates.info",
+    description: "Get template details by ID or remembered template name.",
+    resolveEntity: {
+      type: "template",
+      outputField: "id",
+      resultField: "templateId",
+      exactKeys: ["id"],
+      queryKeys: ["templateQuery", "templateRef", "query"],
+      arrayQueryKeys: ["templateQueries", "templateRefs", "refs", "queries"],
+    },
+  },
   { tool: "templates.create", method: "templates.create", description: "Create a template.", mutating: true },
-  { tool: "templates.update", method: "templates.update", description: "Update a template.", mutating: true },
-  { tool: "templates.delete", method: "templates.delete", description: "Delete a template.", mutating: true },
-  { tool: "templates.restore", method: "templates.restore", description: "Restore a template.", mutating: true },
-  { tool: "templates.duplicate", method: "templates.duplicate", description: "Duplicate a template.", mutating: true },
+  {
+    tool: "templates.update",
+    method: "templates.update",
+    description: "Update a template by ID or remembered template name.",
+    mutating: true,
+    resolveEntity: {
+      type: "template",
+      outputField: "id",
+      resultField: "templateId",
+      exactKeys: ["id"],
+      queryKeys: ["templateQuery", "templateRef"],
+      arrayQueryKeys: ["templateQueries", "templateRefs", "refs"],
+    },
+  },
+  {
+    tool: "templates.delete",
+    method: "templates.delete",
+    description: "Delete a template by ID or remembered template name.",
+    mutating: true,
+    resolveEntity: {
+      type: "template",
+      outputField: "id",
+      resultField: "templateId",
+      exactKeys: ["id"],
+      queryKeys: ["templateQuery", "templateRef"],
+      arrayQueryKeys: ["templateQueries", "templateRefs", "refs"],
+    },
+  },
+  {
+    tool: "templates.restore",
+    method: "templates.restore",
+    description: "Restore a template by ID or remembered template name.",
+    mutating: true,
+    resolveEntity: {
+      type: "template",
+      outputField: "id",
+      resultField: "templateId",
+      exactKeys: ["id"],
+      queryKeys: ["templateQuery", "templateRef"],
+      arrayQueryKeys: ["templateQueries", "templateRefs", "refs"],
+    },
+  },
+  {
+    tool: "templates.duplicate",
+    method: "templates.duplicate",
+    description: "Duplicate a template by ID or remembered template name.",
+    mutating: true,
+    resolveEntity: {
+      type: "template",
+      outputField: "id",
+      resultField: "templateId",
+      exactKeys: ["id"],
+      queryKeys: ["templateQuery", "templateRef"],
+      arrayQueryKeys: ["templateQueries", "templateRefs", "refs"],
+    },
+  },
   { tool: "documents.templatize", method: "documents.templatize", description: "Convert a document into a template.", mutating: true },
   { tool: "documents.import", method: "documents.import", description: "Import a document from JSON payload.", mutating: true },
-  { tool: "comments.list", method: "comments.list", description: "List comments." },
+  {
+    tool: "comments.list",
+    method: "comments.list",
+    description: "List comments, optionally resolving a remembered document first.",
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: false,
+      queryKeys: ["query", "documentQuery"],
+      arrayQueryKeys: ["queries", "documentQueries"],
+    },
+  },
   { tool: "comments.info", method: "comments.info", description: "Get comment details." },
-  { tool: "comments.create", method: "comments.create", description: "Create a comment.", mutating: true },
+  {
+    tool: "comments.create",
+    method: "comments.create",
+    description: "Create a comment on a document ID or remembered document reference.",
+    signature:
+      "comments.create(args: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; text?: string; data?: object; parentCommentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })",
+    usageExample: {
+      tool: "comments.create",
+      args: {
+        query: "incident runbook",
+        text: "Looks good.",
+        performAction: true,
+      },
+    },
+    bestPractices: [
+      "Pass query/refs/url/urlId when adding a comment to a remembered document without a separate lookup.",
+      "Use parentCommentId for replies and text for simple comments.",
+      "Inspect the returned documentId and resolution fields when the target was resolved from memory.",
+      "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
+    ],
+    mutating: true,
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: true,
+      queryKeys: ["query", "documentQuery", "documentRef", "shareId", "urlId", "url"],
+      arrayQueryKeys: ["queries", "documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"],
+    },
+  },
   { tool: "comments.update", method: "comments.update", description: "Update a comment.", mutating: true },
   { tool: "comments.delete", method: "comments.delete", description: "Delete a comment.", mutating: true },
-  { tool: "events.list", method: "events.list", description: "List workspace events." },
+  {
+    tool: "events.list",
+    method: "events.list",
+    description: "List workspace events, optionally resolving remembered document, collection, and actor filters first.",
+    signature:
+      "events.list(args?: { documentId?: string; documentQuery?: string; refs?: string[]; collectionId?: string; collectionQuery?: string; actorId?: string; userQuery?: string; name?: string; auditLog?: boolean; limit?: number; offset?: number; includePolicies?: boolean; maxAttempts?: number })",
+    usageExample: {
+      tool: "events.list",
+      args: {
+        documentQuery: "incident runbook",
+        userQuery: "Alice Example",
+        auditLog: true,
+        limit: 20,
+      },
+    },
+    bestPractices: [
+      "Pass exact IDs when known, or use documentQuery/refs/url/urlId, collectionQuery/collectionRefs, and userQuery/userRefs to resolve remembered audit filters first.",
+      "Use auditLog=true when you need audit-grade event context for a scoped document or actor.",
+      "Keep limit small and paginate with offset for low-token history review.",
+    ],
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: false,
+      queryKeys: ["documentQuery", "documentRef"],
+      arrayQueryKeys: ["documentQueries", "documentRefs", "refs"],
+    },
+    resolveEntity: {
+      type: "collection",
+      outputField: "collectionId",
+      resultField: "collectionId",
+      exactKeys: ["collectionId"],
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    },
+    resolvePrincipal: {
+      type: "user",
+      outputField: "actorId",
+      resultField: "actorId",
+      exactKeys: ["actorId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
   { tool: "oauth_clients.list", method: "oauthClients.list", description: "List OAuth clients." },
   { tool: "oauth_clients.info", method: "oauthClients.info", description: "Get OAuth client details." },
   { tool: "oauth_clients.create", method: "oauthClients.create", description: "Create an OAuth client.", mutating: true },
@@ -481,8 +1428,32 @@ const RPC_WRAPPER_DEFS = [
   { tool: "data_attributes.update", method: "dataAttributes.update", description: "Update a data attribute.", mutating: true },
   { tool: "data_attributes.delete", method: "dataAttributes.delete", description: "Delete a data attribute.", mutating: true },
   { tool: "revisions.info", method: "revisions.info", description: "Get revision details." },
-  { tool: "documents.archived", method: "documents.archived", description: "List archived documents." },
-  { tool: "documents.deleted", method: "documents.deleted", description: "List deleted documents." },
+  {
+    tool: "documents.archived",
+    method: "documents.archived",
+    description: "List archived documents, optionally resolving a remembered collection filter first.",
+    resolveAccess: {
+      kind: "collection",
+      outputField: "collectionId",
+      exactKeys: ["collectionId"],
+      required: false,
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    },
+  },
+  {
+    tool: "documents.deleted",
+    method: "documents.deleted",
+    description: "List deleted documents, optionally resolving a remembered collection filter first.",
+    resolveAccess: {
+      kind: "collection",
+      outputField: "collectionId",
+      exactKeys: ["collectionId"],
+      required: false,
+      queryKeys: ["collectionQuery", "collectionRef"],
+      arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+    },
+  },
   { tool: "documents.archive", method: "documents.archive", description: "Archive a document.", mutating: true },
   { tool: "documents.restore", method: "documents.restore", description: "Restore a document.", mutating: true },
   {
@@ -498,7 +1469,16 @@ const RPC_WRAPPER_DEFS = [
   { tool: "webhooks.update", method: "webhooks.update", description: "Update a webhook.", mutating: true },
   { tool: "webhooks.delete", method: "webhooks.delete", description: "Delete a webhook.", mutating: true },
   { tool: "users.list", method: "users.list", description: "List users." },
-  { tool: "users.info", method: "users.info", description: "Get user details." },
+  {
+    tool: "users.info",
+    method: "users.info",
+    description: "Get user details by ID/email or remembered user reference.",
+    resolveEntity: {
+      type: "user",
+      resultField: "userId",
+      passthroughKeys: ["ids", "email"],
+    },
+  },
   { tool: "users.invite", method: "users.invite", description: "Invite a user.", mutating: true },
   {
     tool: "users.update_role",
@@ -509,26 +1489,222 @@ const RPC_WRAPPER_DEFS = [
   { tool: "users.activate", method: "users.activate", description: "Activate a user.", mutating: true },
   { tool: "users.suspend", method: "users.suspend", description: "Suspend a user.", mutating: true },
   { tool: "groups.list", method: "groups.list", description: "List groups." },
-  { tool: "groups.info", method: "groups.info", description: "Get group details." },
-  { tool: "groups.memberships", method: "groups.memberships", description: "List group user memberships." },
+  {
+    tool: "groups.info",
+    method: "groups.info",
+    description: "Get group details by ID or remembered group reference.",
+    resolveEntity: {
+      type: "group",
+      resultField: "groupId",
+      passthroughKeys: ["ids"],
+    },
+  },
+  {
+    tool: "groups.memberships",
+    method: "groups.memberships",
+    description: "Resolve a group and list group user memberships.",
+    resolveEntity: {
+      type: "group",
+      resultField: "groupId",
+    },
+  },
   { tool: "groups.create", method: "groups.create", description: "Create a group.", mutating: true },
   { tool: "groups.update", method: "groups.update", description: "Update a group.", mutating: true },
   { tool: "groups.delete", method: "groups.delete", description: "Delete a group.", mutating: true },
-  { tool: "groups.add_user", method: "groups.add_user", description: "Add a user to a group.", mutating: true },
-  { tool: "groups.remove_user", method: "groups.remove_user", description: "Remove a user from a group.", mutating: true },
-  { tool: "collections.memberships", method: "collections.memberships", description: "List collection user memberships." },
-  { tool: "collections.group_memberships", method: "collections.group_memberships", description: "List collection group memberships." },
-  { tool: "collections.add_user", method: "collections.add_user", description: "Add a user to a collection.", mutating: true },
-  { tool: "collections.remove_user", method: "collections.remove_user", description: "Remove a user from a collection.", mutating: true },
-  { tool: "collections.add_group", method: "collections.add_group", description: "Add a group to a collection.", mutating: true },
-  { tool: "collections.remove_group", method: "collections.remove_group", description: "Remove a group from a collection.", mutating: true },
-  { tool: "documents.users", method: "documents.users", description: "List users with access to a document." },
-  { tool: "documents.memberships", method: "documents.memberships", description: "List document user memberships." },
-  { tool: "documents.group_memberships", method: "documents.group_memberships", description: "List document group memberships." },
-  { tool: "documents.add_user", method: "documents.add_user", description: "Add a user to a document.", mutating: true },
-  { tool: "documents.remove_user", method: "documents.remove_user", description: "Remove a user from a document.", mutating: true },
-  { tool: "documents.add_group", method: "documents.add_group", description: "Add a group to a document.", mutating: true },
-  { tool: "documents.remove_group", method: "documents.remove_group", description: "Remove a group from a document.", mutating: true },
+  {
+    tool: "groups.add_user",
+    method: "groups.add_user",
+    description: "Resolve a group and user before adding the user to the group.",
+    mutating: true,
+    resolveEntity: {
+      type: "group",
+      outputField: "id",
+      resultField: "groupId",
+      exactKeys: ["id", "groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "groups.remove_user",
+    method: "groups.remove_user",
+    description: "Resolve a group and user before removing the user from the group.",
+    mutating: true,
+    resolveEntity: {
+      type: "group",
+      outputField: "id",
+      resultField: "groupId",
+      exactKeys: ["id", "groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "collections.memberships",
+    method: "collections.memberships",
+    description: "Resolve a collection and list collection user memberships.",
+    resolveAccess: "collection",
+  },
+  {
+    tool: "collections.group_memberships",
+    method: "collections.group_memberships",
+    description: "Resolve a collection and list collection group memberships.",
+    resolveAccess: "collection",
+  },
+  {
+    tool: "collections.add_user",
+    method: "collections.add_user",
+    description: "Resolve a collection and user before adding collection access.",
+    mutating: true,
+    resolveAccess: "collection",
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "collections.remove_user",
+    method: "collections.remove_user",
+    description: "Resolve a collection and user before removing collection access.",
+    mutating: true,
+    resolveAccess: "collection",
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "collections.add_group",
+    method: "collections.add_group",
+    description: "Resolve a collection and group before adding group collection access.",
+    mutating: true,
+    resolveAccess: "collection",
+    resolvePrincipal: {
+      type: "group",
+      outputField: "groupId",
+      resultField: "groupId",
+      exactKeys: ["groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+  },
+  {
+    tool: "collections.remove_group",
+    method: "collections.remove_group",
+    description: "Resolve a collection and group before removing group collection access.",
+    mutating: true,
+    resolveAccess: "collection",
+    resolvePrincipal: {
+      type: "group",
+      outputField: "groupId",
+      resultField: "groupId",
+      exactKeys: ["groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+  },
+  {
+    tool: "documents.users",
+    method: "documents.users",
+    description: "Resolve a document and list users with access to it.",
+    resolveAccess: "document",
+  },
+  {
+    tool: "documents.memberships",
+    method: "documents.memberships",
+    description: "Resolve a document and list document user memberships.",
+    resolveAccess: "document",
+  },
+  {
+    tool: "documents.group_memberships",
+    method: "documents.group_memberships",
+    description: "Resolve a document and list document group memberships.",
+    resolveAccess: "document",
+  },
+  {
+    tool: "documents.add_user",
+    method: "documents.add_user",
+    description: "Resolve a document and user before adding document access.",
+    mutating: true,
+    resolveAccess: "document",
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "documents.remove_user",
+    method: "documents.remove_user",
+    description: "Resolve a document and user before removing document access.",
+    mutating: true,
+    resolveAccess: "document",
+    resolvePrincipal: {
+      type: "user",
+      outputField: "userId",
+      resultField: "userId",
+      exactKeys: ["userId"],
+      queryKeys: ["userQuery", "userRef"],
+      arrayQueryKeys: ["userQueries", "userRefs"],
+    },
+  },
+  {
+    tool: "documents.add_group",
+    method: "documents.add_group",
+    description: "Resolve a document and group before adding group document access.",
+    mutating: true,
+    resolveAccess: "document",
+    resolvePrincipal: {
+      type: "group",
+      outputField: "groupId",
+      resultField: "groupId",
+      exactKeys: ["groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+  },
+  {
+    tool: "documents.remove_group",
+    method: "documents.remove_group",
+    description: "Resolve a document and group before removing group document access.",
+    mutating: true,
+    resolveAccess: "document",
+    resolvePrincipal: {
+      type: "group",
+      outputField: "groupId",
+      resultField: "groupId",
+      exactKeys: ["groupId"],
+      queryKeys: ["groupQuery", "groupRef"],
+      arrayQueryKeys: ["groupQueries", "groupRefs"],
+    },
+  },
   { tool: "file_operations.list", method: "fileOperations.list", description: "List file operations." },
   { tool: "file_operations.info", method: "fileOperations.info", description: "Get file operation details." },
   { tool: "file_operations.delete", method: "fileOperations.delete", description: "Delete a file operation.", mutating: true },
@@ -601,13 +1777,352 @@ function normalizeFallbackAnswerHit(row, contextChars = 220) {
   });
 }
 
-async function buildAnswerFallbackResult(ctx, question, args = {}) {
+function firstAnswerReference(args = {}, keys = [], arrayKeys = []) {
+  for (const key of keys) {
+    const value = String(args[key] || "").trim();
+    if (value) {
+      return { key, value };
+    }
+  }
+  for (const key of arrayKeys) {
+    if (!Array.isArray(args[key])) {
+      continue;
+    }
+    for (const item of args[key]) {
+      const value = String(item || "").trim();
+      if (value) {
+        return { key, value };
+      }
+    }
+  }
+  return null;
+}
+
+function answerResolutionFromMemoryCandidate(resolved, ref, config, args = {}) {
+  const candidates = resolved.result?.candidates || [];
+  const topCandidate = candidates[0] || null;
+  const strict = args.strict !== false;
+  const strictThreshold = Math.max(0, toInteger(args.strictThreshold, 85));
+  const topScore = Number(topCandidate?.score || 0);
+
+  if (!topCandidate) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "not_found",
+        },
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+  if (strict && topScore < strictThreshold) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "low_confidence",
+          strictThreshold,
+        },
+        candidate: topCandidate,
+        candidates,
+        memory: resolved.result?.memory || null,
+      },
+    };
+  }
+
+  const live = (resolved.result?.live || []).find((item) => item?.ok && item.candidate?.id === topCandidate.id)
+    || (resolved.result?.live || [])[0]
+    || null;
+  if (live && !live.ok) {
+    return {
+      error: {
+        failed: {
+          kind: ref.key,
+          value: ref.value,
+          status: "hydrate_failed",
+          error: live.error,
+          statusCode: live.status,
+        },
+        candidate: topCandidate,
+        memory: resolved.result?.memory || live.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: topCandidate.id,
+    resultField: config.resultField,
+    resolution: compactValue({
+      mode: "memory",
+      kind: ref.key,
+      value: ref.value,
+      id: topCandidate.id,
+      name: topCandidate.name,
+      email: topCandidate.email,
+      candidate: topCandidate,
+      live,
+      memory: resolved.result?.memory || null,
+    }) || { id: topCandidate.id },
+  };
+}
+
+async function resolveAnswerEntityFilter(ctx, args = {}, config) {
+  const exact = String(args[config.idKey] || "").trim();
+  if (exact) {
+    return { id: exact, resultField: config.resultField };
+  }
+  const ref = firstAnswerReference(args, config.queryKeys, config.arrayQueryKeys);
+  if (!ref) {
+    return null;
+  }
+
+  const threshold = Math.max(0, toInteger(args.strictThreshold, 85));
+  const resolved = await memoryResolveTool(ctx, {
+    query: ref.value,
+    type: config.type,
+    profile: args.profile,
+    limit: Math.max(1, toInteger(args.resolveLimit, 5)),
+    hydrateLimit: 1,
+    maxAgeHours: args.maxAgeHours,
+    minScore: args.minScore === undefined && args.strict !== false ? threshold : args.minScore,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore === undefined && args.strict !== false ? threshold : args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    refresh: args.refresh !== false,
+    maxAttempts: args.maxAttempts,
+  });
+
+  return {
+    ...answerResolutionFromMemoryCandidate(resolved, ref, config, args),
+    resultField: config.resultField,
+  };
+}
+
+async function resolveAnswerDocumentTarget(ctx, args = {}) {
+  const exact = String(args.documentId || args.id || "").trim();
+  if (exact) {
+    return { id: exact, resultField: "documentId" };
+  }
+
+  const ref = firstAnswerReference(
+    args,
+    ["documentQuery", "documentRef", "shareId", "urlId", "url"],
+    ["documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"]
+  );
+  if (!ref) {
+    return null;
+  }
+
+  const opened = await documentsOpenBatchTool(ctx, compactValue({
+    queries: ["documentQuery", "documentQueries"].includes(ref.key) ? [ref.value] : undefined,
+    refs: ["documentRef", "documentRefs", "refs"].includes(ref.key) ? [ref.value] : undefined,
+    shareIds: ["shareId", "shareIds"].includes(ref.key) ? [ref.value] : undefined,
+    urlIds: ["urlId", "urlIds"].includes(ref.key) ? [ref.value] : undefined,
+    urls: ["url", "urls"].includes(ref.key) ? [ref.value] : undefined,
+    profile: args.profile,
+    limit: args.resolveLimit,
+    minScore: args.minScore,
+    maxAgeHours: args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.fallbackMinScore,
+    fallbackLimit: args.fallbackLimit,
+    fallbackMode: args.fallbackMode,
+    collectionId: args.resolveCollectionId || args.collectionId,
+    view: "summary",
+    concurrency: args.resolveConcurrency,
+    hydrateConcurrency: args.resolveHydrateConcurrency,
+    maxAttempts: args.maxAttempts,
+  }) || {});
+
+  const item = opened.result?.items?.[0] || null;
+  if (item?.ok && item.document?.id) {
+    return {
+      id: item.document.id,
+      resultField: "documentId",
+      document: item.document,
+      resolution: compactValue({
+        mode: item.mode || "memory",
+        kind: ref.key,
+        value: ref.value,
+        id: item.document.id,
+        title: item.document.title,
+        candidate: item.candidate,
+        memory: opened.result?.memory || null,
+      }) || { id: item.document.id },
+    };
+  }
+
+  return {
+    resultField: "documentId",
+    error: compactValue({
+      failed: {
+        kind: ref.key,
+        value: ref.value,
+        status: item?.status || "not_found",
+        error: item?.error,
+      },
+      candidate: item?.candidate,
+      candidates: item?.candidates,
+      memory: opened.result?.memory || null,
+    }) || {
+      failed: {
+        kind: ref.key,
+        value: ref.value,
+        status: "not_found",
+      },
+    },
+  };
+}
+
+function hasAnswerScopeSelectors(args = {}) {
+  return !!firstAnswerReference(
+    args,
+    [
+      "id",
+      "documentId",
+      "documentQuery",
+      "documentRef",
+      "shareId",
+      "urlId",
+      "url",
+      "collectionId",
+      "collectionQuery",
+      "collectionRef",
+      "userId",
+      "userQuery",
+      "userRef",
+    ],
+    [
+      "documentQueries",
+      "documentRefs",
+      "refs",
+      "shareIds",
+      "urlIds",
+      "urls",
+      "collectionQueries",
+      "collectionRefs",
+      "userQueries",
+      "userRefs",
+    ]
+  );
+}
+
+async function resolveAnswerScope(ctx, args = {}) {
+  const collection = await resolveAnswerEntityFilter(ctx, args, {
+    type: "collection",
+    idKey: "collectionId",
+    resultField: "collectionId",
+    queryKeys: ["collectionQuery", "collectionRef"],
+    arrayQueryKeys: ["collectionQueries", "collectionRefs"],
+  });
+  const user = await resolveAnswerEntityFilter(ctx, args, {
+    type: "user",
+    idKey: "userId",
+    resultField: "userId",
+    queryKeys: ["userQuery", "userRef"],
+    arrayQueryKeys: ["userQueries", "userRefs"],
+  });
+  const preDocumentFilters = [collection, user].filter(Boolean);
+  const failedFilter = preDocumentFilters.find((filter) => filter?.error);
+  if (failedFilter) {
+    return { error: failedFilter.error, resultField: failedFilter.resultField };
+  }
+
+  const document = await resolveAnswerDocumentTarget(ctx, {
+    ...args,
+    collectionId: collection?.id || args.collectionId,
+  });
+
+  const filters = [document, collection, user].filter(Boolean);
+  const failed = filters.find((filter) => filter?.error);
+  if (failed) {
+    return { error: failed.error, resultField: failed.resultField };
+  }
+
+  const resolution = {};
+  for (const filter of filters) {
+    if (filter.resolution) {
+      resolution[filter.resultField] = filter.resolution;
+    }
+  }
+
+  return {
+    args: compactValue({
+      ...args,
+      documentId: document?.id || args.documentId || args.id,
+      collectionId: collection?.id || args.collectionId,
+      userId: user?.id || args.userId,
+    }) || {},
+    document: document?.document || null,
+    resolution: Object.keys(resolution).length > 0 ? resolution : null,
+  };
+}
+
+function buildAnswerEndpointBody(args = {}, question) {
+  return {
+    ...buildBody(args, ["question", "query", "limit", ...ANSWER_RESOLVE_ARG_KEYS]),
+    query: question,
+  };
+}
+
+function buildAnswerResolutionMiss(tool, ctx, question, prepared) {
+  return {
+    tool,
+    profile: ctx.profile.id,
+    result: compactValue({
+      ok: false,
+      status: prepared.error?.failed?.status || "not_found",
+      [prepared.resultField || "filterId"]: "",
+      question,
+      resolution: prepared.error,
+      documents: [],
+    }) || {},
+  };
+}
+
+async function buildAnswerFallbackResult(ctx, question, args = {}, prepared = {}) {
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
   const contextChars = Math.max(80, toInteger(args.contextChars, 220));
   const limit = Math.max(1, Math.min(8, toInteger(args.limit, 5)));
   const scopedDocumentId = args.documentId || args.id;
 
   if (scopedDocumentId) {
+    if (prepared.document?.id === scopedDocumentId) {
+      const document = normalizeFallbackAnswerHit(prepared.document, contextChars);
+      return {
+        question,
+        answer: "",
+        noAnswerReason: "documents.answerQuestion is unsupported by this Outline deployment; returning the scoped document as retrieval evidence instead.",
+        unsupported: true,
+        fallbackUsed: true,
+        fallbackTool: "documents.info",
+        fallbackSuggestion: {
+          tool: "documents.info",
+          args: compactValue({
+            id: scopedDocumentId,
+            view: "summary",
+          }),
+        },
+        resolution: prepared.resolution,
+        documents: document ? [document] : [],
+        retrieval: {
+          query: question,
+          result: {
+            ok: true,
+            data: document,
+          },
+        },
+      };
+    }
+
     const res = await ctx.client.call("documents.info", { id: scopedDocumentId }, { maxAttempts });
     const document = normalizeFallbackAnswerHit(res.body?.data, contextChars);
     return {
@@ -625,6 +2140,7 @@ async function buildAnswerFallbackResult(ctx, question, args = {}) {
         }),
       },
       documents: document ? [document] : [],
+      resolution: prepared.resolution,
       retrieval: {
         query: question,
         result: compactValue({
@@ -673,6 +2189,7 @@ async function buildAnswerFallbackResult(ctx, question, args = {}) {
       }),
     },
     documents,
+    resolution: prepared.resolution,
     retrieval: {
       query: question,
       result: compactValue({
@@ -689,10 +2206,12 @@ async function documentsAnswerTool(ctx, args = {}) {
     throw new CliError("documents.answer requires args.question or args.query");
   }
 
-  const body = {
-    ...buildBody(args, ["question", "query", "limit"]),
-    query: question,
-  };
+  const prepared = await resolveAnswerScope(ctx, args);
+  if (prepared.error) {
+    return buildAnswerResolutionMiss("documents.answer", ctx, question, prepared);
+  }
+
+  const body = buildAnswerEndpointBody(prepared.args, question);
 
   try {
     const res = await ctx.client.call("documents.answerQuestion", body, {
@@ -705,8 +2224,8 @@ async function documentsAnswerTool(ctx, args = {}) {
       profile: ctx.profile.id,
       result:
         payload && typeof payload === "object"
-          ? { question, ...payload }
-          : { question, data: payload },
+          ? compactValue({ question, resolution: prepared.resolution, ...payload }) || { question, ...payload }
+          : { question, resolution: prepared.resolution, data: payload },
     };
   } catch (err) {
     if (!isAnswerEndpointUnsupported(err)) {
@@ -716,7 +2235,7 @@ async function documentsAnswerTool(ctx, args = {}) {
     return {
       tool: "documents.answer",
       profile: ctx.profile.id,
-      result: await buildAnswerFallbackResult(ctx, question, args),
+      result: await buildAnswerFallbackResult(ctx, question, prepared.args, prepared),
     };
   }
 }
@@ -734,20 +2253,34 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
     throw new CliError("documents.answer_batch requires args.question or args.questions[]");
   }
 
-  const baseBody = buildBody(args, ["question", "questions", "query", "concurrency", "limit"]);
+  const basePrepared = await resolveAnswerScope(ctx, args);
   const includePolicies = !!args.includePolicies;
   const maxAttempts = toInteger(args.maxAttempts, 2);
   const concurrency = Math.max(1, Math.min(10, toInteger(args.concurrency, 3)));
 
   const items = await mapLimit(rawItems, concurrency, async (raw, index) => {
     let parsed;
+    let prepared;
     try {
       parsed = parseQuestionItem(raw, index);
-      const body = {
-        ...baseBody,
-        ...parsed.body,
-        query: parsed.question,
-      };
+      prepared = hasAnswerScopeSelectors(parsed.body)
+        ? await resolveAnswerScope(ctx, { ...args, ...parsed.body })
+        : basePrepared;
+      if (prepared.error) {
+        return {
+          index,
+          ok: false,
+          question: parsed.question,
+          documentId: parsed.documentId || null,
+          error: "Unable to resolve answer scope",
+          status: prepared.error?.failed?.status || "not_found",
+          resolution: prepared.error,
+        };
+      }
+      const answerArgs = hasAnswerScopeSelectors(parsed.body)
+        ? prepared.args
+        : compactValue({ ...prepared.args, ...parsed.body }) || prepared.args;
+      const body = buildAnswerEndpointBody(answerArgs, parsed.question);
       const res = await ctx.client.call("documents.answerQuestion", body, {
         maxAttempts,
       });
@@ -756,21 +2289,32 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
         index,
         ok: true,
         question: parsed.question,
-        documentId: parsed.documentId,
-        result: payload,
+        documentId: body.documentId || parsed.documentId,
+        result: compactValue({ resolution: prepared.resolution, ...payload }) || payload,
       };
     } catch (err) {
       if (parsed && isAnswerEndpointUnsupported(err)) {
         try {
+          if (prepared.error) {
+            return {
+              index,
+              ok: false,
+              question: parsed.question,
+              documentId: parsed.documentId || null,
+              error: "Unable to resolve answer scope",
+              status: prepared.error?.failed?.status || "not_found",
+              resolution: prepared.error,
+            };
+          }
+          const fallbackArgs = hasAnswerScopeSelectors(parsed.body)
+            ? prepared.args
+            : compactValue({ ...prepared.args, ...parsed.body }) || prepared.args;
           return {
             index,
             ok: true,
             question: parsed.question,
-            documentId: parsed.documentId,
-            result: await buildAnswerFallbackResult(ctx, parsed.question, {
-              ...args,
-              ...parsed.body,
-            }),
+            documentId: fallbackArgs.documentId || parsed.documentId,
+            result: await buildAnswerFallbackResult(ctx, parsed.question, fallbackArgs, prepared),
           };
         } catch (fallbackErr) {
           if (fallbackErr instanceof ApiError || fallbackErr instanceof CliError) {
@@ -815,14 +2359,31 @@ async function documentsAnswerBatchTool(ctx, args = {}) {
 }
 
 async function documentsAttachmentsTool(ctx, args = {}) {
-  const doc = await readDocumentForAttachments(ctx, args);
+  const read = await readDocumentForAttachments(ctx, args);
+  const doc = read.document;
+  if (!doc) {
+    return {
+      tool: "documents.attachments",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        document: null,
+        resolution: read.resolution,
+        total: 0,
+        attachments: [],
+      },
+    };
+  }
   const attachments = extractAttachmentRefsFromText(doc.text || "", ctx.profile?.baseUrl);
 
   return {
     tool: "documents.attachments",
     profile: ctx.profile.id,
     result: {
+      ok: true,
       document: summarizeAttachmentDocument(doc),
+      resolution: read.resolution,
       total: attachments.length,
       attachments,
     },
@@ -843,7 +2404,25 @@ async function attachmentsDownloadTool(ctx, args = {}) {
 }
 
 async function documentsDownloadAttachmentsTool(ctx, args = {}) {
-  const doc = await readDocumentForAttachments(ctx, args);
+  const read = await readDocumentForAttachments(ctx, args);
+  const doc = read.document;
+  if (!doc) {
+    return {
+      tool: "documents.download_attachments",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        document: null,
+        resolution: read.resolution,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        outputDir: path.resolve(String(args.outputDir || path.join(defaultTmpDir(), "attachments"))),
+        items: [],
+      },
+    };
+  }
   const attachments = extractAttachmentRefsFromText(doc.text || "", ctx.profile?.baseUrl);
   const concurrency = Math.max(1, Math.min(8, toInteger(args.concurrency, 3)));
   const items = await mapLimit(attachments, concurrency, async (attachment, index) => {
@@ -871,7 +2450,9 @@ async function documentsDownloadAttachmentsTool(ctx, args = {}) {
     tool: "documents.download_attachments",
     profile: ctx.profile.id,
     result: {
+      ok: failed === 0,
       document: summarizeAttachmentDocument(doc),
+      resolution: read.resolution,
       total: attachments.length,
       succeeded: items.length - failed,
       failed,
@@ -1289,10 +2870,237 @@ function normalizeGraphSourceIds(args = {}) {
   if (args.id !== undefined && args.id !== null) {
     values.push(args.id);
   }
+  if (args.documentId !== undefined && args.documentId !== null) {
+    values.push(args.documentId);
+  }
+  if (args.seedId !== undefined && args.seedId !== null) {
+    values.push(args.seedId);
+  }
   for (const id of ensureStringArray(args.ids, "ids") || []) {
     values.push(id);
   }
+  for (const id of ensureStringArray(args.documentIds, "documentIds") || []) {
+    values.push(id);
+  }
+  for (const id of ensureStringArray(args.seedIds, "seedIds") || []) {
+    values.push(id);
+  }
   return uniqueStrings(values).sort(compareIdAsc);
+}
+
+function normalizeDocumentRefValues(args = {}) {
+  const queries = [];
+  if (args.query !== undefined && args.query !== null) {
+    queries.push(args.query);
+  }
+  if (args.seedQuery !== undefined && args.seedQuery !== null) {
+    queries.push(args.seedQuery);
+  }
+  queries.push(...(ensureStringArray(args.queries, "queries") || []));
+  queries.push(...(ensureStringArray(args.seedQueries, "seedQueries") || []));
+
+  const shareIds = [];
+  if (args.shareId !== undefined && args.shareId !== null) {
+    shareIds.push(args.shareId);
+  }
+  if (args.seedShareId !== undefined && args.seedShareId !== null) {
+    shareIds.push(args.seedShareId);
+  }
+  shareIds.push(...(ensureStringArray(args.shareIds, "shareIds") || []));
+  shareIds.push(...(ensureStringArray(args.seedShareIds, "seedShareIds") || []));
+
+  const urlIds = [];
+  if (args.urlId !== undefined && args.urlId !== null) {
+    urlIds.push(args.urlId);
+  }
+  if (args.seedUrlId !== undefined && args.seedUrlId !== null) {
+    urlIds.push(args.seedUrlId);
+  }
+  urlIds.push(...(ensureStringArray(args.urlIds, "urlIds") || []));
+  urlIds.push(...(ensureStringArray(args.seedUrlIds, "seedUrlIds") || []));
+
+  const urls = [];
+  if (args.url !== undefined && args.url !== null) {
+    urls.push(args.url);
+  }
+  if (args.seedUrl !== undefined && args.seedUrl !== null) {
+    urls.push(args.seedUrl);
+  }
+  urls.push(...(ensureStringArray(args.urls, "urls") || []));
+  urls.push(...(ensureStringArray(args.seedUrls, "seedUrls") || []));
+
+  return {
+    refs: [
+      ...(ensureStringArray(args.refs, "refs") || []),
+      ...(ensureStringArray(args.seedRefs, "seedRefs") || []),
+    ],
+    queries,
+    shareIds,
+    urlIds,
+    urls,
+  };
+}
+
+function hasDocumentRefValues(refs) {
+  return Object.values(refs).some((items) =>
+    Array.isArray(items) && items.some((item) => String(item || "").trim())
+  );
+}
+
+async function resolveDocumentIdsForRead(ctx, args = {}) {
+  const exactIds = normalizeGraphSourceIds(args);
+  const refs = normalizeDocumentRefValues(args);
+  const resolution = {
+    exactIds,
+    requested: {
+      refs: refs.refs.filter((item) => String(item || "").trim()),
+      queries: refs.queries.filter((item) => String(item || "").trim()),
+      shareIds: refs.shareIds.filter((item) => String(item || "").trim()),
+      urlIds: refs.urlIds.filter((item) => String(item || "").trim()),
+      urls: refs.urls.filter((item) => String(item || "").trim()),
+    },
+    resolved: [],
+    failed: [],
+    memory: null,
+  };
+
+  if (hasDocumentRefValues(refs)) {
+    const opened = await documentsOpenBatchTool(ctx, compactValue({
+      refs: refs.refs,
+      queries: refs.queries,
+      shareIds: refs.shareIds,
+      urlIds: refs.urlIds,
+      urls: refs.urls,
+      profile: args.profile,
+      limit: args.resolveLimit,
+      minScore: args.minScore,
+      maxAgeHours: args.maxAgeHours,
+      refresh: args.refresh,
+      strict: args.strict,
+      strictThreshold: args.strictThreshold,
+      fallbackSearch: args.fallbackSearch,
+      fallbackMinScore: args.fallbackMinScore,
+      fallbackLimit: args.fallbackLimit,
+      fallbackMode: args.fallbackMode,
+      collectionId: args.resolveCollectionId,
+      view: "summary",
+      concurrency: args.resolveConcurrency,
+      hydrateConcurrency: args.resolveHydrateConcurrency,
+      maxAttempts: args.maxAttempts,
+    }) || {});
+    resolution.memory = opened.result?.memory || null;
+    for (const item of opened.result?.items || []) {
+      if (item?.ok && item.document?.id) {
+        resolution.resolved.push({
+          index: item.index,
+          kind: item.kind,
+          value: item.value,
+          id: item.document.id,
+          title: item.document.title,
+          mode: item.mode,
+          candidate: item.candidate,
+        });
+        continue;
+      }
+      resolution.failed.push({
+        index: item?.index,
+        kind: item?.kind,
+        value: item?.value,
+        status: item?.status || "not_found",
+        candidate: item?.candidate,
+        candidates: item?.candidates,
+        error: item?.error,
+      });
+    }
+  }
+
+  const ids = uniqueStrings([
+    ...exactIds,
+    ...resolution.resolved.map((item) => item.id),
+  ]).sort(compareIdAsc);
+
+  return {
+    ids,
+    resolution,
+  };
+}
+
+async function resolveCollectionIdForRead(ctx, args = {}) {
+  const exactId = args.collectionId ? String(args.collectionId).trim() : "";
+  if (exactId) {
+    return {
+      id: exactId,
+      resolution: {
+        exactId,
+        resolved: null,
+        failed: null,
+        memory: null,
+      },
+    };
+  }
+
+  const refArgs = compactValue({
+    query: args.collectionQuery,
+    id: args.collectionRefId,
+    urlId: args.collectionUrlId,
+    url: args.collectionUrl,
+    profile: args.profile,
+    limit: args.collectionResolveLimit || args.resolveLimit,
+    minScore: args.collectionMinScore ?? args.minScore,
+    maxAgeHours: args.collectionMaxAgeHours ?? args.maxAgeHours,
+    refresh: args.refresh,
+    strict: args.strict,
+    strictThreshold: args.collectionStrictThreshold ?? args.strictThreshold,
+    fallbackSearch: args.fallbackSearch,
+    fallbackMinScore: args.collectionFallbackMinScore ?? args.fallbackMinScore,
+    fallbackLimit: args.collectionFallbackLimit ?? args.fallbackLimit,
+    view: "summary",
+    maxAttempts: args.maxAttempts,
+  }) || {};
+
+  if (!refArgs.query && !refArgs.id && !refArgs.urlId && !refArgs.url) {
+    return {
+      id: "",
+      resolution: {
+        exactId: "",
+        resolved: null,
+        failed: null,
+        memory: null,
+      },
+    };
+  }
+
+  const opened = await collectionsOpenTool(ctx, refArgs);
+  if (opened.result?.ok && opened.result?.collection?.id) {
+    return {
+      id: opened.result.collection.id,
+      resolution: {
+        exactId: "",
+        resolved: {
+          id: opened.result.collection.id,
+          name: opened.result.collection.name,
+          mode: opened.result.mode,
+          candidate: opened.result.candidate,
+        },
+        failed: null,
+        memory: opened.result.memory || null,
+      },
+    };
+  }
+
+  return {
+    id: "",
+    resolution: {
+      exactId: "",
+      resolved: null,
+      failed: {
+        status: opened.result?.status || "not_found",
+        candidate: opened.result?.candidate,
+        candidates: opened.result?.candidates,
+      },
+      memory: opened.result?.memory || null,
+    },
+  };
 }
 
 function normalizeGraphSearchQueries(value) {
@@ -2137,9 +3945,19 @@ async function collectGraphNeighbors(ctx, sourceIds, options = {}) {
 }
 
 async function documentsBacklinksTool(ctx, args = {}) {
-  const id = String(args.id || "").trim();
+  const resolved = await resolveDocumentIdsForRead(ctx, args);
+  const id = resolved.ids[0] || "";
   if (!id) {
-    throw new CliError("documents.backlinks requires args.id");
+    return {
+      tool: "documents.backlinks",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        data: [],
+        resolution: resolved.resolution,
+      },
+    };
   }
 
   const view = normalizeGraphView(args.view);
@@ -2165,6 +3983,13 @@ async function documentsBacklinksTool(ctx, args = {}) {
     };
   }
   payload = maybeDropPolicies(payload, !!args.includePolicies);
+  payload = compactValue({
+    ...payload,
+    ok: payload?.ok,
+    resolution: (resolved.resolution.resolved.length > 0 || resolved.resolution.failed.length > 0)
+      ? resolved.resolution
+      : undefined,
+  }) || {};
 
   return {
     tool: "documents.backlinks",
@@ -2174,9 +3999,24 @@ async function documentsBacklinksTool(ctx, args = {}) {
 }
 
 async function documentsGraphNeighborsTool(ctx, args = {}) {
-  const sourceIds = normalizeGraphSourceIds(args);
+  const resolved = await resolveDocumentIdsForRead(ctx, args);
+  const sourceIds = resolved.ids;
   if (sourceIds.length === 0) {
-    throw new CliError("documents.graph_neighbors requires args.id or args.ids[]");
+    return {
+      tool: "documents.graph_neighbors",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        sourceIds: [],
+        resolution: resolved.resolution,
+        nodeCount: 0,
+        edgeCount: 0,
+        nodes: [],
+        edges: [],
+        errors: [],
+      },
+    };
   }
 
   const includeBacklinks = args.includeBacklinks !== false;
@@ -2202,12 +4042,16 @@ async function documentsGraphNeighborsTool(ctx, args = {}) {
 
   const nodes = buildGraphNodeList(collected.nodesById, view);
   const edges = sortGraphEdges(collected.edges);
+  const resolution = resolved.resolution.resolved.length > 0 || resolved.resolution.failed.length > 0
+    ? resolved.resolution
+    : undefined;
 
   return {
     tool: "documents.graph_neighbors",
     profile: ctx.profile.id,
     result: {
       sourceIds,
+      ...(resolution ? { resolution } : {}),
       includeBacklinks,
       includeSearchNeighbors,
       searchQueries,
@@ -2222,9 +4066,32 @@ async function documentsGraphNeighborsTool(ctx, args = {}) {
 }
 
 async function documentsGraphReportTool(ctx, args = {}) {
-  const requestedSeedIds = uniqueStrings(ensureStringArray(args.seedIds, "seedIds") || []).sort(compareIdAsc);
+  const resolved = await resolveDocumentIdsForRead(ctx, args);
+  const requestedSeedIds = resolved.ids;
   if (requestedSeedIds.length === 0) {
-    throw new CliError("documents.graph_report requires args.seedIds[]");
+    return {
+      tool: "documents.graph_report",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        seedIds: [],
+        requestedSeedCount: 0,
+        resolution: resolved.resolution,
+        depth: Math.max(0, Math.min(6, toInteger(args.depth, 2))),
+        exploredDepth: 0,
+        maxNodes: Math.max(1, Math.min(500, toInteger(args.maxNodes, 120))),
+        includeBacklinks: args.includeBacklinks !== false,
+        includeSearchNeighbors: args.includeSearchNeighbors === true,
+        limitPerSource: Math.max(1, Math.min(100, toInteger(args.limitPerSource, 10))),
+        truncated: false,
+        nodeCount: 0,
+        edgeCount: 0,
+        nodes: [],
+        edges: [],
+        errors: [],
+      },
+    };
   }
 
   const includeBacklinks = args.includeBacklinks !== false;
@@ -2323,6 +4190,9 @@ async function documentsGraphReportTool(ctx, args = {}) {
       (edge) => allowedIds.has(edge.sourceId) && allowedIds.has(edge.targetId)
     )
   );
+  const resolution = resolved.resolution.resolved.length > 0 || resolved.resolution.failed.length > 0
+    ? resolved.resolution
+    : undefined;
 
   return {
     tool: "documents.graph_report",
@@ -2330,6 +4200,7 @@ async function documentsGraphReportTool(ctx, args = {}) {
     result: {
       seedIds,
       requestedSeedCount: requestedSeedIds.length,
+      ...(resolution ? { resolution } : {}),
       depth,
       exploredDepth,
       maxNodes,
@@ -2347,9 +4218,27 @@ async function documentsGraphReportTool(ctx, args = {}) {
 }
 
 async function documentsIssueRefsTool(ctx, args = {}) {
-  const ids = normalizeIssueRefIds(args);
+  const resolved = await resolveDocumentIdsForRead(ctx, args);
+  const ids = resolved.ids;
   if (ids.length === 0) {
-    throw new CliError("documents.issue_refs requires args.id or args.ids[]");
+    return {
+      tool: "documents.issue_refs",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        requestedIds: [],
+        resolution: resolved.resolution,
+        documentCount: 0,
+        documentsWithRefs: 0,
+        refCount: 0,
+        keyCount: 0,
+        mentionCount: 0,
+        keys: [],
+        documents: [],
+        errors: [],
+      },
+    };
   }
 
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
@@ -2361,12 +4250,16 @@ async function documentsIssueRefsTool(ctx, args = {}) {
     maxAttempts,
     view,
   });
+  const resolution = resolved.resolution.resolved.length > 0 || resolved.resolution.failed.length > 0
+    ? resolved.resolution
+    : undefined;
 
   return {
     tool: "documents.issue_refs",
     profile: ctx.profile.id,
     result: {
       requestedIds: extracted.requestedIds,
+      ...(resolution ? { resolution } : {}),
       issueDomains: extracted.issueDomains,
       keyPattern: extracted.keyPattern,
       ...extracted.summary,
@@ -2408,10 +4301,40 @@ async function documentsIssueRefReportTool(ctx, args = {}) {
   };
 }
 
+async function resolveTemplateSelector(ctx, args = {}, options = {}) {
+  const resolved = await resolveEntityId(ctx, args, {
+    type: "template",
+    outputField: options.outputField || "id",
+    resultField: "templateId",
+    exactKeys: options.exactKeys || [options.outputField || "id"],
+    queryKeys: ["templateQuery", "templateRef", "query"],
+    arrayQueryKeys: ["templateQueries", "templateRefs", "refs", "queries"],
+  });
+  if (resolved?.error) {
+    return resolved;
+  }
+  if (resolved?.id) {
+    return resolved;
+  }
+  const exact = (options.exactKeys || [options.outputField || "id"])
+    .map((key) => String(args[key] || "").trim())
+    .find(Boolean);
+  return exact ? { id: exact, resolution: null } : { id: "" };
+}
+
 async function templatesExtractPlaceholdersTool(ctx, args = {}) {
-  const id = String(args.id || "").trim();
+  const resolvedTemplate = await resolveTemplateSelector(ctx, args, {
+    outputField: "id",
+    exactKeys: ["id"],
+  });
+  if (resolvedTemplate.error) {
+    throw new CliError("templates.extract_placeholders could not resolve template", {
+      resolution: resolvedTemplate.error,
+    });
+  }
+  const id = String(resolvedTemplate.id || "").trim();
   if (!id) {
-    throw new CliError("templates.extract_placeholders requires args.id");
+    throw new CliError("templates.extract_placeholders requires args.id or args.templateQuery");
   }
 
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
@@ -2425,7 +4348,9 @@ async function templatesExtractPlaceholdersTool(ctx, args = {}) {
     profile: ctx.profile.id,
     result: {
       id: template?.id ? String(template.id) : id,
+      templateId: id,
       title: template?.title ? String(template.title) : "",
+      resolution: resolvedTemplate.resolution,
       placeholders: stats.placeholders,
       counts: stats.countsByPlaceholder,
       meta: {
@@ -2439,15 +4364,24 @@ async function templatesExtractPlaceholdersTool(ctx, args = {}) {
 }
 
 async function documentsCreateFromTemplateTool(ctx, args = {}) {
-  const templateId = String(args.templateId || "").trim();
-  if (!templateId) {
-    throw new CliError("documents.create_from_template requires args.templateId");
-  }
-
   assertPerformAction(args, {
     tool: "documents.create_from_template",
     action: "create and optionally update a document from template",
   });
+
+  const resolvedTemplate = await resolveTemplateSelector(ctx, args, {
+    outputField: "templateId",
+    exactKeys: ["templateId"],
+  });
+  if (resolvedTemplate.error) {
+    throw new CliError("documents.create_from_template could not resolve template", {
+      resolution: resolvedTemplate.error,
+    });
+  }
+  const templateId = String(resolvedTemplate.id || "").trim();
+  if (!templateId) {
+    throw new CliError("documents.create_from_template requires args.templateId or args.templateQuery");
+  }
 
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 1));
   const view = normalizeTemplatePipelineView(args.view);
@@ -2482,6 +4416,8 @@ async function documentsCreateFromTemplateTool(ctx, args = {}) {
         strictPlaceholders,
         publishRequested,
         published: publishRequested,
+        templateId,
+        resolution: resolvedTemplate.resolution,
         document: normalizeTemplatePipelineDocument(finalPayload?.data || createdDoc, view),
         placeholders: {
           providedKeys: [],
@@ -2542,6 +4478,8 @@ async function documentsCreateFromTemplateTool(ctx, args = {}) {
         publishRequested,
         published: false,
         safeBehavior: "left_unpublished_draft",
+        templateId,
+        resolution: resolvedTemplate.resolution,
         document: normalizeTemplatePipelineDocument(updatedDoc, view),
         placeholders: {
           providedKeys: providedPlaceholderKeys,
@@ -2587,6 +4525,8 @@ async function documentsCreateFromTemplateTool(ctx, args = {}) {
       strictPlaceholders,
       publishRequested,
       published,
+      templateId,
+      resolution: resolvedTemplate.resolution,
       document: normalizeTemplatePipelineDocument(finalPayload?.data || updatedDoc, view),
       placeholders: {
         providedKeys: providedPlaceholderKeys,
@@ -2849,24 +4789,59 @@ async function listCollectionDocumentIds(ctx, collectionId, maxAttempts) {
 }
 
 async function commentsReviewQueueTool(ctx, args = {}) {
-  const explicitIds = uniqueStrings(ensureStringArray(args.documentIds, "documentIds") || []);
-  const collectionId = args.collectionId ? String(args.collectionId) : "";
+  const resolvedDocuments = await resolveDocumentIdsForRead(ctx, args);
+  const documentResolution = resolvedDocuments.resolution.resolved.length > 0 || resolvedDocuments.resolution.failed.length > 0
+    ? resolvedDocuments.resolution
+    : undefined;
+  const resolvedCollection = await resolveCollectionIdForRead(ctx, args);
+  const collectionResolution = resolvedCollection.resolution.resolved || resolvedCollection.resolution.failed
+    ? resolvedCollection.resolution
+    : undefined;
+  const collectionId = resolvedCollection.id;
   const maxAttempts = Math.max(1, toInteger(args.maxAttempts, 2));
   const includeReplies = args.includeReplies !== false;
   const includeAnchorText = !!args.includeAnchorText;
   const limitPerDocument = Math.max(1, Math.min(200, toInteger(args.limitPerDocument, 30)));
   const view = args.view === "full" ? "full" : "summary";
 
-  if (explicitIds.length === 0 && !collectionId) {
-    throw new CliError("comments.review_queue requires args.documentIds[] or args.collectionId");
+  const requestedDocumentRefs = documentResolution || resolvedDocuments.resolution.exactIds.length > 0;
+  const requestedCollectionRef = !!args.collectionId || !!args.collectionQuery || !!args.collectionRefId
+    || !!args.collectionUrlId || !!args.collectionUrl;
+  if (!requestedDocumentRefs && !requestedCollectionRef) {
+    throw new CliError("comments.review_queue requires args.documentIds[], document refs, args.collectionId, or collection refs");
   }
 
-  let documentIds = explicitIds;
+  let documentIds = resolvedDocuments.ids;
   let collectionScopeTruncated = false;
   if (documentIds.length === 0 && collectionId) {
     const resolved = await listCollectionDocumentIds(ctx, collectionId, maxAttempts);
     documentIds = resolved.ids;
     collectionScopeTruncated = resolved.truncated;
+  }
+  if (documentIds.length === 0) {
+    return {
+      tool: "comments.review_queue",
+      profile: ctx.profile.id,
+      result: {
+        ok: false,
+        status: "not_found",
+        scope: {
+          documentIds: [],
+          collectionId,
+          ...(documentResolution ? { documentResolution } : {}),
+          ...(collectionResolution ? { collectionResolution } : {}),
+        },
+        includeReplies,
+        includeAnchorText,
+        limitPerDocument,
+        documentCount: 0,
+        rowCount: 0,
+        failedDocumentCount: 0,
+        truncated: false,
+        rows: [],
+        failures: [],
+      },
+    };
   }
 
   const perDocument = await mapLimit(documentIds, Math.min(6, Math.max(1, documentIds.length || 1)), async (documentId) => {
@@ -2940,6 +4915,8 @@ async function commentsReviewQueueTool(ctx, args = {}) {
       scope: {
         documentIds,
         collectionId,
+        ...(documentResolution ? { documentResolution } : {}),
+        ...(collectionResolution ? { collectionResolution } : {}),
       },
       includeReplies,
       includeAnchorText,
@@ -3384,25 +5361,26 @@ export const EXTENDED_TOOLS = {
   ...RPC_TOOLS,
   "documents.answer": {
     signature:
-      "documents.answer(args: { question?: string; query?: string; limit?: number; ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })",
+      "documents.answer(args: { question?: string; query?: string; documentId?: string; documentQuery?: string; refs?: string[]; collectionId?: string; collectionQuery?: string; userId?: string; userQuery?: string; limit?: number; ...endpointArgs; includePolicies?: boolean; maxAttempts?: number })",
     description: "Answer a question using Outline AI over the selected document scope.",
     usageExample: {
       tool: "documents.answer",
       args: {
         question: "What changed in our onboarding checklist?",
-        collectionId: "collection-id",
+        collectionQuery: "engineering",
       },
     },
     bestPractices: [
       "Use question text that is specific enough to resolve citations quickly.",
-      "Scope by collectionId or documentId to reduce latency and hallucination risk.",
+      "Scope by documentQuery, refs, collectionQuery, or userQuery when callers have remembered titles, URLs, collection names, or emails instead of exact IDs.",
+      "Use exact collectionId, documentId, or userId when already known to avoid a memory resolution step.",
       "If the deployment lacks documents.answerQuestion, this wrapper returns fallback retrieval evidence and a concrete search suggestion instead of a raw 404.",
     ],
     handler: documentsAnswerTool,
   },
   "documents.answer_batch": {
     signature:
-      "documents.answer_batch(args: { question?: string; questions?: Array<string | { question?: string; query?: string; ...endpointArgs }>; limit?: number; ...endpointArgs; concurrency?: number; includePolicies?: boolean; maxAttempts?: number })",
+      "documents.answer_batch(args: { question?: string; questions?: Array<string | { question?: string; query?: string; documentQuery?: string; collectionQuery?: string; userQuery?: string; ...endpointArgs }>; limit?: number; ...endpointArgs; concurrency?: number; includePolicies?: boolean; maxAttempts?: number })",
     description: "Run multiple documents.answerQuestion calls with per-item isolation.",
     usageExample: {
       tool: "documents.answer_batch",
@@ -3411,12 +5389,13 @@ export const EXTENDED_TOOLS = {
           "Where is the release checklist?",
           "Who owns incident postmortems?",
         ],
-        collectionId: "collection-id",
+        collectionQuery: "engineering",
         concurrency: 2,
       },
     },
     bestPractices: [
       "Prefer small batches and low concurrency for predictable token and latency budgets.",
+      "Use top-level collectionQuery/userQuery to resolve shared scope once, or per-item documentQuery when each question targets a different remembered document.",
       "Use per-item statuses to retry only failures.",
       "Unsupported answer endpoints degrade to per-item retrieval evidence rather than failing the whole batch.",
     ],
@@ -3424,8 +5403,8 @@ export const EXTENDED_TOOLS = {
   },
   "documents.backlinks": {
     signature:
-      "documents.backlinks(args: { id: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'ids'|'summary'|'full'; includePolicies?: boolean; maxAttempts?: number })",
-    description: "List backlinks for a document via documents.list(backlinkDocumentId=id).",
+      "documents.backlinks(args: { id?: string; query?: string; shareId?: string; urlId?: string; url?: string; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; view?: 'ids'|'summary'|'full'; includePolicies?: boolean; maxAttempts?: number })",
+    description: "List backlinks for a document by exact ID or by resolving a remembered title, share ID, URL id, or URL first.",
     usageExample: {
       tool: "documents.backlinks",
       args: {
@@ -3435,6 +5414,7 @@ export const EXTENDED_TOOLS = {
       },
     },
     bestPractices: [
+      "Pass query/url/urlId directly when you know the document reference but not its exact ID.",
       "Use view=ids for low-token planning loops, then hydrate specific documents separately.",
       "Use limit/offset pagination for deterministic traversal over large backlink sets.",
     ],
@@ -3442,8 +5422,8 @@ export const EXTENDED_TOOLS = {
   },
   "documents.graph_neighbors": {
     signature:
-      "documents.graph_neighbors(args: { id?: string; ids?: string[]; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; searchQueries?: string[]; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
-    description: "Collect one-hop graph neighbors and deterministic edge rows for source document IDs.",
+      "documents.graph_neighbors(args: { id?: string; ids?: string[]; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; searchQueries?: string[]; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description: "Collect one-hop graph neighbors and deterministic edge rows for source documents, resolving titles or URLs when needed.",
     usageExample: {
       tool: "documents.graph_neighbors",
       args: {
@@ -3455,6 +5435,7 @@ export const EXTENDED_TOOLS = {
       },
     },
     bestPractices: [
+      "Use refs[] for mixed document titles and URLs; use ids[] when exact document IDs are already known.",
       "Start with a single source id and small limitPerSource, then expand incrementally.",
       "Enable includeSearchNeighbors only when additional semantic neighborhood expansion is needed.",
     ],
@@ -3462,8 +5443,8 @@ export const EXTENDED_TOOLS = {
   },
   "documents.graph_report": {
     signature:
-      "documents.graph_report(args: { seedIds: string[]; depth?: number; maxNodes?: number; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
-    description: "Build a bounded BFS graph report with stable nodes[] and edges[] output.",
+      "documents.graph_report(args: { seedIds?: string[]; seedRefs?: string[]; seedQuery?: string; seedQueries?: string[]; seedUrl?: string; seedUrls?: string[]; depth?: number; maxNodes?: number; includeBacklinks?: boolean; includeSearchNeighbors?: boolean; limitPerSource?: number; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    description: "Build a bounded BFS graph report with stable nodes[] and edges[] output, resolving seed titles or URLs when needed.",
     usageExample: {
       tool: "documents.graph_report",
       args: {
@@ -3476,6 +5457,7 @@ export const EXTENDED_TOOLS = {
       },
     },
     bestPractices: [
+      "Use seedRefs[] for mixed seed titles and URLs; use seedIds[] when exact document IDs are already known.",
       "Cap maxNodes and depth to keep traversal deterministic and cost-bounded.",
       "Prefer view=ids for graph planning and fetch full nodes only for selected IDs.",
     ],
@@ -3483,9 +5465,9 @@ export const EXTENDED_TOOLS = {
   },
   "documents.issue_refs": {
     signature:
-      "documents.issue_refs(args: { id?: string; ids?: string[]; issueDomains?: string[]; keyPattern?: string; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+      "documents.issue_refs(args: { id?: string; ids?: string[]; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; issueDomains?: string[]; keyPattern?: string; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
     description:
-      "Extract deterministic issue references (URL links and key-pattern matches) from one or more documents.",
+      "Extract deterministic issue references (URL links and key-pattern matches) from one or more documents, resolving titles or URLs when needed.",
     usageExample: {
       tool: "documents.issue_refs",
       args: {
@@ -3496,6 +5478,7 @@ export const EXTENDED_TOOLS = {
       },
     },
     bestPractices: [
+      "Use refs[] for mixed document titles and URLs; exact IDs can still go through ids[].",
       "Start with view=ids for low-token audits, then re-run selected docs with summary/full views.",
       "Provide issueDomains to reduce non-issue URL noise and keep outputs focused.",
       "Tune keyPattern when your tracker uses custom issue key formats.",
@@ -3526,18 +5509,18 @@ export const EXTENDED_TOOLS = {
   },
   "documents.attachments": {
     signature:
-      "documents.attachments(args: { id?: string; documentId?: string; url?: string; shareId?: string; maxAttempts?: number })",
+      "documents.attachments(args: { id?: string; documentId?: string; refs?: string[]; query?: string; queries?: string[]; url?: string; urlId?: string; urlIds?: string[]; urls?: string[]; shareId?: string; shareIds?: string[]; maxAttempts?: number })",
     description:
-      "Extract embedded Outline attachment references from a document body, including images rendered through /api/attachments.redirect.",
+      "Extract embedded Outline attachment references from a document body, including images rendered through /api/attachments.redirect, resolving remembered document refs when needed.",
     usageExample: {
       tool: "documents.attachments",
       args: {
-        url: "https://handbook.example.com/doc/example-title-AbCdEf1234",
+        query: "example title",
       },
     },
     bestPractices: [
-      "Use this after documents.info when you need to enumerate embedded images or file links without downloading bytes.",
-      "Pass a document URL directly; the tool resolves the Outline URL id suffix through documents.info.",
+      "Pass query, refs, url, urlId, or shareId directly when you need to enumerate embedded images or file links without a separate document open step.",
+      "Use strict=true defaults for remembered titles so weak fuzzy matches return a structured miss instead of guessing.",
       "Follow with attachments.download or documents.download_attachments to save files locally.",
     ],
     handler: documentsAttachmentsTool,
@@ -3564,19 +5547,20 @@ export const EXTENDED_TOOLS = {
   },
   "documents.download_attachments": {
     signature:
-      "documents.download_attachments(args: { id?: string; documentId?: string; url?: string; shareId?: string; outputDir?: string; overwrite?: boolean; concurrency?: number; maxAttempts?: number })",
+      "documents.download_attachments(args: { id?: string; documentId?: string; refs?: string[]; query?: string; queries?: string[]; url?: string; urlId?: string; urlIds?: string[]; urls?: string[]; shareId?: string; shareIds?: string[]; outputDir?: string; overwrite?: boolean; concurrency?: number; maxAttempts?: number })",
     description:
-      "Extract all embedded Outline attachment references from a document and save each referenced file locally.",
+      "Resolve a document, extract all embedded Outline attachment references, and save each referenced file locally.",
     usageExample: {
       tool: "documents.download_attachments",
       args: {
-        url: "https://handbook.example.com/doc/example-title-AbCdEf1234",
+        query: "example title",
         outputDir: "./outline-attachments",
         overwrite: true,
       },
     },
     bestPractices: [
       "Run documents.attachments first when you only need metadata or want to choose a subset.",
+      "Pass query, refs, url, urlId, or shareId directly when the agent has a remembered document title or pasted URL.",
       "Keep concurrency modest for large image-heavy documents to avoid rate limits.",
       "Use overwrite=true for repeatable automation into a scratch directory.",
     ],
@@ -3604,15 +5588,16 @@ export const EXTENDED_TOOLS = {
     handler: documentsImportFileTool,
   },
   "templates.extract_placeholders": {
-    signature: "templates.extract_placeholders(args: { id: string; maxAttempts?: number })",
-    description: "Extract sorted unique placeholder keys ({{key}}) from template text nodes.",
+    signature: "templates.extract_placeholders(args: { id?: string; templateQuery?: string; refs?: string[]; refresh?: boolean; maxAttempts?: number })",
+    description: "Resolve a template by ID or remembered name and extract sorted unique placeholder keys ({{key}}) from template text nodes.",
     usageExample: {
       tool: "templates.extract_placeholders",
       args: {
-        id: "template-id",
+        templateQuery: "incident postmortem",
       },
     },
     bestPractices: [
+      "Pass templateQuery/templateRef/refs when the user names a template but exact ID is unknown.",
       "Run this before document creation to validate required placeholder keys.",
       "Use counts to catch repeated placeholders for deterministic pipeline checks.",
     ],
@@ -3620,13 +5605,13 @@ export const EXTENDED_TOOLS = {
   },
   "documents.create_from_template": {
     signature:
-      "documents.create_from_template(args: { templateId: string; title?: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; placeholderValues?: Record<string,string>; strictPlaceholders?: boolean; view?: 'summary'|'full'; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })",
+      "documents.create_from_template(args: { templateId?: string; templateQuery?: string; refs?: string[]; title?: string; collectionId?: string; parentDocumentId?: string; publish?: boolean; placeholderValues?: Record<string,string>; strictPlaceholders?: boolean; view?: 'summary'|'full'; includePolicies?: boolean; maxAttempts?: number; performAction?: boolean })",
     description:
       "Create from template, optionally inject placeholder values, and enforce strict unresolved-placeholder safety.",
     usageExample: {
       tool: "documents.create_from_template",
       args: {
-        templateId: "template-id",
+        templateQuery: "incident postmortem",
         title: "Service A - Incident Postmortem",
         placeholderValues: {
           service_name: "Service A",
@@ -3638,6 +5623,7 @@ export const EXTENDED_TOOLS = {
       },
     },
     bestPractices: [
+      "Pass templateQuery/templateRef/refs when only the template name is known; local memory can resolve and refresh the template in the same call.",
       "Keep strictPlaceholders=true in automation to prevent publishing unresolved template tokens.",
       "Provide placeholderValues as exact key-value strings and inspect unresolvedCount on every run.",
       "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
@@ -3646,18 +5632,19 @@ export const EXTENDED_TOOLS = {
   },
   "comments.review_queue": {
     signature:
-      "comments.review_queue(args: { documentIds?: string[]; collectionId?: string; includeAnchorText?: boolean; includeReplies?: boolean; limitPerDocument?: number; view?: 'summary'|'full'; maxAttempts?: number })",
-    description: "Build a deterministic comment review queue from comments.list responses.",
+      "comments.review_queue(args: { documentIds?: string[]; documentId?: string; refs?: string[]; query?: string; queries?: string[]; shareId?: string; shareIds?: string[]; urlId?: string; urlIds?: string[]; url?: string; urls?: string[]; collectionId?: string; collectionQuery?: string; collectionRefId?: string; collectionUrlId?: string; collectionUrl?: string; includeAnchorText?: boolean; includeReplies?: boolean; limitPerDocument?: number; view?: 'summary'|'full'; maxAttempts?: number })",
+    description: "Build a deterministic comment review queue from comments.list responses, resolving remembered document or collection references when needed.",
     usageExample: {
       tool: "comments.review_queue",
       args: {
-        documentIds: ["doc-1", "doc-2"],
+        refs: ["incident runbook", "https://handbook.example.com/doc/oncall-escalation-AbCdEf12"],
         includeReplies: true,
         limitPerDocument: 20,
       },
     },
     bestPractices: [
-      "Scope to explicit documentIds whenever possible for predictable queue size.",
+      "Use explicit documentIds for maximum predictability, or pass refs/query/url when the agent only has a remembered title or pasted Outline URL.",
+      "Use collectionQuery, collectionRefId, collectionUrlId, or collectionUrl when the review queue should cover a remembered collection without a separate collections.open turn.",
       "Use includeReplies=true to capture full threaded review context.",
       "Treat truncated=true as a signal to re-run with a higher limitPerDocument.",
     ],

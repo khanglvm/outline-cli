@@ -37,9 +37,11 @@ async function resolveLiveEnv() {
   const resolved = {
     baseUrl: process.env.OUTLINE_TEST_BASE_URL,
     apiKey: process.env.OUTLINE_TEST_API_KEY,
+    profile: process.env.OUTLINE_TEST_PROFILE,
+    configPath: process.env.OUTLINE_TEST_CONFIG_PATH,
   };
 
-  if (resolved.baseUrl && resolved.apiKey) {
+  if (resolved.profile || (resolved.baseUrl && resolved.apiKey)) {
     return resolved;
   }
 
@@ -50,6 +52,8 @@ async function resolveLiveEnv() {
   return {
     baseUrl: resolved.baseUrl || env.OUTLINE_TEST_BASE_URL,
     apiKey: resolved.apiKey || env.OUTLINE_TEST_API_KEY,
+    profile: resolved.profile || env.OUTLINE_TEST_PROFILE,
+    configPath: resolved.configPath || env.OUTLINE_TEST_CONFIG_PATH,
   };
 }
 
@@ -857,11 +861,18 @@ function hasCliValidationIssue(envelope, pathPrefix) {
 
 test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }, async (t) => {
   const env = await resolveLiveEnv();
-  assert.ok(env.baseUrl, "OUTLINE_TEST_BASE_URL is required");
-  assert.ok(env.apiKey, "OUTLINE_TEST_API_KEY is required");
+  assert.ok(
+    env.profile || (env.baseUrl && env.apiKey),
+    "OUTLINE_TEST_PROFILE or OUTLINE_TEST_BASE_URL + OUTLINE_TEST_API_KEY is required"
+  );
+  if (env.profile && !process.env.OUTLINE_CLI_KEYCHAIN_MODE) {
+    process.env.OUTLINE_CLI_KEYCHAIN_MODE = "optional";
+  }
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "outline-cli-live-test-"));
-  const configPath = path.join(tmpDir, "config.json");
+  const configPath = env.profile
+    ? env.configPath || path.join(os.homedir(), ".config", "outline-cli", "config.json")
+    : path.join(tmpDir, "config.json");
 
   const state = {
     authUserId: null,
@@ -949,6 +960,28 @@ test("live integration suite (real Outline API, no mocks)", { timeout: 300_000 }
 
   try {
     await t.test("profile setup + auth", async () => {
+      if (env.profile) {
+        const testRes = runCli([
+          "profile",
+          "test",
+          env.profile,
+          "--config",
+          configPath,
+          "--result-mode",
+          "inline",
+        ]).json;
+
+        assert.equal(testRes.ok, true);
+        assert.ok(testRes.user?.id, "Expected authenticated user id");
+        assert.ok(testRes.team?.id, "Expected team id");
+        state.authUserId = testRes.user?.id || null;
+
+        const authInfo = await invokeTool(tmpDir, configPath, "auth.info", { view: "summary" });
+        assert.equal(authInfo.tool, "auth.info");
+        assert.ok(authInfo.result?.data?.user?.id, "auth.info should return user");
+        return;
+      }
+
       const addRes = runCli([
         "profile",
         "add",

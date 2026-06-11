@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.8 - 2026-06-11
+
+- Changes since `v0.1.7`.
+- feat: add Outline memory-assisted direct workflows (dc88257)
+
 ## 0.1.7 - 2026-06-10
 
 - Changes since `v0.1.6`.

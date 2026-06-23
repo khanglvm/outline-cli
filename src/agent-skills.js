@@ -737,8 +737,10 @@ const AI_SKILLS = [
     objective: "Build deterministic review queues and close loops with comment evidence.",
     featureUpdates: [
       "comments.review_queue wrapper added for scoped editorial queues.",
-      "comments.list can resolve remembered document refs for direct thread hydration.",
-      "comments.create can resolve remembered document refs before creating comments.",
+      "comments.list can resolve remembered document refs for direct thread hydration (includeReplies=true to nest replies).",
+      "comments.create / comments.post accept plain text and build the ProseMirror data doc for you.",
+      "comments.create / comments.post accept mentions (names/emails/userIds) and auto-insert @-mention nodes; names match on first name.",
+      "comments.create / comments.post enforce the 1000-character comment limit pre-flight and accept parentCommentId for replies.",
       "Thread/reply and anchor metadata can be included for full review context.",
     ],
     sequence: [
@@ -772,6 +774,7 @@ const AI_SKILLS = [
       "Scope review_queue to explicit documentIds whenever possible.",
       "Pass query/refs/url/urlId directly to comments.list when drilling into one remembered document.",
       "Pass query/refs/url/urlId directly to comments.create when adding an approved comment to a remembered document.",
+      "Use comments.create/comments.post with plain text + mentions instead of hand-building ProseMirror data; pass an email or userId when a first name is ambiguous.",
       "Use limitPerDocument to control queue growth and rerun with cursor-like cadence.",
     ],
     safetyChecks: [

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ApiError, CliError } from "./errors.js";
 import { assertPerformAction } from "./action-gate.js";
 import { defaultTmpDir } from "./config-store.js";
@@ -1003,6 +1003,345 @@ async function resolveAccessId(ctx, args = {}, input) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Comment ergonomics: plain/markdown text -> Outline ProseMirror `data` doc,
+// with first-class @-mention resolution.
+//
+// Outline stores comment bodies as a ProseMirror document under `data`, NOT a
+// plain `text` field (the API returns validation_error if only text is sent on
+// some deployments, and mentions are impossible without the doc form). Each
+// mention is a node: { type: "mention", attrs: { type: "user", modelId, label,
+// id, actorId } } where `id` is a fresh UUID per mention. Outline enforces a
+// 1000-character limit measured on the comment TEXT (not the JSON), returning
+// validation_error "Comment must be less than 1000 characters (data)".
+//
+// We accept a simple `text` body plus a `mentions` list (names / emails /
+// userIds) and build the doc ourselves. Mentions are resolved against the
+// users API by FIRST-NAME token + email (display-name order varies across
+// systems, e.g. Outline shows "Quan, Tran Le" while Jira shows "Tran Le Quan").
+// ---------------------------------------------------------------------------
+
+const COMMENT_TEXT_LIMIT = 1000;
+
+function commentTextNode(text) {
+  return { type: "text", text };
+}
+
+function commentMentionNode({ userId, label }) {
+  return {
+    type: "mention",
+    attrs: {
+      type: "user",
+      modelId: userId,
+      label: label || "user",
+      id: randomUUID(),
+      actorId: null,
+    },
+  };
+}
+
+// Split plain/markdown text into paragraphs on blank lines, and keep single
+// newlines as hard breaks inside a paragraph (mirrors how a human pastes text).
+function splitCommentParagraphs(text) {
+  const normalized = String(text == null ? "" : text).replace(/\r\n?/g, "\n");
+  const blocks = normalized.split(/\n{2,}/);
+  const paragraphs = [];
+  for (const block of blocks) {
+    if (block.trim().length === 0) {
+      continue;
+    }
+    paragraphs.push(block.split("\n"));
+  }
+  return paragraphs;
+}
+
+// Build the ProseMirror `data` doc for a comment from text + resolved mentions.
+// Resolved mentions (each { userId, label }) are inserted at the very start of
+// the first paragraph, followed by a space, then the text.
+function buildCommentData(text, resolvedMentions = []) {
+  const paragraphs = splitCommentParagraphs(text);
+  const mentionNodes = resolvedMentions.map((mention) => commentMentionNode(mention));
+
+  const content = [];
+  if (paragraphs.length === 0 && mentionNodes.length === 0) {
+    content.push({ type: "paragraph" });
+  }
+
+  paragraphs.forEach((lines, paragraphIndex) => {
+    const inline = [];
+    if (paragraphIndex === 0 && mentionNodes.length > 0) {
+      mentionNodes.forEach((node) => {
+        inline.push(node);
+        inline.push(commentTextNode(" "));
+      });
+    }
+    lines.forEach((line, lineIndex) => {
+      if (lineIndex > 0) {
+        inline.push({ type: "br" });
+      }
+      if (line.length > 0) {
+        inline.push(commentTextNode(line));
+      }
+    });
+    content.push(inline.length > 0 ? { type: "paragraph", content: inline } : { type: "paragraph" });
+  });
+
+  // Mentions with no text body at all: emit a single paragraph holding them.
+  if (paragraphs.length === 0 && mentionNodes.length > 0) {
+    const inline = [];
+    mentionNodes.forEach((node, index) => {
+      inline.push(node);
+      if (index < mentionNodes.length - 1) {
+        inline.push(commentTextNode(" "));
+      }
+    });
+    content.push({ type: "paragraph", content: inline });
+  }
+
+  return { type: "doc", content };
+}
+
+// Character count of the human-readable comment text (mention labels count as
+// "@label", matching how Outline measures the 1000-char limit on the data doc).
+function commentTextLength(text, resolvedMentions = []) {
+  const textLen = String(text == null ? "" : text).length;
+  const mentionLen = resolvedMentions.reduce(
+    (sum, mention) => sum + 1 + String(mention.label || "user").length + 1,
+    0
+  );
+  return textLen + mentionLen;
+}
+
+function firstNameToken(name) {
+  return String(name || "")
+    // "Last, First Middle" -> take the part after the comma first
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reverse()[0]
+    ?.split(/\s+/)
+    .filter(Boolean)[0]
+    ?.toLowerCase() || "";
+}
+
+function normalizeMentionToken(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function looksLikeUuid(value) {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+    String(value || "").trim()
+  );
+}
+
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+// Pull the user rows out of a users.list response body (shape: { data: [...] }).
+function usersFromListBody(body) {
+  if (Array.isArray(body)) {
+    return body;
+  }
+  if (Array.isArray(body?.data)) {
+    return body.data;
+  }
+  if (Array.isArray(body?.data?.users)) {
+    return body.data.users;
+  }
+  return [];
+}
+
+async function fetchWorkspaceUsers(ctx, { maxAttempts } = {}) {
+  const collected = [];
+  const limit = 100;
+  let offset = 0;
+  // Outline paginates users.list; pull a few pages to cover typical workspaces.
+  for (let page = 0; page < 25; page += 1) {
+    let res;
+    try {
+      res = await ctx.client.call("users.list", { limit, offset }, { maxAttempts: maxAttempts || 2 });
+    } catch (err) {
+      if (collected.length > 0) {
+        break;
+      }
+      throw err;
+    }
+    const rows = usersFromListBody(res.body);
+    collected.push(...rows);
+    const pagination = res.body?.pagination;
+    const total = Number(pagination?.total);
+    if (rows.length < limit) {
+      break;
+    }
+    offset += limit;
+    if (Number.isFinite(total) && offset >= total) {
+      break;
+    }
+  }
+  return collected;
+}
+
+// Resolve one mention token (name / email / userId) to { userId, label }.
+// Matching strategy:
+//   - userId (uuid) -> exact id match
+//   - email         -> exact email match
+//   - name          -> FIRST-NAME token match (+ optional email disambiguation)
+// Returns { resolved } on success, or { error, candidates } on failure.
+function resolveMentionToken(token, users) {
+  const raw = String(token || "").trim();
+  if (!raw) {
+    return { error: { value: token, status: "empty" } };
+  }
+
+  if (looksLikeUuid(raw)) {
+    const match = users.find((user) => normalizeMentionToken(user?.id) === normalizeMentionToken(raw));
+    if (match) {
+      return { resolved: { userId: match.id, label: match.name || match.email || "user" } };
+    }
+    return { error: { value: raw, status: "not_found", reason: "no user with that id" } };
+  }
+
+  if (looksLikeEmail(raw)) {
+    const match = users.find((user) => normalizeMentionToken(user?.email) === normalizeMentionToken(raw));
+    if (match) {
+      return { resolved: { userId: match.id, label: match.name || match.email || "user" } };
+    }
+    return { error: { value: raw, status: "not_found", reason: "no user with that email" } };
+  }
+
+  // Name token: match on first-name token. Support "name <email>" / "name|email".
+  const emailHint = raw.match(/[<|]\s*([^\s@<>|]+@[^\s@<>|]+)\s*>?/)?.[1];
+  const namePart = emailHint ? raw.replace(/[<|]\s*[^\s@<>|]+@[^\s@<>|]+\s*>?/, "").trim() : raw;
+  const wantFirst = firstNameToken(namePart);
+
+  let candidates = users.filter((user) => {
+    const userFirst = firstNameToken(user?.name) || firstNameToken(user?.email);
+    return userFirst && wantFirst && userFirst === wantFirst;
+  });
+
+  if (emailHint) {
+    const byEmail = candidates.filter(
+      (user) => normalizeMentionToken(user?.email) === normalizeMentionToken(emailHint)
+    );
+    if (byEmail.length > 0) {
+      candidates = byEmail;
+    }
+  }
+
+  if (candidates.length === 1) {
+    const match = candidates[0];
+    return { resolved: { userId: match.id, label: match.name || match.email || "user" } };
+  }
+
+  if (candidates.length === 0) {
+    return { error: { value: raw, status: "not_found", reason: "no user matched first name" } };
+  }
+
+  return {
+    error: {
+      value: raw,
+      status: "ambiguous",
+      reason: "multiple users share that first name; pass an email or userId",
+      candidates: candidates.map((user) => ({ id: user.id, name: user.name, email: user.email })),
+    },
+  };
+}
+
+async function resolveMentions(ctx, mentions, { maxAttempts } = {}) {
+  const tokens = ensureStringArray(mentions).map((item) => String(item).trim()).filter(Boolean);
+  if (tokens.length === 0) {
+    return { resolved: [], failures: [] };
+  }
+  const users = await fetchWorkspaceUsers(ctx, { maxAttempts });
+  const resolved = [];
+  const failures = [];
+  for (const token of tokens) {
+    const outcome = resolveMentionToken(token, users);
+    if (outcome.resolved) {
+      resolved.push(outcome.resolved);
+    } else {
+      failures.push(outcome.error);
+    }
+  }
+  return { resolved, failures };
+}
+
+// prepareBody hook for comments.create / comments.post. Runs AFTER document
+// resolution (so bodyArgs.documentId is set) and BEFORE the API call. Builds
+// the ProseMirror `data` doc from `text` + `mentions`, enforces the 1000-char
+// limit, and strips the convenience-only keys from the outgoing body.
+async function prepareCommentBody(ctx, def, args, bodyArgs) {
+  const text = typeof bodyArgs.text === "string" ? bodyArgs.text : "";
+  const hasMentions = Array.isArray(args.mentions) && args.mentions.length > 0;
+  const hasExplicitData = bodyArgs.data !== undefined && bodyArgs.data !== null;
+
+  // Caller passed a pre-built ProseMirror doc and no mentions: passthrough,
+  // just drop the convenience-only `mentions` key if present.
+  if (hasExplicitData && !hasMentions && !text) {
+    delete bodyArgs.mentions;
+    return bodyArgs;
+  }
+
+  let resolvedMentions = [];
+  if (hasMentions) {
+    const maxAttempts = toInteger(args.maxAttempts, 2);
+    const { resolved, failures } = await resolveMentions(ctx, args.mentions, { maxAttempts });
+    if (failures.length > 0) {
+      throw new CliError(
+        `comments.${def.tool.endsWith(".post") ? "post" : "create"}: could not resolve ${failures.length} mention(s): ` +
+          failures.map((f) => `"${f.value}" (${f.status})`).join(", "),
+        {
+          code: "MENTION_UNRESOLVED",
+          tool: def.tool,
+          failures,
+        }
+      );
+    }
+    resolvedMentions = resolved;
+  }
+
+  // Enforce the 1000-char limit on the human text (not the JSON), pre-flight.
+  const length = commentTextLength(text, resolvedMentions);
+  if (length > COMMENT_TEXT_LIMIT) {
+    throw new CliError(
+      `comments.${def.tool.endsWith(".post") ? "post" : "create"}: comment text is ${length} characters; Outline allows at most ${COMMENT_TEXT_LIMIT}.`,
+      {
+        code: "COMMENT_TOO_LONG",
+        tool: def.tool,
+        length,
+        limit: COMMENT_TEXT_LIMIT,
+      }
+    );
+  }
+
+  // If the caller gave an explicit data doc AND mentions, prepend mention nodes
+  // to its first paragraph; otherwise build from text.
+  if (hasExplicitData && resolvedMentions.length > 0) {
+    const doc = bodyArgs.data;
+    const mentionNodes = resolvedMentions.flatMap((mention) => [
+      commentMentionNode(mention),
+      commentTextNode(" "),
+    ]);
+    const firstParagraph = Array.isArray(doc?.content)
+      ? doc.content.find((node) => node?.type === "paragraph")
+      : null;
+    if (firstParagraph) {
+      firstParagraph.content = [...mentionNodes, ...(firstParagraph.content || [])];
+    } else if (doc && Array.isArray(doc.content)) {
+      doc.content.unshift({ type: "paragraph", content: mentionNodes });
+    }
+    bodyArgs.data = doc;
+  } else if (!hasExplicitData) {
+    bodyArgs.data = buildCommentData(text, resolvedMentions);
+  }
+
+  // Outline wants `data`, not `text` — drop the convenience keys.
+  delete bodyArgs.text;
+  delete bodyArgs.mentions;
+  return bodyArgs;
+}
+
 function makeRpcHandler(def) {
   return async function rpcHandler(ctx, args = {}) {
     if (def.mutating) {
@@ -1049,6 +1388,12 @@ function makeRpcHandler(def) {
       omitKeys.push(...(item.omitKeys || []));
     }
     const effectiveOmitKeys = omitKeys.filter((key) => !resolvedOutputFields.has(key));
+    if (typeof def.prepareBody === "function") {
+      // Hook runs after target resolution (documentId is set) and before the
+      // API call, letting a def transform the outgoing body (e.g. comments
+      // build a ProseMirror data doc + resolve @-mentions).
+      await def.prepareBody(ctx, def, args, bodyArgs);
+    }
     const body = buildBody(
       bodyArgs,
       effectiveOmitKeys.length > 0
@@ -1300,7 +1645,24 @@ const RPC_WRAPPER_DEFS = [
   {
     tool: "comments.list",
     method: "comments.list",
-    description: "List comments, optionally resolving a remembered document first.",
+    description:
+      "List comments on a document (and their replies). Resolve the target with documentId/query/refs/url/urlId. Use includeReplies=true to nest replies, or parentCommentId to fetch the replies of one thread.",
+    signature:
+      "comments.list(args?: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; parentCommentId?: string; includeReplies?: boolean; includeAnchorText?: boolean; limit?: number; offset?: number; sort?: string; direction?: 'ASC'|'DESC'; includePolicies?: boolean; view?: 'ids'|'summary'|'full'; maxAttempts?: number })",
+    usageExample: {
+      tool: "comments.list",
+      args: {
+        query: "incident runbook",
+        includeReplies: true,
+        limit: 50,
+      },
+    },
+    bestPractices: [
+      "Pass documentId for exact calls, or query/refs/url/urlId to resolve a remembered document first.",
+      "Set includeReplies=true to fetch replies nested under each top-level comment.",
+      "Pass parentCommentId to read the replies of a specific comment (e.g. after posting one).",
+      "Use view='ids' or 'summary' to keep responses token-efficient.",
+    ],
     resolveAccess: {
       kind: "document",
       outputField: "documentId",
@@ -1314,24 +1676,62 @@ const RPC_WRAPPER_DEFS = [
   {
     tool: "comments.create",
     method: "comments.create",
-    description: "Create a comment on a document ID or remembered document reference.",
+    description:
+      "Post a comment on a document. Pass plain/markdown `text` and the ProseMirror `data` doc is built for you; pass `mentions` (names/emails/userIds) to auto-insert @-mentions. Use `parentCommentId` to reply.",
     signature:
-      "comments.create(args: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; text?: string; data?: object; parentCommentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })",
+      "comments.create(args: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; text?: string; mentions?: string[]; data?: object; parentCommentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })",
     usageExample: {
       tool: "comments.create",
       args: {
         query: "incident runbook",
-        text: "Looks good.",
+        text: "Please review the rollback steps.",
+        mentions: ["Tran Le Quan", "alice@example.com"],
         performAction: true,
       },
     },
     bestPractices: [
-      "Pass query/refs/url/urlId when adding a comment to a remembered document without a separate lookup.",
-      "Use parentCommentId for replies and text for simple comments.",
-      "Inspect the returned documentId and resolution fields when the target was resolved from memory.",
+      "Pass plain/markdown `text`; the ProseMirror `data` doc is built for you (blank lines split paragraphs, single newlines become line breaks).",
+      "Pass `mentions` as a list of names, emails, or userIds; names match on FIRST NAME (e.g. \"Tran Le Quan\" matches Outline's \"Quan, Tran Le\"). Ambiguous names are rejected with candidates — disambiguate with an email or userId.",
+      "Comment text is capped at 1000 characters (pre-flight check on text, not JSON).",
+      "Pass query/refs/url/urlId to comment on a remembered document without a separate lookup.",
+      "Use parentCommentId to reply to an existing comment.",
+      "Advanced: pass a raw ProseMirror `data` doc to bypass text building (mentions are still prepended if provided).",
       "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
     ],
     mutating: true,
+    prepareBody: prepareCommentBody,
+    resolveAccess: {
+      kind: "document",
+      outputField: "documentId",
+      exactKeys: ["documentId"],
+      required: true,
+      queryKeys: ["query", "documentQuery", "documentRef", "shareId", "urlId", "url"],
+      arrayQueryKeys: ["queries", "documentQueries", "documentRefs", "refs", "shareIds", "urlIds", "urls"],
+    },
+  },
+  {
+    tool: "comments.post",
+    method: "comments.create",
+    description:
+      "Convenience alias of comments.create: post a comment from plain `text` + ergonomic `mentions`. The ProseMirror data doc and @-mention nodes are built for you.",
+    signature:
+      "comments.post(args: { documentId?: string; query?: string; documentQuery?: string; refs?: string[]; shareId?: string; urlId?: string; url?: string; text?: string; mentions?: string[]; data?: object; parentCommentId?: string; includePolicies?: boolean; view?: 'summary'|'full'; maxAttempts?: number; performAction?: boolean })",
+    usageExample: {
+      tool: "comments.post",
+      args: {
+        query: "incident runbook",
+        text: "Can you confirm the timeline?",
+        mentions: ["Quan"],
+        performAction: true,
+      },
+    },
+    bestPractices: [
+      "Same as comments.create: simple `text` + `mentions` (names/emails/userIds), 1000-char limit, parentCommentId for replies.",
+      "Names resolve on FIRST NAME + email; ambiguous names error with candidates.",
+      "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
+    ],
+    mutating: true,
+    prepareBody: prepareCommentBody,
     resolveAccess: {
       kind: "document",
       outputField: "documentId",
@@ -5356,6 +5756,18 @@ async function federatedPermissionSnapshotTool(ctx, args = {}) {
     },
   };
 }
+
+// Exported for unit testing the comment data-builder and mention-resolver
+// without hitting the network.
+export const __commentInternals = {
+  COMMENT_TEXT_LIMIT,
+  buildCommentData,
+  commentTextLength,
+  splitCommentParagraphs,
+  firstNameToken,
+  resolveMentionToken,
+  usersFromListBody,
+};
 
 export const EXTENDED_TOOLS = {
   ...RPC_TOOLS,

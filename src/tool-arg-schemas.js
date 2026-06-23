@@ -2954,6 +2954,7 @@ export const TOOL_ARG_SCHEMAS = {
     properties: {
       ...DOCUMENT_TARGET_RESOLVE_PROPERTIES,
       text: { type: "string" },
+      mentions: { type: "string[]" },
       data: { type: "object" },
       parentCommentId: { type: "string" },
       includePolicies: { type: "boolean" },
@@ -2963,8 +2964,29 @@ export const TOOL_ARG_SCHEMAS = {
     },
     custom(args, issues) {
       validateRequiredDocumentResolveArgs(args, issues);
-      if (!args.text && !args.data) {
-        issues.push({ path: "args.text", message: "or args.data is required" });
+      const hasMentions = Array.isArray(args.mentions) && args.mentions.length > 0;
+      if (!args.text && !args.data && !hasMentions) {
+        issues.push({ path: "args.text", message: "or args.data or args.mentions is required" });
+      }
+    },
+  },
+  "comments.post": {
+    properties: {
+      ...DOCUMENT_TARGET_RESOLVE_PROPERTIES,
+      text: { type: "string" },
+      mentions: { type: "string[]" },
+      data: { type: "object" },
+      parentCommentId: { type: "string" },
+      includePolicies: { type: "boolean" },
+      view: { type: "string", enum: ["summary", "full"] },
+      maxAttempts: { type: "number", min: 1 },
+      performAction: { type: "boolean" },
+    },
+    custom(args, issues) {
+      validateRequiredDocumentResolveArgs(args, issues);
+      const hasMentions = Array.isArray(args.mentions) && args.mentions.length > 0;
+      if (!args.text && !args.data && !hasMentions) {
+        issues.push({ path: "args.text", message: "or args.data or args.mentions is required" });
       }
     },
   },

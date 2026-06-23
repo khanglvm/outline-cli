@@ -237,11 +237,32 @@ outline-cli invoke comments.list \
   --args '{"query":"incident runbook","includeReplies":true,"limit":20,"view":"summary"}'
 ```
 
-Create a comment directly from a remembered document title:
+Create a comment directly from a remembered document title. Pass plain/markdown
+`text` (the ProseMirror `data` doc is built for you) and an optional `mentions`
+list of names, emails, or userIds. Names match on **first name**, so Jira-order
+`"Tran Le Quan"` resolves to Outline's `"Quan, Tran Le"`. The comment text is
+capped at 1000 characters (checked pre-flight). `comments.post` is an alias.
 
 ```bash
+# simple comment
 outline-cli invoke comments.create \
   --args '{"query":"incident runbook","text":"Looks good.","performAction":true}'
+
+# comment with @-mentions (resolved to user IDs and inserted at the start)
+outline-cli invoke comments.create \
+  --args '{"query":"incident runbook","text":"Please review the rollback steps.","mentions":["Tran Le Quan","alice@example.com"],"performAction":true}'
+
+# reply to an existing comment
+outline-cli invoke comments.post \
+  --args '{"documentId":"<doc-id>","parentCommentId":"<comment-id>","text":"Confirmed.","performAction":true}'
+```
+
+Read a comment's replies later with `comments.list` (set `includeReplies:true`,
+or pass `parentCommentId` to fetch one thread's replies):
+
+```bash
+outline-cli invoke comments.list \
+  --args '{"query":"incident runbook","includeReplies":true,"view":"summary"}'
 ```
 
 List share links directly from a remembered document title:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - 2026-06-23
+
+- Changes since `v0.1.8`.
+- feat(comments): ergonomic commenting with @-mentions — `comments.create`/`comments.post` accept plain/markdown `text` and build the Outline ProseMirror `data` doc, resolve `mentions` (names/emails/userIds, first-name + email matching) into mention nodes, enforce the 1000-character text limit pre-flight, and support `parentCommentId` replies; `comments.list` documents `includeReplies`/`parentCommentId` for reading replies.
+
 ## 0.1.8 - 2026-06-11
 
 - Changes since `v0.1.7`.

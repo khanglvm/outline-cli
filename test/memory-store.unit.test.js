@@ -2058,10 +2058,12 @@ test("comments.create resolves document titles before creating comments", async 
             };
           }
           if (method === "comments.create") {
-            assert.deepEqual(body, {
-              documentId: "doc-comment-create",
-              text: "Looks good.",
-            });
+            // comments.create now builds the ProseMirror data doc from `text`
+            // and sends `data` (not raw `text`) to the Outline API.
+            assert.equal(body.documentId, "doc-comment-create");
+            assert.equal(body.text, undefined);
+            assert.equal(body.data?.type, "doc");
+            assert.deepEqual(body.data.content[0].content, [{ type: "text", text: "Looks good." }]);
             return {
               body: {
                 ok: true,

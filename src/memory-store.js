@@ -9,6 +9,8 @@ import { compactValue, ensureStringArray, mapLimit, toInteger } from "./utils.js
 const STORE_VERSION = 1;
 const DEFAULT_MAX_ENTRIES_PER_PROFILE = 1000;
 const MAX_SOURCE_TOOLS = 8;
+const UNRECOVERABLE_STORE = Symbol("unrecoverableMemoryStore");
+let saveSequence = 0;
 const OBSERVED_TOOL_PREFIXES = [
   "documents.",
   "collections.",
@@ -36,31 +38,112 @@ function blankStore() {
   };
 }
 
+function normalizeStore(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return blankStore();
+  }
+  if (!parsed.profiles || typeof parsed.profiles !== "object" || Array.isArray(parsed.profiles)) {
+    parsed.profiles = {};
+  }
+  if (!parsed.version) {
+    parsed.version = STORE_VERSION;
+  }
+  return parsed;
+}
+
+function parseLeadingStore(raw) {
+  let start = 0;
+  while (start < raw.length && /\s/.test(raw[start])) {
+    start += 1;
+  }
+  if (raw[start] !== "{") {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}" && char !== "]") {
+      continue;
+    }
+    depth -= 1;
+    if (depth !== 0) {
+      continue;
+    }
+
+    const trailing = raw.slice(index + 1);
+    if (!trailing.trim()) {
+      return null;
+    }
+    try {
+      return normalizeStore(JSON.parse(raw.slice(start, index + 1)));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function loadStore(file = defaultMemoryFile()) {
+  let raw;
   try {
-    const raw = await fs.readFile(file, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      return blankStore();
-    }
-    if (!parsed.profiles || typeof parsed.profiles !== "object") {
-      parsed.profiles = {};
-    }
-    if (!parsed.version) {
-      parsed.version = STORE_VERSION;
-    }
-    return parsed;
+    raw = await fs.readFile(file, "utf8");
   } catch (err) {
     if (err?.code === "ENOENT") {
       return blankStore();
     }
     throw new Error(`Failed to read memory store ${file}: ${err.message}`);
   }
+
+  try {
+    return normalizeStore(JSON.parse(raw));
+  } catch (err) {
+    const recovered = parseLeadingStore(raw);
+    if (recovered) {
+      return recovered;
+    }
+    const fallback = blankStore();
+    Object.defineProperty(fallback, UNRECOVERABLE_STORE, {
+      value: err.message,
+    });
+    return fallback;
+  }
 }
 
 async function saveStore(store, file = defaultMemoryFile()) {
+  if (store[UNRECOVERABLE_STORE]) {
+    throw new Error(
+      `Refusing to overwrite malformed memory store ${file}: ${store[UNRECOVERABLE_STORE]}`,
+    );
+  }
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+  const tempFile = `${file}.${process.pid}.${saveSequence += 1}.tmp`;
+  try {
+    await fs.writeFile(tempFile, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
+    await fs.rename(tempFile, file);
+  } finally {
+    await fs.rm(tempFile, { force: true });
+  }
 }
 
 function profileBucket(store, profileId) {

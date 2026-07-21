@@ -813,6 +813,58 @@ test("documents.resolve_urls can resolve remembered document URLs without live s
   });
 });
 
+test("documents.resolve_urls recovers valid observations before malformed trailing JSON", async () => {
+  await withTmpMemory(async (memoryFile) => {
+    const calls = [];
+    const ctx = {
+      profile: { id: "prod", baseUrl: "https://handbook.example.com" },
+      memory: { enabled: true, file: memoryFile },
+      client: {
+        async call(method) {
+          calls.push(method);
+          assert.equal(method, "documents.search_titles");
+          return {
+            body: {
+              ok: true,
+              data: [
+                {
+                  id: "doc-runbook",
+                  title: "Incident Runbook",
+                  collectionId: "col-eng",
+                  updatedAt: "2026-06-01T00:00:00.000Z",
+                  urlId: "incident-runbook-AbCdEf12",
+                },
+              ],
+            },
+          };
+        },
+      },
+    };
+
+    await invokeTool(ctx, "documents.search", {
+      query: "incident runbook",
+      mode: "titles",
+      view: "summary",
+      compact: false,
+    });
+    await fs.appendFile(memoryFile, '  "ranking": 0.991\n}\n', "utf8");
+
+    const output = await invokeTool(ctx, "documents.resolve_urls", {
+      url: "https://handbook.example.com/doc/incident-runbook-AbCdEf12#d-AbCdEf12",
+      refresh: false,
+      view: "summary",
+      compact: false,
+    });
+
+    assert.deepEqual(calls, ["documents.search_titles"]);
+    assert.equal(output.result.bestMatch?.id, "doc-runbook");
+    assert.deepEqual(output.result.bestMatch?.sources, ["memory_url"]);
+
+    const repaired = JSON.parse(await fs.readFile(memoryFile, "utf8"));
+    assert.equal(repaired.profiles.prod.entries["document:doc-runbook"].id, "doc-runbook");
+  });
+});
+
 test("documents.open reads an exact id in one call and records local memory", async () => {
   await withTmpMemory(async (memoryFile) => {
     const calls = [];

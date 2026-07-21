@@ -3,8 +3,8 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   version: 1,
   algorithm: "sha256",
   signatureAlgorithm: "sha256-salted-manifest-v1",
-  signature: "2c8599249d5e5c8e68c5825637f705aa74412df9e809271949db9cad60a5c5b7",
-  generatedAt: "2026-07-21T08:59:49.279Z",
+  signature: "c282b3ac3eb71f8543fc1666f780d828853b310203f4fe80f02a5c22cdb925a3",
+  generatedAt: "2026-07-21T09:09:21.194Z",
   files: [
   {
     "path": "src/action-gate.js",

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - 2026-07-21
+
+- Changes since `v0.2.0`.
+- fix(memory): recover malformed observation cache (e9ec821)
+
 ## 0.2.0 - 2026-06-23
 
 - Changes since `v0.1.8`.

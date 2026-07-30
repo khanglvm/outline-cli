@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2 - 2026-07-30
+
+- Changes since `v0.2.1`.
+- Normalize Outline comment line breaks (6326791)
+
 ## 0.2.1 - 2026-07-21
 
 - Changes since `v0.2.0`.

@@ -27,6 +27,7 @@ function makeCommentCtx({ users = SAMPLE_USERS } = {}) {
 
 const {
   COMMENT_TEXT_LIMIT,
+  normalizeCommentText,
   buildCommentData,
   commentTextLength,
   splitCommentParagraphs,
@@ -44,6 +45,17 @@ const SAMPLE_USERS = [
 test("splitCommentParagraphs splits on blank lines and keeps single newlines as lines", () => {
   const paras = splitCommentParagraphs("first line\nsecond line\n\nsecond paragraph");
   assert.deepEqual(paras, [["first line", "second line"], ["second paragraph"]]);
+});
+
+test("comment text normalizes doubly escaped newlines before ProseMirror rendering", () => {
+  assert.equal(
+    normalizeCommentText("[Được gởi bởi Agent]\\nNội dung"),
+    "[Được gởi bởi Agent]\nNội dung"
+  );
+  assert.deepEqual(
+    splitCommentParagraphs("[Được gởi bởi Agent]\\nNội dung"),
+    [["[Được gởi bởi Agent]", "Nội dung"]]
+  );
 });
 
 test("buildCommentData builds a ProseMirror doc with paragraphs and line breaks", () => {
@@ -173,6 +185,22 @@ test("comments.create builds data doc from text and sends data (not text)", asyn
   assert.equal(createCall.body.documentId, "doc-1");
   // No mentions => users.list not called.
   assert.equal(calls.some((c) => c.method === "users.list"), false);
+});
+
+test("comments.create renders an escaped prefix newline as a ProseMirror hard break", async () => {
+  const { ctx, calls } = makeCommentCtx();
+  await invokeTool(ctx, "comments.create", {
+    documentId: "doc-1",
+    text: "[Được gởi bởi Agent]\\nTính năng đã sẵn sàng QC.",
+    performAction: true,
+  });
+  const createCall = calls.find((c) => c.method === "comments.create");
+  assert.deepEqual(createCall.body.data.content[0].content, [
+    { type: "text", text: "[Được gởi bởi Agent]" },
+    { type: "br" },
+    { type: "text", text: "Tính năng đã sẵn sàng QC." },
+  ]);
+  assert.equal(JSON.stringify(createCall.body.data).includes("\\\\n"), false);
 });
 
 test("comments.create resolves mentions and inserts mention nodes", async () => {

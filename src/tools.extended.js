@@ -1023,6 +1023,15 @@ async function resolveAccessId(ctx, args = {}, input) {
 
 const COMMENT_TEXT_LIMIT = 1000;
 
+function normalizeCommentText(text) {
+  return String(text == null ? "" : text)
+    .replace(/\r\n?/g, "\n")
+    // Agents sometimes pass a doubly escaped JSON/shell body. Normalize those
+    // sequences before building ProseMirror nodes so Outline renders a hard
+    // break instead of showing the characters "\n".
+    .replace(/\\r\\n|\\n|\\r/g, "\n");
+}
+
 function commentTextNode(text) {
   return { type: "text", text };
 }
@@ -1043,7 +1052,7 @@ function commentMentionNode({ userId, label }) {
 // Split plain/markdown text into paragraphs on blank lines, and keep single
 // newlines as hard breaks inside a paragraph (mirrors how a human pastes text).
 function splitCommentParagraphs(text) {
-  const normalized = String(text == null ? "" : text).replace(/\r\n?/g, "\n");
+  const normalized = normalizeCommentText(text);
   const blocks = normalized.split(/\n{2,}/);
   const paragraphs = [];
   for (const block of blocks) {
@@ -1104,7 +1113,7 @@ function buildCommentData(text, resolvedMentions = []) {
 // Character count of the human-readable comment text (mention labels count as
 // "@label", matching how Outline measures the 1000-char limit on the data doc).
 function commentTextLength(text, resolvedMentions = []) {
-  const textLen = String(text == null ? "" : text).length;
+  const textLen = normalizeCommentText(text).length;
   const mentionLen = resolvedMentions.reduce(
     (sum, mention) => sum + 1 + String(mention.label || "user").length + 1,
     0
@@ -1272,7 +1281,7 @@ async function resolveMentions(ctx, mentions, { maxAttempts } = {}) {
 // the ProseMirror `data` doc from `text` + `mentions`, enforces the 1000-char
 // limit, and strips the convenience-only keys from the outgoing body.
 async function prepareCommentBody(ctx, def, args, bodyArgs) {
-  const text = typeof bodyArgs.text === "string" ? bodyArgs.text : "";
+  const text = typeof bodyArgs.text === "string" ? normalizeCommentText(bodyArgs.text) : "";
   const hasMentions = Array.isArray(args.mentions) && args.mentions.length > 0;
   const hasExplicitData = bodyArgs.data !== undefined && bodyArgs.data !== null;
 
@@ -1690,7 +1699,7 @@ const RPC_WRAPPER_DEFS = [
       },
     },
     bestPractices: [
-      "Pass plain/markdown `text`; the ProseMirror `data` doc is built for you (blank lines split paragraphs, single newlines become line breaks).",
+      "Pass plain/markdown `text`; the ProseMirror `data` doc is built for you (blank lines split paragraphs, while real or doubly escaped newlines become hard breaks instead of visible \\\\n text).",
       "Pass `mentions` as a list of names, emails, or userIds; names match on FIRST NAME (e.g. \"Tran Le Quan\" matches Outline's \"Quan, Tran Le\"). Ambiguous names are rejected with candidates — disambiguate with an email or userId.",
       "Comment text is capped at 1000 characters (pre-flight check on text, not JSON).",
       "Pass query/refs/url/urlId to comment on a remembered document without a separate lookup.",
@@ -1726,7 +1735,7 @@ const RPC_WRAPPER_DEFS = [
       },
     },
     bestPractices: [
-      "Same as comments.create: simple `text` + `mentions` (names/emails/userIds), 1000-char limit, parentCommentId for replies.",
+      "Same as comments.create: simple `text` + `mentions` (names/emails/userIds), real or doubly escaped newlines render as hard breaks, 1000-char limit, parentCommentId for replies.",
       "Names resolve on FIRST NAME + email; ambiguous names error with candidates.",
       "This tool is action-gated; set performAction=true only for explicitly confirmed mutations.",
     ],
@@ -5761,6 +5770,7 @@ async function federatedPermissionSnapshotTool(ctx, args = {}) {
 // without hitting the network.
 export const __commentInternals = {
   COMMENT_TEXT_LIMIT,
+  normalizeCommentText,
   buildCommentData,
   commentTextLength,
   splitCommentParagraphs,

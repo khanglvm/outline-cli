@@ -241,7 +241,9 @@ Create a comment directly from a remembered document title. Pass plain/markdown
 `text` (the ProseMirror `data` doc is built for you) and an optional `mentions`
 list of names, emails, or userIds. Names match on **first name**, so Jira-order
 `"Tran Le Quan"` resolves to Outline's `"Quan, Tran Le"`. The comment text is
-capped at 1000 characters (checked pre-flight). `comments.post` is an alias.
+capped at 1000 characters (checked pre-flight). Actual newlines and doubly
+escaped `\n`/`\r\n` sequences are normalized into ProseMirror hard breaks, so
+comments never display a literal `\n`. `comments.post` is an alias.
 
 ```bash
 # simple comment

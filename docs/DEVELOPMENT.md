@@ -61,6 +61,8 @@ Manual runs default to a dry run. Configure npm to trust this repository and
 workflow filename; an npm token is not required. CI runs the CLI check and unit
 tests. The live integration suite still requires a real Outline test account.
 
-Commit valid entry-integrity manifests with each source release. Refresh them
-locally with `OUTLINE_ENTRY_BUILD_KEY` before pushing a new version. CI checks
-the committed manifests and never regenerates them with a development key.
+CI refreshes entry-integrity manifests with the production
+`OUTLINE_ENTRY_BUILD_KEY` GitHub Actions secret before checking and packing the
+release. A missing or invalid key fails the run; CI never uses the development
+fallback. Local releases use the same key. This signing key is separate from
+npm authentication, which uses trusted publishing.

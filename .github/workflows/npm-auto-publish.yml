@@ -81,6 +81,12 @@ jobs:
           JS
       - name: Install dependencies
         run: npm ci
+      - name: Refresh production entry integrity
+        env:
+          OUTLINE_ENTRY_BUILD_KEY: ${{ secrets.OUTLINE_ENTRY_BUILD_KEY }}
+        run: |
+          node --input-type=module -e "const key = process.env.OUTLINE_ENTRY_BUILD_KEY; if (!key || key.trim().length < 24) throw new Error('OUTLINE_ENTRY_BUILD_KEY is required for release integrity binding');"
+          npm run integrity:refresh
       - name: Verify package
         run: |
           npm run check

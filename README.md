@@ -4,9 +4,13 @@ Search and manage your [Outline](https://www.getoutline.com/) knowledge base
 from the terminal. Find a runbook, read a document, download its attachments,
 or update a page without opening the web app.
 
-The CLI returns JSON for scripts and AI agents. It supports multiple workspace
-profiles and can look up documents by title or URL. This is an independent
-project, not an official Outline tool.
+Start with a document title or pasted URL. The CLI resolves it to a page and
+can return a short summary or just IDs, so a script or agent can read only
+what it needs. For edits, you can preview a diff and use patch tools that
+check the expected revision before writing.
+
+Results are JSON, and profiles let you switch between workspaces. This is an
+independent project, not an official Outline tool.
 
 ## Install and connect
 

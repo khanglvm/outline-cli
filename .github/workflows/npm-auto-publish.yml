@@ -1,89 +1,91 @@
-name: npm-auto-publish
+name: Publish npm package
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - README.md
-      - package.json
+    branches: [main]
+    paths: [package.json]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate the release without publishing
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
+  id-token: write
 
 concurrency:
-  group: npm-auto-publish-${{ github.ref }}
+  group: npm-publish
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    if: github.repository == 'khanglvm/outline-cli' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: '24'
           cache: npm
-          registry-url: https://registry.npmjs.org
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Validate release secrets
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          OUTLINE_ENTRY_BUILD_KEY: ${{ secrets.OUTLINE_ENTRY_BUILD_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "${NPM_TOKEN:-}" || { echo "Missing required secret: NPM_TOKEN"; exit 1; }
-          test -n "${OUTLINE_ENTRY_BUILD_KEY:-}" || { echo "Missing required secret: OUTLINE_ENTRY_BUILD_KEY"; exit 1; }
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Determine release strategy
-        id: strategy
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11
+      - name: Check version and registry
+        id: release
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
-          set -euo pipefail
-          current_version="$(node -p "require('./package.json').version")"
-          echo "current_version=${current_version}" >> "$GITHUB_OUTPUT"
-
-          if [ -z "${BEFORE_SHA:-}" ] || [ "${BEFORE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "mode=patch" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          previous_version="$(git show "${BEFORE_SHA}:package.json" | node -e "let input=''; process.stdin.on('data', (chunk) => input += chunk); process.stdin.on('end', () => process.stdout.write(JSON.parse(input).version || ''));")"
-          echo "previous_version=${previous_version}" >> "$GITHUB_OUTPUT"
-
-          if [ "${previous_version}" != "${current_version}" ]; then
-            echo "mode=current" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=patch" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish current version
-        if: steps.strategy.outputs.mode == 'current'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          OUTLINE_ENTRY_BUILD_KEY: ${{ secrets.OUTLINE_ENTRY_BUILD_KEY }}
-        run: npm run release -- --use-current-version --skip-test
-
-      - name: Publish patch release
-        if: steps.strategy.outputs.mode == 'patch'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          OUTLINE_ENTRY_BUILD_KEY: ${{ secrets.OUTLINE_ENTRY_BUILD_KEY }}
-        run: npm run release -- --bump patch --skip-test
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { execFileSync, spawnSync } from 'node:child_process';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const { name, version } = pkg;
+          if (!name || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
+            throw new Error('package.json must contain a package name and semantic version');
+          }
+          let changed = true;
+          if (process.env.GITHUB_REF_TYPE === 'tag') {
+            if (process.env.GITHUB_REF_NAME !== `v${version}`) throw new Error('Tag must match package.json version');
+          } else if (process.env.GITHUB_EVENT_NAME === 'push') {
+            const before = process.env.BEFORE_SHA;
+            if (before && !/^0+$/.test(before)) {
+              const previous = JSON.parse(execFileSync('git', ['show', `${before}:package.json`], { encoding: 'utf8' }));
+              changed = previous.version !== version;
+            }
+          }
+          const lookup = spawnSync('npm', ['view', `${name}@${version}`, 'version', '--json', '--registry=https://registry.npmjs.org/'], { encoding: 'utf8' });
+          let result;
+          try { result = JSON.parse(lookup.stdout); } catch { throw new Error('Registry lookup did not return JSON; refusing to publish'); }
+          let exists;
+          if (lookup.status === 0) {
+            if (result !== version) throw new Error('Registry returned an unexpected version');
+            exists = true;
+          } else if (result.error?.code === 'E404') {
+            exists = false;
+          } else {
+            throw new Error(`Registry lookup failed (${result.error?.code || lookup.status}); refusing to publish`);
+          }
+          const tag = version.split('+')[0].includes('-') ? 'next' : 'latest';
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed}\nexists=${exists}\ntag=${tag}\n`);
+          console.log(`${name}@${version}: changed=${changed}, exists=${exists}, dist-tag=${tag}`);
+          JS
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify package
+        run: |
+          npm run check
+          node --test test/*.unit.test.js
+      - name: Check package contents
+        run: npm pack --dry-run --ignore-scripts
+      - name: Dry-run publication
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --dry-run --ignore-scripts --access public --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/
+      - name: Publish with npm trusted publishing
+        if: steps.release.outputs.changed == 'true' && steps.release.outputs.exists == 'false' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
+        run: npm publish --ignore-scripts --access public --provenance --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/

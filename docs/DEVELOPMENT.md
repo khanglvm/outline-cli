@@ -52,10 +52,15 @@ Release prerequisites:
 - `OUTLINE_ENTRY_BUILD_KEY` available in environment or `.env.local`
 - npm auth ready (`npm login`)
 
-Optional GitHub automation:
+GitHub publishing uses `.github/workflows/npm-auto-publish.yml` and npm trusted
+publishing. A changed version on `main`, or a matching `v<version>` tag, publishes
+that exact version if it is missing from npm. Stable versions use `latest`;
+prereleases use `next`. README changes do not create releases.
 
-- `.github/workflows/npm-auto-publish.yml` auto-publishes on pushes to `main` when `README.md` or `package.json` changes.
-- If `package.json` version changes, the workflow publishes that exact version.
-- If only docs metadata changes (for example `README.md`), the workflow cuts and publishes a patch release automatically.
-- Required repository secrets: `NPM_TOKEN` and `OUTLINE_ENTRY_BUILD_KEY`.
-- Ensure GitHub Actions can push to `main` and create tags in this repository.
+Manual runs default to a dry run. Configure npm to trust this repository and
+workflow filename; an npm token is not required. CI runs the CLI check and unit
+tests. The live integration suite still requires a real Outline test account.
+
+Commit valid entry-integrity manifests with each source release. Refresh them
+locally with `OUTLINE_ENTRY_BUILD_KEY` before pushing a new version. CI checks
+the committed manifests and never regenerates them with a development key.

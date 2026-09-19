@@ -101,4 +101,4 @@ jobs:
         run: npm publish --dry-run --ignore-scripts --access public --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/
       - name: Publish with npm trusted publishing
         if: steps.release.outputs.changed == 'true' && steps.release.outputs.exists == 'false' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
-        run: npm publish --ignore-scripts --access public --provenance --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/
+        run: node .github/scripts/publish-or-await-staged.mjs --ignore-scripts --access public --provenance --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/

@@ -1873,10 +1873,15 @@ test("comments.review_queue resolves document titles before listing comments", a
           if (method === "comments.list") {
             assert.equal(body.documentId, "doc-comment");
             assert.equal(body.includeReplies, true);
-            assert.equal(body.limit, 30);
+            assert.equal(body.limit, 1);
             return {
               body: {
                 ok: true,
+                pagination: {
+                  limit: 1,
+                  offset: 0,
+                  total: 1,
+                },
                 data: [
                   {
                     id: "comment-1",
@@ -1909,6 +1914,7 @@ test("comments.review_queue resolves document titles before listing comments", a
     const output = await invokeTool(ctx, "comments.review_queue", {
       query: "Commented Doc",
       includeReplies: true,
+      limitPerDocument: 1,
       compact: false,
     });
 
@@ -1921,6 +1927,7 @@ test("comments.review_queue resolves document titles before listing comments", a
     assert.deepEqual(output.result.scope.documentIds, ["doc-comment"]);
     assert.equal(output.result.scope.documentResolution.resolved[0]?.id, "doc-comment");
     assert.equal(output.result.rowCount, 1);
+    assert.equal(output.result.truncated, false);
     assert.equal(output.result.rows[0]?.commentId, "comment-1");
   });
 });

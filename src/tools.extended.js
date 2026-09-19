@@ -4,7 +4,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { ApiError, CliError } from "./errors.js";
 import { assertPerformAction } from "./action-gate.js";
 import { defaultTmpDir } from "./config-store.js";
-import { compactValue, ensureStringArray, mapLimit, sanitizeFileToken, toInteger } from "./utils.js";
+import {
+  compactValue,
+  ensureStringArray,
+  hasUnfetchedPageRows,
+  mapLimit,
+  sanitizeFileToken,
+  toInteger,
+} from "./utils.js";
 import { collectionsOpenBatchTool, collectionsOpenTool, documentsOpenBatchTool, memoryResolveTool } from "./memory-store.js";
 
 const CONTROL_ARG_KEYS = new Set([
@@ -5276,7 +5283,10 @@ async function commentsReviewQueueTool(ctx, args = {}) {
         documentId,
         ok: true,
         rowCount: rows.length,
-        truncated: sourceRows.length >= limitPerDocument,
+        truncated: hasUnfetchedPageRows(res.body, {
+          limit: limitPerDocument,
+          rowCount: sourceRows.length,
+        }),
         rows,
         sourceRows: view === "full" ? sourceRows : undefined,
       };

@@ -3,8 +3,8 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   version: 1,
   algorithm: "sha256",
   signatureAlgorithm: "sha256-salted-manifest-v1",
-  signature: "3e3aff281deb7b640b1a678cb57ec5b9fc1647df006e45a24889cb26d49732bf",
-  generatedAt: "2026-07-30T08:04:26.287Z",
+  signature: "9ea8d42a26948c5eee912044ba5644cb43aa23fa9995f0a7f082cfe2e9d36084",
+  generatedAt: "2026-09-19T15:26:25.450Z",
   files: [
   {
     "path": "src/action-gate.js",
@@ -56,7 +56,7 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/tools.extended.js",
-    "sha256": "ef4be3189009af8f2aa0483d377987e10c457b65c1ee8f48f9a8217d6bceef39"
+    "sha256": "cb25d43a57068b84b3d13de50db3149b2e3a0d3036f1ee6c7aaba20e6caccdae"
   },
   {
     "path": "src/tools.js",
@@ -76,7 +76,7 @@ export const ENTRY_INTEGRITY_MANIFEST = Object.freeze({
   },
   {
     "path": "src/utils.js",
-    "sha256": "c586c449ee51145c3cdc1fc98731acddbfb5d969255cab5064c291276e11012d"
+    "sha256": "36791072e1d8599d912e7abebd3fa2e25d82889fec4ceb25aaf9c106bb8a7731"
   }
 ],
 });

@@ -155,6 +155,24 @@ export function toBoolean(value, fallback = undefined) {
   throw new Error(`Invalid boolean value: ${value}`);
 }
 
+export function hasUnfetchedPageRows(body, { offset = 0, limit, rowCount } = {}) {
+  const normalizedOffset = Math.max(0, Number(offset) || 0);
+  const normalizedRowCount = Math.max(0, Number(rowCount) || 0);
+  const rawTotal = body?.pagination?.total;
+  const total = rawTotal === undefined || rawTotal === null || rawTotal === ""
+    ? Number.NaN
+    : Number(rawTotal);
+
+  if (Number.isFinite(total) && total >= 0) {
+    return normalizedOffset + normalizedRowCount < total;
+  }
+
+  const normalizedLimit = Number(limit);
+  return Number.isFinite(normalizedLimit)
+    && normalizedLimit > 0
+    && normalizedRowCount >= normalizedLimit;
+}
+
 export async function mapLimit(items, limit, fn) {
   if (!Array.isArray(items) || items.length === 0) {
     return [];

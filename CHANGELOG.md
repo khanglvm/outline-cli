@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3 - 2026-09-19
+
+- Changes since `v0.2.2`.
+- fix(comments): use pagination totals for review queues (a7ef9ea)
+- ci: refresh Outline integrity with its production signing key (35623ec)
+- ci: skip dry-run publication of existing npm versions (b2dfa53)
+- ci: add optional npm trust verification without publishing (94a0791)
+- ci: publish versioned releases with npm trusted publishing (e95e3c7)
+- docs: explain Outline lookup and edit workflow [skip ci] (dede203)
+- docs: shorten Outline introduction and setup [skip ci] (13214fa)
+
 ## 0.2.2 - 2026-07-30
 
 - Changes since `v0.2.1`.

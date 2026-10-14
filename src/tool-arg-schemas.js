@@ -1384,6 +1384,7 @@ export const TOOL_ARG_SCHEMAS = {
   "documents.info": {
     properties: {
       id: { type: "string" },
+      url: { type: "string" },
       ids: { type: "string[]" },
       shareId: { type: "string" },
       includePolicies: { type: "boolean" },
@@ -1393,8 +1394,8 @@ export const TOOL_ARG_SCHEMAS = {
       readTokenTtlSeconds: { type: "number", min: 60 },
     },
     custom(args, issues) {
-      if (!args.id && !args.ids && !args.shareId) {
-        issues.push({ path: "args.id", message: "or args.ids[] or args.shareId is required" });
+      if (!args.id && !args.ids && !args.url && !args.shareId) {
+        issues.push({ path: "args.id", message: "or args.ids[] or args.url or args.shareId is required" });
       }
     },
   },

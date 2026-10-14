@@ -47,6 +47,30 @@ function normalizeIds(args) {
   return [...new Set(ids)];
 }
 
+function normalizeDocumentReference(value) {
+  const reference = String(value).trim();
+  if (!reference.includes("://") && !reference.startsWith("/")) {
+    return reference;
+  }
+  let parsed;
+  try {
+    parsed = new URL(reference, "https://outline.invalid");
+  } catch {
+    throw new CliError("documents.info requires a document UUID, slug, or /doc/ URL");
+  }
+  const match = parsed.pathname.match(/^\/doc\/([^/]+)\/?$/);
+  if (!["http:", "https:"].includes(parsed.protocol) || !match) {
+    throw new CliError("documents.info requires a /doc/ URL; use shareId for shared documents");
+  }
+  try {
+    const slug = decodeURIComponent(match[1]);
+    if (!slug || /[/?#\s]/.test(slug)) throw new Error("invalid slug");
+    return slug;
+  } catch {
+    throw new CliError("documents.info URL contains an invalid document slug");
+  }
+}
+
 function normalizeSearchRow(row, view = "summary", contextChars = 320) {
   if (view === "full") {
     return row;
@@ -624,14 +648,17 @@ async function documentsListTool(ctx, args) {
 }
 
 async function documentsInfoTool(ctx, args) {
-  const ids = normalizeIds(args);
+  if (args.url && args.id && normalizeDocumentReference(args.url) !== normalizeDocumentReference(args.id)) {
+    throw new CliError("documents.info id and url must identify the same document");
+  }
+  const ids = [...new Set(normalizeIds({ ...args, id: args.id || args.url }).map(normalizeDocumentReference))];
   const view = args.view || "summary";
   const excerptChars = toInteger(args.excerptChars, 280);
   const armDelete = args.armDelete === true;
   const readTokenTtlSeconds = toInteger(args.readTokenTtlSeconds, 900);
 
   if (ids.length === 0 && !args.shareId) {
-    throw new CliError("documents.info requires args.id, args.ids, or args.shareId");
+    throw new CliError("documents.info requires args.id, args.ids, args.url, or args.shareId");
   }
 
   const maxAttempts = toInteger(args.maxAttempts, 2);
@@ -1078,8 +1105,8 @@ export const TOOLS = {
   },
   "documents.info": {
     signature:
-      "documents.info(args: { id?: string; ids?: string[]; shareId?: string; view?: 'summary'|'full'; includePolicies?: boolean; concurrency?: number; armDelete?: boolean; readTokenTtlSeconds?: number })",
-    description: "Read one or many documents by ID.",
+      "documents.info(args: { id?: string; ids?: string[]; url?: string; shareId?: string; view?: 'summary'|'full'; includePolicies?: boolean; concurrency?: number; armDelete?: boolean; readTokenTtlSeconds?: number })",
+    description: "Read one or many documents by UUID, slug, or document URL.",
     usageExample: {
       tool: "documents.info",
       args: {
@@ -1089,7 +1116,8 @@ export const TOOLS = {
       },
     },
     bestPractices: [
-      "Use `ids[]` batch mode to fetch multiple docs in one CLI call.",
+      "Use `id` or `url` for one document; `ids[]` accepts mixed UUIDs, slugs, and /doc/ URLs.",
+      "Document URLs are resolved within the selected profile; select the matching workspace first.",
       "Use summary view first; only request full for final chosen docs.",
       "Handle partial failures by checking each item.ok in batched result.",
       "Set armDelete=true when you need a short-lived delete read token for a safe delete flow.",

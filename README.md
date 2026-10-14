@@ -43,12 +43,15 @@ outline-cli invoke documents.search \
   --args '{"query":"onboarding","limit":5,"view":"summary"}'
 ```
 
-Copy a document ID from the result to read its contents:
+Read a document using its UUID, slug, or full document URL:
 
 ```sh
 outline-cli invoke documents.info \
-  --args '{"id":"<document-id>","view":"full"}'
+  --args '{"id":"<document-id-or-url>","view":"full"}'
 ```
+
+For a pasted `/doc/` URL, `url` is also accepted. Batch reads accept mixed UUIDs,
+slugs, and document URLs in `ids`. URLs use the selected workspace profile.
 
 You can also create drafts, edit pages, manage comments, and inspect revision
 history. Writes require `performAction:true`. Deleting a document also requires

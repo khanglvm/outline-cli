@@ -5167,3 +5167,27 @@ test("secret scanner guard: no tracked hardcoded Outline API key", async () => {
 
   assert.deepEqual(findings, [], `Hardcoded Outline API key(s) found in tracked files: ${JSON.stringify(findings)}`);
 });
+
+test("documents.info reads the same existing document by URL, slug, and UUID", {
+  skip: !process.env.OUTLINE_TEST_DOCUMENT_URL,
+}, async () => {
+  const url = process.env.OUTLINE_TEST_DOCUMENT_URL;
+  const slug = new URL(url).pathname.split("/").filter(Boolean).at(-1);
+  const profile = process.env.OUTLINE_TEST_PROFILE || "prod";
+  function read(args) {
+    const run = spawnSync(process.execPath, [CLI_BIN, "invoke", "documents.info", "--profile", profile,
+      "--args", JSON.stringify({ ...args, view: "summary", includePolicies: false }), "--result-mode", "inline"],
+    { cwd: REPO_ROOT, encoding: "utf8", env: process.env });
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.tool, "documents.info");
+    return result.result;
+  }
+  const direct = read({ url });
+  const byId = read({ id: url });
+  assert.equal(byId.data.id, direct.data.id);
+  const batch = read({ ids: [url, slug, direct.data.id] });
+  assert.equal(batch.total, 2);
+  assert.equal(batch.ok, 2);
+  assert.ok(batch.items.every((item) => item.data.id === direct.data.id));
+});

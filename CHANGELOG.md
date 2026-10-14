@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4 - 2026-10-14
+
+- Changes since `v0.2.3`.
+- fix: accept document URLs in documents.info (42a3d36)
+- fix(ci): handle staged npm publication overlap (9cda225)
+
 ## 0.2.3 - 2026-09-19
 
 - Changes since `v0.2.2`.

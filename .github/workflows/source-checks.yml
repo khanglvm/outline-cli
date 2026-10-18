@@ -1,0 +1,43 @@
+name: Source checks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OUTLINE_CLI_KEYCHAIN_MODE: disabled
+      # Source PRs validate unsigned edits without the production signing key.
+      OUTLINE_CLI_SKIP_INTEGRITY_CHECK: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Check CLI
+        run: npm run check
+      - name: Offline unit tests
+        run: npm test
+      - name: Guard tracked source against Outline API keys
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split(String.fromCharCode(0)).filter(Boolean);
+          const forbiddenEnv = files.filter(file => /(^|[/])\.env(?:\.|$)/.test(file) && !file.endsWith('.example'));
+          assert.deepEqual(forbiddenEnv, [], 'Tracked local environment files require removal');
+          const findings = files.filter(file => { let text; try { text = fs.readFileSync(file, 'utf8'); } catch { return false; } return !text.includes(String.fromCharCode(0)) && /ol_api_[A-Za-z0-9]{20,}/.test(text); });
+          assert.deepEqual(findings, [], 'Hardcoded Outline API key in tracked source');
+          console.log('Tracked source secret guard passed');
+          JS

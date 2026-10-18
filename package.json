@@ -16,7 +16,8 @@
   "scripts": {
     "start": "node ./bin/outline-cli.js",
     "check": "node ./bin/outline-cli.js --help",
-    "test": "node --test ./test/**/*.test.js",
+    "test": "node --test ./test/*.unit.test.js",
+    "test:integration": "node --test ./test/live.integration.test.js",
     "integrity:refresh": "node ./scripts/generate-entry-integrity.mjs",
     "release": "node ./scripts/release.mjs",
     "release:prepare": "node ./scripts/release.mjs --no-publish --no-push"

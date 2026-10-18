@@ -76,6 +76,19 @@ is available with setup and workflow guidance:
 npx skills add https://github.com/khanglvm/skills --skill outline-cli -y
 ```
 
+## Development
+
+Run the CLI smoke check and offline unit tests from a checkout:
+
+```sh
+npm run check
+npm test
+```
+
+These checks need no Outline account. Live workspace tests require explicit
+opt-in with `npm run test:integration`. See the [development guide](docs/DEVELOPMENT.md)
+for account setup, test cleanup, source PR checks, and releases.
+
 ## More help
 
 - [Usage guide](https://github.com/khanglvm/outline-cli/blob/main/docs/USAGE.md): profiles, editing, attachments, batch calls, and safe deletion.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5 - 2026-10-18
+
+- Changes since `v0.2.4`.
+- Make default tests offline and retain live tests behind `npm run test:integration`.
+- Add credential-free source PR checks and update contributor workflow guidance.
+
 ## 0.2.4 - 2026-10-14
 
 - Changes since `v0.2.3`.

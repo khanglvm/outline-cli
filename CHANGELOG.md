@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- Accept underscore separators in tool names, so `documents_search` resolves to
+  `documents.search` and `oauth_clients_list` to `oauth_clients.list`.
+- Make `documents.info` summary output say that `"view":"full"` returns the
+  document text.
+
 ## 0.2.5 - 2026-10-18
 
 - Changes since `v0.2.4`.

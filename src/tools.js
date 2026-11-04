@@ -647,6 +647,8 @@ async function documentsListTool(ctx, args) {
   };
 }
 
+const DOCUMENT_TEXT_HINT = 'view=summary returns metadata and a short excerpt only. Pass "view":"full" to get the full document text.';
+
 async function documentsInfoTool(ctx, args) {
   if (args.url && args.id && normalizeDocumentReference(args.url) !== normalizeDocumentReference(args.id)) {
     throw new CliError("documents.info id and url must identify the same document");
@@ -698,6 +700,7 @@ async function documentsInfoTool(ctx, args) {
     const result = compactValue({
       ...payload,
       deleteReadReceipt,
+      hint: view !== "full" && rawDoc?.text ? DOCUMENT_TEXT_HINT : undefined,
     });
 
     return {
@@ -758,6 +761,7 @@ async function documentsInfoTool(ctx, args) {
       ok: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok).length,
       items: results,
+      ...(view !== "full" && results.some((r) => r.ok) ? { hint: DOCUMENT_TEXT_HINT } : {}),
     },
   };
 }
@@ -1295,6 +1299,25 @@ function toolNameVariants(name) {
   ].filter(Boolean))];
 }
 
+// Extra lookup forms for a request that wrote a namespace separator as "_"
+// (documents_search, oauth_clients_list). Tool names mix "." between namespace
+// and action with "_" inside words, so try turning each single "_" into "."
+// and also all of them at once.
+function underscoreSeparatorVariants(name) {
+  const base = canonicalizeToolName(name, { hyphenMode: "underscore" });
+  const variants = new Set();
+  if (!base.includes("_")) {
+    return [];
+  }
+  variants.add(base.replace(/_/g, "."));
+  for (let i = 0; i < base.length; i += 1) {
+    if (base[i] === "_") {
+      variants.add(`${base.slice(0, i)}.${base.slice(i + 1)}`);
+    }
+  }
+  return [...variants];
+}
+
 function buildCanonicalToolMap() {
   const byCanonical = new Map();
   for (const toolName of Object.keys(TOOLS)) {
@@ -1428,7 +1451,7 @@ export function resolveToolInvocation(name, args = {}) {
   }
 
   const candidates = new Set();
-  for (const variant of toolNameVariants(requestedName)) {
+  for (const variant of [...toolNameVariants(requestedName), ...underscoreSeparatorVariants(requestedName)]) {
     const matches = CANONICAL_TOOL_MAP.get(variant) || [];
     for (const match of matches) {
       candidates.add(match);

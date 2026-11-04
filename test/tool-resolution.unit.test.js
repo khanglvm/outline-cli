@@ -385,3 +385,25 @@ test("documents.search summary redacts obvious credentials in contexts", async (
   assert.ok(!context.includes("secretpass"));
   assert.ok(!context.includes("ol_api_searchsecret"));
 });
+
+test("resolveToolInvocation accepts underscore separators for dotted tool names", () => {
+  const expected = {
+    documents_search: "documents.search",
+    documents_info: "documents.info",
+    oauth_clients_list: "oauth_clients.list",
+    documents_resolve_urls: "documents.resolve_urls",
+    documents_safe_update: "documents.safe_update",
+  };
+  for (const [requested, resolved] of Object.entries(expected)) {
+    const result = resolveToolInvocation(requested, { query: "x" });
+    assert.equal(result.resolvedName, resolved, requested);
+    assert.equal(result.autoCorrected, true);
+  }
+});
+
+test("unknown underscore names still fail with suggestions", () => {
+  assert.throws(
+    () => resolveToolInvocation("documents_searh"),
+    (err) => err.details?.code === "UNKNOWN_TOOL" && err.details.suggestions.some((row) => row.name === "documents.search")
+  );
+});

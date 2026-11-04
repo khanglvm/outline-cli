@@ -60,3 +60,16 @@ test("documents.info preserves shareId reads and collections.info identifiers", 
     { method: "collections.info", body: { id: url } },
   ]);
 });
+
+test("documents.info summary view says how to get the full text", async () => {
+  const ctx = {
+    profile: { id: "hint" },
+    client: { async call() { return { body: { ok: true, data: { id: uuid, title: "T", text: "Body text" } } }; } },
+  };
+  const summary = await invokeTool(ctx, "documents.info", { id: uuid, compact: false });
+  assert.equal(summary.result.data.text, undefined);
+  assert.match(summary.result.hint, /"view":"full"/);
+  const full = await invokeTool(ctx, "documents.info", { id: uuid, view: "full", compact: false });
+  assert.equal(full.result.data.text, "Body text");
+  assert.equal(full.result.hint, undefined);
+});

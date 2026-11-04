@@ -50,6 +50,10 @@ outline-cli invoke documents.info \
   --args '{"id":"<document-id-or-url>","view":"full"}'
 ```
 
+Without `"view":"full"`, `documents.info` returns metadata and a short excerpt;
+the result includes a hint on how to get the full text. Tool names also accept
+underscores for dots, such as `documents_search`.
+
 For a pasted `/doc/` URL, `url` is also accepted. Batch reads accept mixed UUIDs,
 slugs, and document URLs in `ids`. URLs use the selected workspace profile.
 

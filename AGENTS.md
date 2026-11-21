@@ -13,8 +13,19 @@ changing tools, running live tests, or preparing a release.
 - Prefer `summary/ids` reads before hydration and batch operations for fewer round trips.
 - `batch` defaults to token-efficient item payloads; full envelopes remain opt-in.
 - Every new tool argument needs a schema in `src/tool-arg-schemas.js`.
-- Update `README.md` and `docs/TOOL_CONTRACTS.md` when behavior or signatures change.
+- Update the docs page that covers a change (see Docs) and `docs/TOOL_CONTRACTS.md` when behavior or signatures change.
 - Keep source PR checks separate from the existing npm publishing workflow.
+
+## Docs
+
+`docs/` is the source of truth for this tool's documentation. docs.khangle.dev publishes the pages `docs/meta.json` lists, and llms.txt is built from the same pages for coding agents. The contract is in https://github.com/khanglvm/docs/blob/main/docs/CONTRACT.md. `docs/DEVELOPMENT.md` is for contributors and stays unlisted.
+
+- When a change adds, removes or changes a command, flag, option, environment variable, tool, output format or default, update the docs page that covers it in the same commit. Add a page and list it in `docs/meta.json` when none covers it.
+- Keep `docs/agents.md` exact: commands, flags, output shapes, error codes and limits, written for a coding agent. `docs/commands.md` and `docs/tools.md` must match `outline-cli --help`, `outline-cli tools list` and `src/tool-arg-schemas.js`.
+- README sections between `<!-- docs:begin PAGE -->` and `<!-- docs:end -->` are generated. Edit the page in `docs/`, then run `node scripts/docs-readme.mjs`.
+- Run `node scripts/docs-readme.mjs --check` before committing. CI runs the same check.
+- Do not move or rename a published page without updating `docs/meta.json` and links to it.
+- Each page opens with an H1 and a one or two sentence summary, which the site uses as its description. Use plain ASCII punctuation (no em dashes).
 
 ## Workspace safety
 

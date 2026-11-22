@@ -119,7 +119,8 @@ Release prerequisites:
 GitHub publishing uses `.github/workflows/npm-auto-publish.yml` and npm trusted
 publishing. A changed version on `main`, or a matching `v<version>` tag, publishes
 that exact version if it is missing from npm. Stable versions use `latest`;
-prereleases use `next`. README changes do not create releases.
+prereleases use `next`. A README change reaches the npm page only with a new
+version, so ship it with a patch release.
 
 Manual runs default to a dry run. Configure npm to trust this repository and
 workflow filename; an npm token is not required. Publishing CI runs the CLI check

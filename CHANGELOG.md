@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.7 - 2026-11-22
+
+- Ship the current README, so the npm page matches GitHub and docs.khangle.dev,
+  which now publishes the guides.
+
 ## 0.2.6
 
 - Accept underscore separators in tool names, so `documents_search` resolves to

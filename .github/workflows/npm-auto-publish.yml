@@ -102,3 +102,22 @@ jobs:
       - name: Publish with npm trusted publishing
         if: steps.release.outputs.changed == 'true' && steps.release.outputs.exists == 'false' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
         run: node .github/scripts/publish-or-await-staged.mjs --ignore-scripts --access public --provenance --tag '${{ steps.release.outputs.tag }}' --registry=https://registry.npmjs.org/
+
+  # Asks docs.khangle.dev to sync now, so its pages and version badge follow this
+  # release instead of waiting for the site's scheduled sync (every few hours).
+  # DOCS_SYNC_TOKEN: fine-grained token for khanglvm/docs with Actions read and write.
+  docs:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refresh docs.khangle.dev
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::DOCS_SYNC_TOKEN is not set; docs.khangle.dev updates on its next scheduled sync."
+            exit 0
+          fi
+          gh workflow run sync.yml --repo khanglvm/docs --ref main

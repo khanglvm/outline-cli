@@ -23,3 +23,23 @@ jobs:
         with:
           node-version: '24'
       - run: node scripts/docs-readme.mjs --check
+
+  # A docs change on the default branch reaches docs.khangle.dev now, not at the
+  # site's next scheduled sync. DOCS_SYNC_TOKEN: fine-grained token for
+  # khanglvm/docs with Actions read and write.
+  sync-site:
+    needs: check
+    if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Refresh docs.khangle.dev
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::DOCS_SYNC_TOKEN is not set; docs.khangle.dev updates on its next scheduled sync."
+            exit 0
+          fi
+          gh workflow run sync.yml --repo khanglvm/docs --ref main

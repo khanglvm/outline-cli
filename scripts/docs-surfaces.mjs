@@ -21,6 +21,7 @@ const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     ...opts,
   }).trim();
 const ok = (cmd, args) => {
@@ -45,6 +46,19 @@ if (!lib) {
     `${repo} is not listed in khanglvm/docs libraries.json, so docs.khangle.dev does not publish it.`,
   );
   process.exit(1);
+}
+// branch and package reach git and npm as arguments, so a value that looks like a flag is refused.
+const SAFE_ARG = /^[\w.@/][\w.@/-]*$/;
+for (const [key, value] of [
+  ["branch", lib.branch],
+  ["package", lib.package ?? "x"],
+]) {
+  if (typeof value !== "string" || !SAFE_ARG.test(value)) {
+    console.error(
+      `libraries.json has an unusable ${key} for ${repo}: ${JSON.stringify(value)}`,
+    );
+    process.exit(2);
+  }
 }
 const branch = lib.branch;
 const problems = [];
@@ -75,6 +89,11 @@ const pageUrl = `${site.site.url}/${lib.slug}`;
 const page = await fetch(`${pageUrl}?fresh=${Date.now()}`, {
   signal: AbortSignal.timeout(20000),
 });
+// A 404 means the page is not published; any other failure is unknown, so it throws instead of
+// reporting a surface as behind (the doc-sync hook blocks only on "surface(s) behind").
+if (!page.ok && page.status !== 404) {
+  throw new Error(`could not read ${pageUrl}: HTTP ${page.status}`);
+}
 const synced = page.ok
   ? (await page.text()).match(/commit\/([0-9a-f]{7,40})/)?.[1]
   : undefined;
@@ -83,6 +102,11 @@ if (!synced) {
     `docs.khangle.dev: ${pageUrl} shows no synced commit (HTTP ${page.status}). Run: gh workflow run sync.yml --repo khanglvm/docs --ref main`,
   );
 } else {
+  if (!ok("git", ["cat-file", "-e", `${synced}^{commit}`])) {
+    throw new Error(
+      `the site's commit ${synced} is not in this clone (shallow or rewritten history); fetch more history and retry`,
+    );
+  }
   const fresh = ok("git", ["merge-base", "--is-ancestor", lastDocs, synced]);
   console.log(
     `site     ${pageUrl}: synced from ${synced.slice(0, 7)}${fresh ? "" : " (behind)"}`,
@@ -110,7 +134,9 @@ if (lib.package) {
       ["view", lib.package, "readme", "--registry=https://registry.npmjs.org/"],
       { maxBuffer: 16 * 1024 * 1024 },
     );
-  } catch {
+  } catch (error) {
+    // Only a 404 means "not published"; a network or registry error is unknown and must not block.
+    if (!/\bE404\b/.test(String(error.stderr ?? ""))) throw error;
     problems.push(
       `npm: ${lib.package} is not on npm yet. Publish the first version.`,
     );
